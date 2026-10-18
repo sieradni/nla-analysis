@@ -1,0 +1,25 @@
+{
+  "name": "bench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Durable, agent-operated data analysis workspace",
+  "bin": {
+    "bench": "./src/cli/index.ts"
+  },
+  "scripts": {
+    "bench": "node src/cli/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "tsc --noEmit",
+    "verify": "pnpm check && pnpm test"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

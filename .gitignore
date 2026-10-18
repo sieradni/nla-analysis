@@ -1,0 +1,35 @@
+# --- Dependencies -----------------------------------------------------------
+# Restored by `pnpm install` from pnpm-lock.yaml, which IS tracked.
+node_modules/
+
+# --- Build output -----------------------------------------------------------
+# Nothing is built today: Node runs the TypeScript directly. These are here for
+# when the desktop shell arrives and starts bundling.
+dist/
+*.tsbuildinfo
+coverage/
+
+# --- Regenerable output -----------------------------------------------------
+# Everything below is reproducible from data/events.jsonl and the source tree.
+# If it can be regenerated in one command, it does not belong in history.
+#
+#   bench chart -> artifacts/*.svg      bench state -> STATE.md
+#
+# Fixture screenshots used for visual review live here too: binary and disposable.
+artifacts/
+
+# Derived projection of the log. Disposable by design.
+index.sqlite
+index.sqlite-journal
+index.sqlite-wal
+
+# --- Machine-local tooling state --------------------------------------------
+# Specific to this checkout, not to the project.
+.freebuff/
+.vscode/
+.idea/
+
+# --- Logs and OS cruft ------------------------------------------------------
+*.log
+.DS_Store
+Thumbs.db

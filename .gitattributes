@@ -1,0 +1,9 @@
+# Store text as LF, check out as LF. The event log is line-oriented and hashed by
+# content, so a CRLF conversion would change data and break reproductions.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
