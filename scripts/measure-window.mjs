@@ -57,16 +57,20 @@ const noise = () => {
   return (seed / 2147483648 - 0.5) * 40
 }
 
-const rows = ['x,y']
+// A row is identified by its instant, so the seed carries one: an import with no observation time
+// is refused now. One minute apart, from a fixed epoch, keeps the fixture deterministic.
+const rows = ['t_observed,x,y']
 for (let index = 1; index <= POINTS; index += 1) {
-  rows.push(`${index},${(2.5 * index + noise()).toFixed(3)}`)
+  const at = new Date(Date.UTC(2026, 0, 1) + index * 60_000).toISOString()
+  rows.push(`${at},${index},${(2.5 * index + noise()).toFixed(3)}`)
 }
 await writeFile(csv, rows.join('\n') + '\n')
 
 await bench(['init', project, '--name', 'bench-10k'])
-const imported = await bench(['--project', project, 'import', csv, '--map', 'x=x', '--map', 'y=y'], {
-  quiet: true,
-})
+const imported = await bench(
+  ['--project', project, 'import', csv, '--map', 'x=x', '--map', 'y=y', '--time', 't_observed'],
+  { quiet: true },
+)
 console.log(imported.trim().split('\n').slice(-1)[0])
 await bench(['--project', project, 'view', 'new', 'all readings', '--dataset', 'main'], { quiet: true })
 
