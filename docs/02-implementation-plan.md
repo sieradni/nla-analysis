@@ -16,7 +16,7 @@ those passages as the plan as it was written, not as a description of today's la
 | 1.1 event log core | done | append-only verified by byte-prefix test; torn tail tolerated |
 | 1.2 init / add / state / check | done | `fixtures/projects/drift-sensor` built entirely through the CLI |
 | 1.3 chart artifact | done | `bench chart` writes SVG; renderer is a core module, not CLI glue |
-| 1.4 entry ergonomics | **partial** | ADR 0002 made v1 agent-only; the bar, optimistic append, correction and undo landed with the window (5.4). Paste, stream, auto-advance and shortcuts are not built |
+| 1.4 entry ergonomics | **partial** | ADR 0002 made v1 agent-only; the bar, optimistic append, correction, undo and its Ctrl+Z/Esc keys landed with the window (5.4). Paste, stream and auto-advance are not built |
 | 2.1 corrections + retractions | done early | `bench correct` / `bench retract`; original records preserved in the log |
 | 2.2 shapes registry + validation | partial | read + validate exist; `shape extend` and migrations do not |
 | 3.1 Python runner | done | JSON over stdio, `uv`-pinned 3.13 env, id echoed, crash contained |
@@ -36,7 +36,7 @@ those passages as the plan as it was written, not as a description of today's la
 | 5.5 entry-path measurement | done | `pnpm app:measure` builds a 10k-point project and types into the real window: **median 24.6 ms** keystroke→paint (p90 40.1) against the 100 ms budget; record 14.1 · rebuild 1.1 · paint 8.8, tab file 33.6 ms later. A rescale is 133.8 ms — see 5.6 |
 | 5.6 canvas renderer | not done | the measured trigger is now real: 133.8 ms for a point that moves the axes, and paint growing with the point count. §4 expects canvas at 10k |
 | 5.7 installer / signing | not done | no packaging, no code signing; `pnpm app` is how it runs |
-| 5.8 entry extras (paste, stream, auto-advance, shortcuts) | not done | the entry bar itself is built; these are not |
+| 5.8 entry extras (paste, stream, auto-advance) | not done | the entry bar and its undo keys are built; these are not |
 | 4.x Tauri shell / views UI | superseded | the shell landed as Electron instead ([ADR 0005](adr/0005-desktop-shell.md)) |
 | windowed / rolling fit | not done | the third item on the time-variation menu |
 | 2.4 dataset versions / replace / diff | done | [ADR 0012](adr/0012-dataset-versions.md): an import into a populated dataset writes `dataset_version_created` with a parent and a `+n −n ~n` diff, the parent's rows are retracted/corrected rather than rewritten, and `foldVersion` rebuilds any older version from the log. Runs and panels pin `(dataset, version)`; `bench dataset versions\|diff` and the window's sheet read the same plan; an import with no observation time is refused in both doors, and the sheet picks the column that holds it |

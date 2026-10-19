@@ -199,9 +199,9 @@ Promise *a menu of legitimate tests with visible uncertainty* — not "hidden pa
 
 Per [ADR 0002](adr/0002-agent-only-v1.md), v1 was agent-only: points arrive through `bench add`. The
 window has since landed, and part of this list with it: the always-focused bar, optimistic append, and
-correction by selecting a mark are in use. Auto-advance, paste-TSV preview, stream mode and
-`Ctrl+Z`/`Esc` shortcuts are **not built**; the plan's progress table records them as not done
-([plan](02-implementation-plan.md)).
+correction by selecting a mark are in use. Auto-advance, paste-TSV preview and stream mode are **not
+built**; the plan's progress table records them as not done. `Ctrl+Z` undoes the last point when the
+bar is empty, and `Esc` cancels a correction ([plan](02-implementation-plan.md)).
 
 - Always-focused entry bar: `1.2  3.4` + Enter commits, focus stays.
 - Auto-advance, `Tab`/`Shift+Tab`, `Ctrl+Z`, `Esc` to amend the last point, timestamp editable inline.
