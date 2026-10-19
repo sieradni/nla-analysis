@@ -30,6 +30,7 @@ const APP_FILES = [
   'main.js',
   'preload.cjs',
   'core.bundle.mjs',
+  join('src', 'cli', 'index.mjs'),
   join('renderer', 'index.html'),
   join('renderer', 'app.js'),
   join('renderer', 'chart.js'),
@@ -44,6 +45,15 @@ const APP_FILES = [
  */
 const RECIPE_FILES = ['runner.py', 'fit.py', 'drift.py', 'requirements.lock.txt']
 
+/** The CLI launcher: the artifact's own Electron binary, in Node mode, running the bundled CLI. */
+const CLI_LAUNCHER = [
+  '@echo off',
+  'setlocal',
+  'set "ELECTRON_RUN_AS_NODE=1"',
+  '"%~dp0bench.exe" "%~dp0resources/app/src/cli/index.mjs" %*',
+  'exit /b %ERRORLEVEL%',
+].join('\r\n') + '\r\n'
+
 const LAUNCH = `bench — desktop data workspace
 ============================
 
@@ -56,11 +66,21 @@ Where things live
   projects          wherever you keep them — a project is a folder with data/events.jsonl
   project list      %USERPROFILE%\\.bench\\projects.json  (app state; losing it loses recency, not data)
 
+The CLI
+  bench.cmd beside bench.exe is the same bench CLI, run by the bundled Electron runtime in Node
+  mode. It needs no Node install and no repository. Call it by path:
+
+      C:\path\to\bench-win32-x64\bench.cmd --project C:\path\to\project state
+
+  Do not add this folder to PATH and expect \`bench\` to mean the CLI: \`bench.exe\` is the window, and
+  PATHEXT resolves it first. The CLI itself is resources/app/src/cli/index.mjs.
+
 What needs Python
   A tab whose panel is drawn by a recipe (a fit or a drift) needs the analysis environment, which is
-  not bundled. Plot tabs and data entry work without it, and the tab dialog says why no recipe is
-  offered. The repository explains how to create that environment; a build this size stays small by
-  not carrying 164 MB of local machine state.
+  not bundled. Plot tabs, imports, and the CLI's init/check/state/view commands work without it, and
+  the tab dialog says why no recipe is offered. \`bench run fit\` and \`bench run drift\` need a Python
+  found at resources/app/recipes/.venv or on PATH. The repository explains how to create that
+  environment; a build this size stays small by not carrying 164 MB of local machine state.
 
 Reports and limits
   A tab's saved file is drawn again from the log, so nothing in this folder is the only copy of
@@ -77,6 +97,9 @@ if (!existsSync(dist)) {
 }
 if (!existsSync(join(root, 'app', 'core.bundle.mjs'))) {
   fail('app/core.bundle.mjs is missing — run `pnpm app:build` first (or `pnpm app:package`)')
+}
+if (!existsSync(join(root, 'app', 'src', 'cli', 'index.mjs'))) {
+  fail('app/src/cli/index.mjs is missing — run `pnpm app:build` first (or `pnpm app:package`)')
 }
 
 const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
@@ -129,7 +152,10 @@ await writeFile(
   ) + '\n',
 )
 
-// 5. Launch instructions where the person who receives the folder will look.
+// 5. The CLI, launched through the runtime that is already here.
+await writeFile(join(out, 'bench.cmd'), CLI_LAUNCHER)
+
+// 6. Launch instructions where the person who receives the folder will look.
 await writeFile(join(out, 'LAUNCH.txt'), LAUNCH)
 
 const bytes = await directorySize(out)
@@ -139,6 +165,7 @@ console.log(`  bench.exe + Electron ${runtime}`)
 console.log(`  ${(bytes / 1024 / 1024).toFixed(0)} MB on disk · resources/app holds ${shipped.join(', ')}`)
 console.log(`  not shipped: fixtures/, tests/, node_modules/, docs/, recipes/.venv (164 MB), all git history`)
 console.log(`  launch: double-click ${join(out, 'bench.exe')}`)
+console.log(`  CLI: ${join(out, 'bench.cmd')} (resources/app/src/cli/index.mjs)`)
 console.log(`  prove it: pnpm app:package:check`)
 
 async function directorySize(dir) {

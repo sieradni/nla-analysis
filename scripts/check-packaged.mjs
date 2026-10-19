@@ -10,7 +10,7 @@
  *
  * Usage: pnpm app:package:check     (after pnpm app:package)
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { cp, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -36,6 +36,10 @@ const home = join(scratch, 'home')
 const reportDir = join(scratch, 'report')
 await cp(join(root, 'fixtures', 'projects', 'drift-sensor'), project, { recursive: true })
 
+// The window check deliberately runs without Python. The CLI check below uses the same environment,
+// so a passing run proves the artifact is self-sufficient for everything except analysis.
+const systemPath = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
+
 const startedAt = Date.now()
 const child = spawn(exe, [], {
   cwd: tmpdir(),
@@ -48,7 +52,7 @@ const child = spawn(exe, [], {
     // Take Python away on purpose: the build must still open and draw, and must say why no recipe
     // is offered. This is the degradation the artifact is supposed to have, checked rather than
     // assumed from a machine that happens to have an environment.
-    PATH: join(process.env.SystemRoot ?? 'C:\\Windows', 'System32'),
+    PATH: systemPath,
     BENCH_PYTHON: '',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -112,15 +116,72 @@ const appDir = join(artifact, 'resources', 'app')
 for (const path of ['fixtures', 'tests', 'node_modules', 'docs', 'data', join('recipes', '.venv'), join('recipes', '__pycache__')]) {
   if (existsSync(join(appDir, path))) fail(`${path} was shipped in resources/app`)
 }
-for (const required of ['main.js', 'preload.cjs', 'core.bundle.mjs', join('renderer', 'index.html'), join('recipes', 'runner.py')]) {
+for (const required of [
+  'main.js',
+  'preload.cjs',
+  'core.bundle.mjs',
+  join('src', 'cli', 'index.mjs'),
+  join('renderer', 'index.html'),
+  join('recipes', 'runner.py'),
+]) {
   if (!existsSync(join(appDir, required))) fail(`${required} is missing from resources/app`)
 }
-for (const runtimeFile of ['bench.exe', 'resources.pak', 'icudtl.dat', join('resources', 'app', 'package.json')]) {
+for (const runtimeFile of ['bench.exe', 'bench.cmd', 'resources.pak', 'icudtl.dat', join('resources', 'app', 'package.json')]) {
   if (!existsSync(join(artifact, runtimeFile))) fail(`${runtimeFile} is missing from the build`)
 }
 if (existsSync(join(artifact, 'resources', 'default_app.asar'))) {
   fail('Electron\'s fallback app is still in the build')
 }
+
+// The CLI is part of the artifact, not a repository convenience: prove the shipped launcher can
+// create a project, import a timed table, and draw a tab, with no Node install and no Python.
+const cli = join(artifact, 'bench.cmd')
+if (!existsSync(cli)) fail('bench.cmd is missing from the build')
+
+function runCli(args) {
+  // The launcher is a .cmd, so it needs a shell; quoting every argument keeps temp paths with
+  // spaces working without depending on how this machine spells its temp directory.
+  const command = [cli, ...args].map((value) => `"${value}"`).join(' ')
+  const result = spawnSync(command, {
+    shell: true,
+    cwd: artifact,
+    env: { ...process.env, BENCH_HOME: home, BENCH_PYTHON: '', PATH: systemPath },
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  if (result.error) fail(`bench.cmd could not start: ${result.error.message}`)
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
+  if (result.status !== 0) fail(`bench.cmd ${args.join(' ')} exited ${result.status}\n${output}`)
+  return output
+}
+
+const cliProject = join(scratch, 'cli-project')
+const cliCsv = join(scratch, 'cli-import.csv')
+await writeFile(
+  cliCsv,
+  't_observed,x,y\n' +
+    '2026-01-01T00:00:00Z,1,2.5\n' +
+    '2026-01-02T00:00:00Z,2,5.1\n' +
+    '2026-01-03T00:00:00Z,3,7.8\n' +
+    '2026-01-04T00:00:00Z,4,10.4\n',
+)
+runCli(['init', cliProject, '--name', 'cli-demo'])
+runCli(['--project', cliProject, 'import', cliCsv, '--time', 't_observed'])
+runCli(['--project', cliProject, 'view', 'new', 'cli tab', '--dataset', 'main'])
+runCli(['--project', cliProject, 'view', 'render', 'cli tab'])
+const cliCheck = runCli(['--project', cliProject, 'check'])
+const cliVersions = runCli(['--project', cliProject, 'dataset', 'versions', 'main'])
+for (const path of [
+  join(cliProject, 'data', 'events.jsonl'),
+  join(cliProject, 'views', 'cli-tab.json'),
+  join(cliProject, 'artifacts', 'view-cli-tab.svg'),
+]) {
+  if (!existsSync(path)) fail(`the shipped CLI did not write ${path}`)
+}
+if (!/0 error\(s\)/.test(cliCheck)) fail(`bench.cmd check said: ${cliCheck.trim()}`)
+if (!/v1/.test(cliVersions)) fail(`bench.cmd dataset versions said: ${cliVersions.trim()}`)
+console.log('  cli: init → import → view → render via bench.cmd, no Node and no Python')
+console.log(`  cli check: ${cliCheck.trim().split('\n')[0]}`)
 
 const size = await sizeOf(artifact)
 if (size > 450 * 1024 * 1024) fail(`the build is ${(size / 1048576).toFixed(0)} MB, larger than the 450 MB ceiling`)

@@ -49,6 +49,16 @@ This folder is a **bench data project**. The append-only event log is the truth.
 5. Never draw a curve without n, degrees of freedom, an interval band, and a verdict.
 6. Never extend a shape silently. Register the field so the change is visible.
 
+## Running bench
+
+Read and mutate this project through \`bench\`. If \`bench\` is not on PATH, the standalone app folder
+contains \`bench.cmd\` beside \`bench.exe\`; call that launcher by path and point it at this folder:
+
+    C:\\path\\to\\bench-win32-x64\\bench.cmd --project C:\\path\\to\\this\\project state
+
+\`bench.exe\` is the window; \`bench.cmd\` is the CLI. Do not expect \`bench\` on PATH to resolve to the
+script when both sit in one folder.
+
 ## After changing anything
 
 Run \`bench state\` and read the result. It is the brief the next session inherits.

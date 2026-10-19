@@ -24,15 +24,16 @@ user's behalf, so a fresh session must be able to pick up the project without re
 ## Running it
 
 - **CLI**: `pnpm bench <command>` (or `node src/cli/index.ts <command>`).
-- **Desktop window**: `pnpm app` — builds the core bundle with esbuild, then launches Electron.
+- **Desktop window**: `pnpm app` — builds the core and CLI bundles with esbuild, then launches Electron.
   `pnpm app:capture` does the same and writes review frames to `docs/ui-review/`.
   `pnpm app:measure` builds a 10k-point project and reports keystroke→paint in the real window.
   `BENCH_APP_PROJECT=<dir> pnpm app` opens a specific project on launch (`BENCH_PROJECT` is the
   capture harness's input, which it forwards).
 - **Standalone build**: `pnpm app:package` writes `artifacts/bench-win32-x64/bench.exe` from the
   installed Electron runtime — no download, no installer ([docs/packaging.md](docs/packaging.md)).
-  `pnpm app:package:check` launches that artifact with Python removed from `PATH` and fails unless it
-  drew a project and said why recipes are unavailable.
+  The artifact also carries `bench.cmd`, the same CLI run by its Electron binary in Node mode; it is
+  the way an agent operates a project without this repository. `pnpm app:package:check` launches the
+  artifact and its CLI with Python removed from `PATH`, and fails unless both work.
 - **Everything else**: `pnpm verify` (typecheck, bundle, tests), `pnpm fixture`, `pnpm review`.
 
 ## How work gets done
@@ -105,6 +106,7 @@ src/core/workspace.ts
 src/cli/            the bench command surface — argument parsing, a call, and printing
 app/                the desktop shell (ADR 0005): Electron main + preload + renderer, and
                     core.entry.ts, which is bundled to app/core.bundle.mjs by `pnpm app:build`
+                    (the same command bundles src/cli to app/src/cli/index.mjs for the artifact)
 src/core/registry.ts
                     which projects exist on this machine ($BENCH_HOME/projects.json, outside every
                     project). App state, disposable: losing it loses recency, not data.

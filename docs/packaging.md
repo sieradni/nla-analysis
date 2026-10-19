@@ -14,11 +14,13 @@ Output: **`artifacts/bench-win32-x64/`**, ~369 MB, of which the application is a
 
 ```
 artifacts/bench-win32-x64/
-  bench.exe                  <- double-click this
+  bench.exe                  <- double-click this (the window)
+  bench.cmd                  <- the CLI, run by the artifact's Electron runtime
   LAUNCH.txt                 <- what a person receiving the folder needs
   resources/
     app/
       main.js  preload.cjs  core.bundle.mjs  package.json
+      src/cli/index.mjs      the bundled CLI that bench.cmd runs
       renderer/              index.html, app.js, chart.js, app.css, tokens.css
       recipes/               runner.py, fit.py, drift.py, requirements.lock.txt
     app.asar                 (absent on purpose — the app is plain files)
@@ -37,6 +39,27 @@ launch with `set BENCH_APP_PROJECT=C:\path\to\project` — useful for shortcuts.
 
 `LAUNCH.txt` in the artifact root says the same thing, because the folder is what gets handed to
 someone.
+
+## The CLI is in the artifact
+
+`bench.cmd` beside `bench.exe` runs the **same CLI** as `pnpm bench`, bundled from `src/cli/index.ts`
+to `resources/app/src/cli/index.mjs` and executed by the artifact's own Electron binary in Node mode
+(`ELECTRON_RUN_AS_NODE`). It needs no Node install, no `pnpm`, and no repository:
+
+```sh
+cd C:\data\sensor
+C:\path\to\bench-win32-x64\bench.cmd state
+C:\path\to\bench-win32-x64\bench.cmd --project C:\data\sensor import readings.csv --time t_observed
+C:\path\to\bench-win32-x64\bench.cmd --project C:\data\sensor view new "readings" --dataset main
+```
+
+Do **not** put the artifact folder on `PATH` and expect `bench` to mean the CLI: `bench.exe` is the
+window, and Windows resolves `.exe` before `.cmd`. Call the launcher by name (`bench.cmd`) or by path.
+
+An agent can therefore create a project, add and import points, check the log, manage views and draw
+plots with only this folder. Analysis is the one part that still needs an interpreter: `bench run fit`
+and `bench run drift` look for `resources/app/recipes/.venv` or a Python on `PATH` with the pinned
+dependencies. That is unchanged from the window, which already says why no recipe is offered.
 
 ## What it does not carry, and what that costs
 
@@ -65,7 +88,8 @@ pnpm app:package:check     # after pnpm app:package
 ```
 
 This launches **`bench.exe` itself** (not the dev shell) with the analysis runtime deliberately
-removed from `PATH`, on a scratch copy of the committed fixture, and fails unless:
+removed from `PATH`, on a scratch copy of the committed fixture, then runs **`bench.cmd`** with the
+same stripped environment. It fails unless:
 
 - the app reports `app.isPackaged`, Electron 44.9.0, and a window URL inside `resources/app`;
 - it painted the project — 2 panels, 28 marks, `n = 14`, entry fields `x,y`;
@@ -73,6 +97,9 @@ removed from `PATH`, on a scratch copy of the committed fixture, and fails unles
 - `fixtures/`, `tests/`, `node_modules/`, `docs/`, `data/`, `recipes/.venv` and `recipes/__pycache__`
   are **not** in `resources/app`, while `main.js`, `preload.cjs`, `core.bundle.mjs`, the renderer and
   `recipes/runner.py` **are**;
+- the shipped CLI created a fresh project, imported a timed table, made and rendered a view, passed
+  `bench check`, and reported version 1 — with no Node install and no Python;
+- `bench.cmd` and `resources/app/src/cli/index.mjs` are present;
 - Electron's fallback `default_app.asar` is gone, and the artifact is under 450 MB.
 
 It writes a frame from that run to `docs/ui-review/app-packaged.png` and a receipt to
