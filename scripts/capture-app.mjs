@@ -14,9 +14,9 @@
  * selecting a mark, a tab built from the dialog, and a project created with a shape of its own —
  * captured on scratch copies, so no committed log is ever written by a review run.
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { cp, mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -58,13 +58,57 @@ const child = spawn(electron, [join(root, 'app', 'main.js')], {
   stdio: 'inherit',
 })
 
-const code = await new Promise((done) => {
+let code = await new Promise((done) => {
   child.on('exit', (status) => done(status ?? 1))
   child.on('error', (error) => {
     console.error('could not start electron:', error.message)
     done(1)
   })
 })
+
+// A person who presses the exe and clicks New… is the case the recorded launcher exists for, so the
+// project the window just created is checked here, not assumed from the fact that the window and the
+// CLI share `initProject`. Read the line out of that project's own AGENTS.md and run it from a
+// folder unrelated to both the repository and the project.
+const windowProject = join(scratch, 'new-project', 'load-cells')
+if (code === 0) {
+  try {
+    const agents = await readFile(join(windowProject, 'AGENTS.md'), 'utf8')
+    const recorded = agents.match(/^ {4}(.+?) --project "(.+?)" state$/m)
+    if (!recorded) throw new Error(`the window's project AGENTS.md names no launcher:\n${agents}`)
+    const [, launcher, recordedProject] = recorded
+    if (recordedProject !== windowProject.replaceAll('\\', '/')) {
+      throw new Error(`the window's AGENTS.md points at ${recordedProject}`)
+    }
+    const packaged = launcher.match(/^"(.+?bench\.cmd)"$/)
+    const checkout = launcher.match(/^pnpm -C "(.+?)" bench$/)
+    if (packaged) {
+      if (!existsSync(packaged[1])) throw new Error(`the launcher ${packaged[1]} does not exist`)
+    } else if (checkout) {
+      if (!existsSync(join(checkout[1], 'package.json'))) {
+        throw new Error(`the checkout ${checkout[1]} has no package.json`)
+      }
+    } else {
+      throw new Error(`the window recorded an unknown launcher: ${launcher}`)
+    }
+    const followed = spawnSync(recorded[0].trim(), {
+      shell: true,
+      cwd: scratch,
+      env: process.env,
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    const output = `${followed.stdout ?? ''}${followed.stderr ?? ''}`
+    if (followed.status !== 0) {
+      throw new Error(`the window's recorded launcher exited ${followed.status}\n${output}`)
+    }
+    if (!/# STATE/.test(output)) throw new Error(`the launcher printed:\n${output}`)
+    console.log('window project: AGENTS.md names a launcher that runs from an unrelated folder')
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    code = 1
+  }
+}
 
 const frames = [
   'app-100.png',
