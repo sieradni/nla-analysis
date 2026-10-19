@@ -7,13 +7,14 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 
 | working | specified, not built |
 |---|---|
-| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `recipes`, `run`, `decide` | `import`, `dataset *`, `shape *`, `runs`, `rerun`, `view *`, `export` |
+| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `decide` | `dataset *`, `shape *`, `runs`, `rerun`, `view *`, `export` |
 
 Available recipes: `fit` (curve, band, verdict) and `drift` (does the relationship change over time).
 
-Exit codes, `--json`, `--project`, and non-interactive behavior are in place. `--dry-run` and
-`--id` (idempotent retries) are specified but not yet implemented. Everything in the tables below is
-the target contract, not a description of the current binary.
+Exit codes, `--json`, `--project`, and non-interactive behavior are in place. `--dry-run` exists on
+`import`; on the other mutating commands, and `--id` (idempotent retries) everywhere, it is specified
+but not yet implemented. Everything in the tables below is the target contract, not a description of
+the current binary.
 
 `bench recipes` deliberately does **not** require a project: recipes belong to the application, not
 to a data set. `bench run` writes the rendered artifact, appends an `analysis_run` event carrying the
@@ -62,7 +63,31 @@ exist, which analyses are stale, what the last decisions were, and what is unres
 | `bench correct <point-id> --values '{"y":3.5}' --reason "typo"` | supersede a point |
 | `bench retract <point-id> --reason` | mark as withdrawn (kept, excluded from analysis) |
 | `bench annotate <point-id> --note/--tag` | add context without changing values |
-| `bench import <file> [--format csv\|xlsx\|jsonl] [--map a=x,b=y]` | preserve in `data/raw/`, then load |
+| `bench import <file> [--map field=column]… [--time <col>] [--format csv\|tsv\|jsonl] [--dry-run] [--force]` | preserve in `data/raw/`, then load |
+
+#### Import behaviour, as built
+
+- **All or nothing.** Every row is parsed and validated against the shape first. One bad row and
+  nothing is written — a half-imported file is worse than a refusal, because the log would then
+  disagree with the file it came from. Errors name the line as a person sees it in an editor
+  (`row 7`), not an array index.
+- **The original is evidence.** It is copied into `data/raw/` before the first event is appended and
+  is never read again. The name is content-addressed (`<hash12>-<name>`), so re-importing the same
+  bytes lands on the same path instead of accumulating near-duplicates, and a project rebuilt from
+  its own script reproduces the same tree. The log records the file, the row count, the full
+  content hash, the columns, and the field-to-column mapping.
+- **A duplicate is refused, not silently repeated.** If an `import_completed` event with the same
+  hash and dataset exists, the import stops and says so. `--force` is the way to mean it.
+- **The time column is a decision.** `--time <column>` names it; otherwise the first header that
+  looks like one wins (`t_observed`, `observed_at`, `timestamp`, `time`, `date`, `t`, in that
+  order). With no time column, `t_observed` is the moment of import. A column that cannot be parsed
+  as a time is an error, never a silent fallback to now.
+- **Metadata preambles are skipped and counted.** Lines starting with `#` or `//` are dropped and
+  reported in the output, because a skipped line could just as easily be a broken row.
+- **`--dry-run` writes nothing at all** — no events, no copy under `data/raw/` — and prints the
+  mapping it resolved.
+- A relative path is looked for in the working directory and then in the project directory, so
+  `bench --project ~/lab import readings.csv` works from either place.
 
 ### Datasets and versions
 

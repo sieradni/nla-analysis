@@ -30,6 +30,24 @@ export class EventLog {
     }
   }
 
+  /**
+   * Append several events as one write. Importing ten thousand rows one fsync at a time takes long
+   * enough to look broken, and an import that half-lands after an interruption is worse than one
+   * that never started.
+   */
+  async appendMany(events: BenchEvent[]): Promise<void> {
+    if (events.length === 0) return
+    await mkdir(dirname(this.file), { recursive: true })
+    const payload = events.map((event) => JSON.stringify(event) + '\n').join('')
+    const handle = await open(this.file, 'a')
+    try {
+      await handle.write(payload)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+  }
+
   async read(): Promise<LogRead> {
     let text: string
     try {

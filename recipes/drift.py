@@ -61,6 +61,16 @@ DEFAULT_LEVEL = 0.95
 RSS_FLOOR = 1e-12
 
 
+def _describe_p(value: float) -> str:
+    """A p-value is never zero, so never print one as if it were.
+
+    Returns the whole clause, because "p = < 0.0001" is not a sentence anyone should write.
+    """
+    if value < 5e-5:
+        return "p < 0.0001"
+    return f"p = {value:.4f}".rstrip("0").rstrip(".")
+
+
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
     return singular if count == 1 else (plural if plural is not None else singular + "s")
 
@@ -325,7 +335,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
     if verdict == "contradicted":
         sentences.append(
             f"No evidence that the relationship changes with time: the best split "
-            f"({split_time}) gives F = {best_f:.2f}, p = {p_value:.3f}"
+            f"({split_time}) gives F = {best_f:.2f}, {_describe_p(p_value)}"
             + (f" over {permutations} permutations" if method == "permutation" else "")
             + ". One slope describes the whole series."
         )
@@ -336,7 +346,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
             f"{before['count']} and {after['count']} points)."
         )
         sentences.append(
-            f"A single slope through both regimes is rejected at p = {p_value:.4f}"
+            f"A single slope through both regimes is rejected at {_describe_p(p_value)}"
             + (
                 f", by permutation over {permutations} reshuffles because the split was chosen from "
                 f"the data"
@@ -382,12 +392,15 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         ]
 
     if verdict == "contradicted":
-        caption = f"No evidence of a change over time: one slope describes the whole series (p = {p_value:.3f})."
+        caption = (
+            "No evidence of a change over time: one slope describes the whole series "
+            f"({_describe_p(p_value)})."
+        )
     else:
         caption = (
             f"Slope {slope_before:.4g} [{before['slope_low']:.4g}, {before['slope_high']:.4g}] before "
             f"{split_time}, {slope_after:.4g} [{after['slope_low']:.4g}, {after['slope_high']:.4g}] after; "
-            f"one slope rejected at p = {p_value:.4g}."
+            f"one slope rejected at {_describe_p(p_value)}."
         )
 
     return {

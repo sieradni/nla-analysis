@@ -89,8 +89,13 @@ export interface PointRetracted extends EventBase {
 export interface ImportCompleted extends EventBase {
   type: 'import_completed'
   dataset: string
+  /** Path of the preserved original, relative to the project. */
   file: string
   rows: number
+  /** Content hash of the source, so the same export cannot be imported twice by accident. */
+  hash?: string
+  columns?: string[]
+  mapping?: Record<string, string>
 }
 
 export interface AnalysisRun extends EventBase {

@@ -117,6 +117,16 @@ def _axis(field: str, label: str, units: dict[str, str]) -> dict[str, str]:
     return axis
 
 
+def _describe_p(value: float) -> str:
+    """A p-value is never zero, so never print one as if it were.
+
+    Returns the whole clause, because "p = < 0.0001" is not a sentence anyone should write.
+    """
+    if value < 5e-5:
+        return "p < 0.0001"
+    return f"p = {value:.4f}".rstrip("0").rstrip(".")
+
+
 def _names(degree: int) -> list[str]:
     return ["intercept"] + [f"x^{power}" if power > 1 else "x" for power in range(1, degree + 1)]
 
@@ -308,13 +318,13 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         )
     elif verdict == "contradicted":
         sentences.append(
-            f"A mean-only model is not beaten ({f_text}, p = {p_value:.3f}), so these {n} points do not "
+            f"A mean-only model is not beaten ({f_text}, {_describe_p(p_value)}), so these {n} points do not "
             f"yet support a trend of this shape."
         )
     else:
         sentences.append(
             f"{n} points, {parameters} parameters, {dof} degrees of freedom; the fit beats a mean-only "
-            f"model ({f_text}, p = {p_value:.4f})."
+            f"model ({f_text}, {_describe_p(p_value)})."
         )
         shown = coefficients[1] if degree == 1 else coefficients[degree]
         sentences.append(

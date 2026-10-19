@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { activePoints, bind, numericValue } from '../core/binder.ts'
 import type { DatasetState, Point, ProjectState } from '../core/binder.ts'
 import { makeEvent } from '../core/events.ts'
-import type { PointValue } from '../core/events.ts'
+import type { BenchEvent, PointValue } from '../core/events.ts'
 import { renderChart } from '../core/chart.ts'
 import type { ChartSpec } from '../core/chart.ts'
 import { validateValues } from '../core/shapes.ts'
@@ -22,6 +23,7 @@ import type { ProjectHandle } from '../core/project.ts'
 import { RecipeRunner } from '../core/runner.ts'
 import type { RecipeSchema, RunInput } from '../core/runner.ts'
 import { renderState } from '../core/state.ts'
+import { coerce, parseDelimited, parseJsonl } from '../core/table.ts'
 
 /**
  * Recipes belong to the application, not to the user's project: they are the analysis library that
@@ -50,6 +52,11 @@ const OPTIONS = {
   tag: { type: 'string', multiple: true },
   param: { type: 'string', multiple: true },
   chart: { type: 'string' },
+  format: { type: 'string' },
+  map: { type: 'string', multiple: true },
+  time: { type: 'string' },
+  force: { type: 'boolean' },
+  'dry-run': { type: 'boolean' },
   out: { type: 'string' },
   project: { type: 'string' },
   json: { type: 'boolean' },
@@ -80,6 +87,7 @@ Usage
   bench state [--json]                  regenerate and print STATE.md
   bench check [--json]                  validate the log and shapes
   bench chart [--out file.svg]          render the dataset to an SVG artifact
+  bench import <file> [options]         bring rows in from csv, tsv, or jsonl
   bench recipes [--json]                list analysis recipes and their parameters
   bench run <recipe> [--param k=v]      run an analysis, record it, and chart the result
   bench decide "<text>"                 record a decision the next session inherits
@@ -93,6 +101,13 @@ Options for add
   --dataset <id>             defaults to main
   --param <name=value>       recipe parameter, repeatable (numbers and booleans inferred)
   --chart <path>             where to write the rendered artifact
+
+Options for import
+  --map <field=column>       map a shape field to a column with a different name, repeatable
+  --time <column>            read the observation time from a column
+  --format csv|tsv|jsonl     override detection from the file extension
+  --dry-run                  report what would be imported and change nothing
+  --force                    import a file whose exact contents were imported before
 
 Global
   --project <dir>   operate on a project other than the enclosing one
@@ -217,6 +232,15 @@ async function withRunner<T>(root: string, use: (runner: RecipeRunner) => Promis
 function shortNumber(value: unknown): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
   return String(Number(value.toPrecision(6)))
+}
+
+const TIME_COLUMN_NAMES = ['t_observed', 'observed_at', 'timestamp', 'time', 'date', 't']
+
+function guessFormat(path: string): string {
+  const lower = path.toLowerCase()
+  if (lower.endsWith('.jsonl') || lower.endsWith('.ndjson')) return 'jsonl'
+  if (lower.endsWith('.tsv') || lower.endsWith('.tab')) return 'tsv'
+  return 'csv'
 }
 
 function parse(argv: string[]) {
@@ -479,6 +503,204 @@ async function main(): Promise<void> {
         process.stdout.write(JSON.stringify({ ok: true, data: { path: out, points: plotted.length } }, null, 2) + '\n')
       } else {
         process.stdout.write(`wrote ${out}  (${plotted.length} points)\n`)
+      }
+      return
+    }
+
+    case 'import': {
+      const file = args[0]
+      if (!file) die('missing a file to import', EXIT_INVALID, 'bench import readings.csv')
+      const handle = await locate(values.project)
+
+      // A relative path is looked for where the shell is, then inside the project. Both are what a
+      // person means by `import readings.csv`, especially when --project points somewhere else.
+      const candidates = isAbsolute(file) ? [file] : [resolve(file), resolve(handle.dir, file)]
+      const source = candidates.find((candidate) => existsSync(candidate))
+      if (!source) {
+        die(`cannot find ${file}`, EXIT_MISSING, `looked in ${candidates.map((c) => dirname(c)).join(' and ')}`)
+      }
+
+      let text: string
+      try {
+        text = await readFile(source, 'utf8')
+      } catch {
+        die(`cannot read ${source}`, EXIT_MISSING)
+      }
+
+      const state = await loadState(handle)
+      const datasetId = pickDataset(state, values.dataset)
+      const dataset = state.datasets.get(datasetId)
+      if (!dataset) die(`no dataset "${datasetId}"`, EXIT_MISSING)
+      const shape = state.shapes.get(dataset.shape)
+      if (!shape) die(`dataset "${datasetId}" references unknown shape "${dataset.shape}"`, EXIT_INVARIANT)
+
+      const format = (values.format ?? guessFormat(source)).toLowerCase()
+      if (!['csv', 'tsv', 'jsonl'].includes(format)) {
+        die(`unknown format "${format}"`, EXIT_INVALID, 'use csv, tsv, or jsonl')
+      }
+      const table = format === 'jsonl' ? parseJsonl(text) : parseDelimited(text, format === 'tsv' ? '\t' : undefined)
+      if (table.rows.length === 0) {
+        die('the file has no data rows', EXIT_INVALID, `columns found: ${table.columns.join(', ') || 'none'}`)
+      }
+
+      const requested = new Map<string, string>()
+      for (const entry of values.map ?? []) {
+        const separator = entry.indexOf('=')
+        if (separator <= 0) die(`--map must look like field=column, got "${entry}"`)
+        requested.set(entry.slice(0, separator).trim(), entry.slice(separator + 1).trim())
+      }
+      const lowered = new Map(table.columns.map((column) => [column.toLowerCase(), column]))
+      const mapping = new Map<string, string>()
+      for (const field of shape.fields) {
+        const column = requested.get(field.name) ?? lowered.get(field.name.toLowerCase())
+        if (column === undefined) {
+          if (field.optional === true) continue
+          die(
+            `no column for the required field "${field.name}"`,
+            EXIT_INVALID,
+            `the file has ${table.columns.join(', ')}; use --map ${field.name}=<column>`,
+          )
+        }
+        if (!table.columns.includes(column)) {
+          die(`column "${column}" is not in the file`, EXIT_INVALID, `the file has ${table.columns.join(', ')}`)
+        }
+        mapping.set(field.name, column)
+      }
+
+      const timeColumn =
+        values.time ?? TIME_COLUMN_NAMES.find((name) => lowered.has(name))
+
+      const errors: string[] = []
+      const warnings: string[] = []
+      const prepared: { values: Record<string, PointValue>; t: string }[] = []
+
+      table.rows.forEach((row, index) => {
+        const where = `row ${index + 2}`
+        const pointValues: Record<string, PointValue> = {}
+        for (const field of shape.fields) {
+          const column = mapping.get(field.name)
+          if (column === undefined) continue
+          // Absent cells are dropped rather than defaulted, so a gap is a gap and validation sees it.
+          const value = coerce(row[column] ?? '', field.type)
+          if (value !== null) pointValues[field.name] = value
+        }
+
+        let observed = new Date().toISOString()
+        if (timeColumn !== undefined) {
+          const raw = row[timeColumn] ?? ''
+          const milliseconds = Date.parse(raw)
+          if (raw === '' || Number.isNaN(milliseconds)) {
+            errors.push(`${where}: "${raw}" is not a parseable time`)
+            return
+          }
+          observed = new Date(milliseconds).toISOString()
+        }
+
+        const validation = validateValues(shape, pointValues)
+        if (validation.errors.length > 0) {
+          errors.push(`${where}: ${validation.errors.join('; ')}`)
+          return
+        }
+        for (const warning of validation.warnings) warnings.push(`${where}: ${warning}`)
+        prepared.push({ values: pointValues, t: observed })
+      })
+
+      if (errors.length > 0) {
+        for (const problem of errors.slice(0, 5)) process.stderr.write(`  ${problem}\n`)
+        if (errors.length > 5) process.stderr.write(`  … and ${errors.length - 5} more\n`)
+        die(`${errors.length} row(s) would not import, so none were`, EXIT_INVALID, 'fix the file, or fix the mapping')
+      }
+
+      const hash = createHash('sha256').update(text).digest('hex')
+      const { events: existing } = await handle.log.read()
+      const reimport = existing.find(
+        (event) => event.type === 'import_completed' && event.hash === hash && event.dataset === datasetId,
+      )
+      if (reimport && values.force !== true) {
+        die(
+          `these exact contents were already imported into "${datasetId}"`,
+          EXIT_INVALID,
+          'pass --force to import them a second time',
+        )
+      }
+
+      const summary = {
+        dataset: datasetId,
+        shape: dataset.shape,
+        format,
+        rows: prepared.length,
+        columns: table.columns,
+        mapping: Object.fromEntries(mapping),
+        timeColumn: timeColumn ?? null,
+        sourceHash: hash,
+        raggedRows: table.raggedRows,
+        comments: table.comments ?? 0,
+      }
+
+      if (values['dry-run'] === true) {
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify({ ok: true, data: { ...summary, dryRun: true, sample: prepared.slice(0, 3) } }, null, 2) + '\n',
+          )
+        } else {
+          process.stdout.write(`would import ${prepared.length} row(s) into ${datasetId} (${dataset.shape})\n`)
+          for (const [field, column] of mapping) process.stdout.write(`  ${field} <= ${column}\n`)
+          if (timeColumn) process.stdout.write(`  t_observed <= ${timeColumn}\n`)
+          process.stdout.write(`  nothing was written\n`)
+        }
+        return
+      }
+
+      // The original is copied before anything is recorded: an import is evidence, and the file that
+      // produced it must outlive whatever is done to the working copy. It is never read again.
+      //
+      // The name is content-addressed rather than clock-stamped, so the same bytes always land at
+      // the same path: a re-import updates one file instead of piling up near-duplicates, and a
+      // project rebuilt from its own script reproduces the same tree. When it arrived is in the
+      // event's `at`, which is where a time belongs.
+      const rawName = `${hash.slice(0, 12)}-${basename(source)}`
+      await mkdir(join(handle.dir, 'data', 'raw'), { recursive: true })
+      await copyFile(source, join(handle.dir, 'data', 'raw', rawName))
+      const rawRef = `data/raw/${rawName}`
+
+      const appended: BenchEvent[] = prepared.map((point) =>
+        makeEvent('point_recorded', handle.session, {
+          dataset: datasetId,
+          shape: dataset.shape,
+          values: point.values,
+          t_observed: point.t,
+          tags: ['import'],
+        }),
+      )
+      appended.push(
+        makeEvent('import_completed', handle.session, {
+          dataset: datasetId,
+          file: rawRef,
+          rows: prepared.length,
+          hash,
+          columns: table.columns,
+          mapping: Object.fromEntries(mapping),
+        }),
+      )
+      await handle.log.appendMany(appended)
+      await refreshState(handle)
+
+      for (const warning of warnings.slice(0, 5)) process.stderr.write(`  warning: ${warning}\n`)
+      if (asJson) {
+        process.stdout.write(
+          JSON.stringify({ ok: true, data: { ...summary, preserved: rawRef, warnings } }, null, 2) + '\n',
+        )
+      } else {
+        process.stdout.write(`imported ${prepared.length} row(s) into ${datasetId} from ${basename(source)}\n`)
+        process.stdout.write(`  preserved as ${rawRef}\n`)
+        for (const [field, column] of mapping) process.stdout.write(`  ${field} <= ${column}\n`)
+        if (timeColumn) process.stdout.write(`  t_observed <= ${timeColumn}\n`)
+        if (table.raggedRows > 0) {
+          process.stdout.write(`  ${table.raggedRows} row(s) had a different number of fields than the header\n`)
+        }
+        if ((table.comments ?? 0) > 0) {
+          process.stdout.write(`  ${table.comments} comment line(s) skipped\n`)
+        }
       }
       return
     }

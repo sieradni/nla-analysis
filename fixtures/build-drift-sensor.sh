@@ -44,6 +44,21 @@ bench add --x 9 --y 21.5 --at 2026-10-13T09:30:00Z --note "re-recorded after fie
 bad="$(bench add --x 6 --y 99.9 --at 2026-10-14T09:00:00Z --json | id_of)"
 bench correct "$bad" --values '{"y":16.0}' --reason "transcription error" >/dev/null
 
+# A real file import, so the fixture covers all three ways data arrives: typed by hand, corrected,
+# and loaded from a file. The CSV is written outside the project and imported; the copy the importer
+# keeps under data/raw/ is the evidence, committed alongside the log that refers to it.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+cat > "$work/recalibration.csv" <<'CSV'
+# Comment lines and a ragged tail are deliberate: this is what an instrument export looks like.
+t_observed,temperature,reading
+2026-10-15T09:00:00Z,18.62,7.0
+2026-10-15T09:12:00Z,21.05,8.0
+CSV
+# The dry run is part of the record: it proves the mapping is right before anything is written.
+bench import "$work/recalibration.csv" --map x=reading --map y=temperature --dry-run >/dev/null
+bench import "$work/recalibration.csv" --map x=reading --map y=temperature >/dev/null
+
 # A recorded analysis, so the fixture exercises the verdict path and STATE's Analyses section.
 # The pooled slope is a compromise between the two weeks -- which is exactly the question a
 # time-varying analysis has to answer, and why this data set is shaped the way it is.

@@ -1,0 +1,4 @@
+# Comment lines and a ragged tail are deliberate: this is what an instrument export looks like.
+t_observed,temperature,reading
+2026-10-15T09:00:00Z,18.62,7.0
+2026-10-15T09:12:00Z,21.05,8.0

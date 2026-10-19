@@ -14,7 +14,8 @@
     "check": "tsc --noEmit",
     "verify": "pnpm check && pnpm test",
     "setup:recipes": "uv venv recipes/.venv --allow-existing && uv pip install --python recipes/.venv -r recipes/requirements.lock.txt",
-    "fixture": "bash fixtures/build-drift-sensor.sh"
+    "fixture": "bash fixtures/build-drift-sensor.sh",
+    "review": "node scripts/review-charts.mjs"
   },
   "engines": {
     "node": ">=22.18"

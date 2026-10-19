@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -129,6 +129,142 @@ describe('bench CLI, as executed', () => {
     await bench(['--project', project, 'add', '--x', '4', '--y', '9.1'])
     const after = await readFile(join(project, 'data', 'events.jsonl'), 'utf8')
     expect(after.startsWith(before)).toBe(true)
+  })
+})
+
+describe('bench import, as executed', () => {
+  const csv =
+    'timestamp,temp_c,volts\n' +
+    '2026-01-05T09:00:00Z,21.4,3.301\n' +
+    '2026-01-05T09:01:00Z,21.9,3.355\n' +
+    '2026-01-05T09:02:00Z,22.3,3.402\n'
+
+  async function withProject(name: string, body: (dir: string) => Promise<void>) {
+    const target = await mkdtemp(join(tmpdir(), `bench-${name}-`))
+    try {
+      await bench(['init', target, '--name', name])
+      await body(target)
+    } finally {
+      await rm(target, { recursive: true, force: true })
+    }
+  }
+
+  it('imports rows, maps columns, preserves the original, and records the import', async () => {
+    await withProject('import', async (dir) => {
+      await writeFile(join(dir, 'readings.csv'), csv, 'utf8')
+      const result = await bench([
+        '--project', dir, 'import', 'readings.csv',
+        '--map', 'x=temp_c', '--map', 'y=volts', '--time', 'timestamp',
+        '--json',
+      ])
+      expect(result.code).toBe(0)
+      const payload = JSON.parse(result.stdout) as {
+        data: { rows: number; preserved: string; timeColumn: string | null; sourceHash: string }
+      }
+      expect(payload.data.rows).toBe(3)
+      expect(payload.data.timeColumn).toBe('timestamp')
+      // The observation time came from the file, so it is the one that was imported.
+      expect(payload.data.preserved).toMatch(/^data\/raw\/.+-readings\.csv$/)
+      expect(existsSync(join(dir, payload.data.preserved))).toBe(true)
+      // The original is byte-identical to what was handed over: evidence is not edited.
+      expect(await readFile(join(dir, payload.data.preserved), 'utf8')).toBe(csv)
+
+      const listed = await bench(['--project', dir, 'list', '--json'])
+      const points = JSON.parse(listed.stdout) as {
+        data: { values: { x: number }; t_observed: string; tags: string[] }[]
+      }
+      expect(points.data).toHaveLength(3)
+      expect(points.data.map((point) => point.values.x)).toEqual([21.4, 21.9, 22.3])
+      // The observation time came from the file, not from the moment of import.
+      expect(points.data[0]!.t_observed).toBe('2026-01-05T09:00:00.000Z')
+      expect(points.data[0]!.tags).toContain('import')
+
+      expect((await bench(['--project', dir, 'check'])).stdout).toContain('0 error(s)')
+    })
+  })
+
+  it('refuses a file with a bad row and imports none of it', async () => {
+    await withProject('import-bad', async (dir) => {
+      await writeFile(
+        join(dir, 'ragged.csv'),
+        'timestamp,temp_c,volts\n2026-01-05T09:00:00Z,21.4,3.301\nnot-a-time,21.9,3.355\n',
+        'utf8',
+      )
+      const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+      const result = await bench([
+        '--project', dir, 'import', 'ragged.csv', '--map', 'x=temp_c', '--map', 'y=volts', '--time', 'timestamp',
+      ])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('1 row(s) would not import')
+      // Named by the line a person would see in their editor, not by array index.
+      expect(result.stderr).toContain('row 3')
+
+      // Nothing landed: a partial import is a worse outcome than a refusal.
+      expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
+      const listed = await bench(['--project', dir, 'list', '--json'])
+      expect((JSON.parse(listed.stdout) as { data: unknown[] }).data).toHaveLength(0)
+    })
+  })
+
+  it('refuses to import the same contents twice, unless forced', async () => {
+    await withProject('import-dup', async (dir) => {
+      await writeFile(join(dir, 'readings.csv'), csv, 'utf8')
+      const args = ['--project', dir, 'import', 'readings.csv', '--map', 'x=temp_c', '--map', 'y=volts']
+      expect((await bench(args)).code).toBe(0)
+
+      const again = await bench(args)
+      expect(again.code).toBe(1)
+      expect(again.stderr).toContain('already imported')
+
+      expect((await bench([...args, '--force'])).code).toBe(0)
+      const listed = await bench(['--project', dir, 'list', '--json'])
+      expect((JSON.parse(listed.stdout) as { data: unknown[] }).data).toHaveLength(6)
+    })
+  })
+
+  it('changes nothing on a dry run', async () => {
+    await withProject('import-dry', async (dir) => {
+      await writeFile(join(dir, 'readings.csv'), csv, 'utf8')
+      const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+      const result = await bench([
+        '--project', dir, 'import', 'readings.csv', '--map', 'x=temp_c', '--map', 'y=volts', '--dry-run',
+      ])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('nothing was written')
+      expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
+      // data/raw exists from init; a dry run must not put anything in it.
+      expect(await readdir(join(dir, 'data', 'raw'))).toEqual([])
+    })
+  })
+
+  it('reads tsv and jsonl as well as csv', async () => {
+    await withProject('import-formats', async (dir) => {
+      await writeFile(join(dir, 't.tsv'), 'temp_c\tvolts\n1\t2\n3\t4\n', 'utf8')
+      expect((await bench(['--project', dir, 'import', 't.tsv', '--map', 'x=temp_c', '--map', 'y=volts'])).code).toBe(0)
+
+      await writeFile(
+        join(dir, 'j.jsonl'),
+        '{"temp_c": 5, "volts": 6}\n{"temp_c": 7, "volts": 8}\n',
+        'utf8',
+      )
+      const jsonl = await bench(['--project', dir, 'import', 'j.jsonl', '--map', 'x=temp_c', '--map', 'y=volts', '--json'])
+      expect(jsonl.code).toBe(0)
+      expect((JSON.parse(jsonl.stdout) as { data: { rows: number } }).data.rows).toBe(2)
+
+      const listed = await bench(['--project', dir, 'list', '--json'])
+      expect((JSON.parse(listed.stdout) as { data: unknown[] }).data).toHaveLength(4)
+      expect((await bench(['--project', dir, 'check'])).stdout).toContain('0 error(s)')
+    })
+  })
+
+  it('says which column is missing rather than guessing at one', async () => {
+    await withProject('import-map', async (dir) => {
+      await writeFile(join(dir, 'odd.csv'), 'degC,volts\n21.4,3.301\n', 'utf8')
+      const result = await bench(['--project', dir, 'import', 'odd.csv'])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('no column for the required field "x"')
+      expect(result.stderr).toContain('--map x=<column>')
+    })
   })
 })
 

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -51,6 +53,24 @@ describe('drift-sensor fixture', () => {
     const retracted = dataset!.points.filter((point) => point.status === 'retracted')
     expect(retracted).toHaveLength(1)
     expect(retracted[0]!.retractionReason).toContain('typo')
+  })
+
+  it('keeps every imported original byte-identical to the hash recorded with it', async () => {
+    const { events, state } = await loadFixture()
+    const imports = events.filter((event) => event.type === 'import_completed')
+    expect(imports.length).toBeGreaterThan(0)
+
+    for (const event of imports) {
+      const bytes = await readFile(join(projectDir, event.file))
+      // data/raw is evidence: if anyone edits it, the log's own hash stops matching and this fails.
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(event.hash)
+      expect(existsSync(join(projectDir, event.file))).toBe(true)
+    }
+
+    // And the rows it recorded are in the active set, tagged as having come from a file.
+    const imported = activePoints(state, 'main').filter((point) => point.tags.includes('import'))
+    expect(imported).toHaveLength(imports[0]!.rows)
+    expect(imported.map((point) => point.values.x)).toEqual([7, 8])
   })
 
   it('preserves the original bytes of a corrected point', async () => {
