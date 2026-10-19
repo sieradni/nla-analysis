@@ -1,3 +1,4 @@
+import { freshnessNote, type RunFreshness } from './analysis.ts'
 import type { IsoTime, Shape } from './events.ts'
 import type { ProjectState } from './binder.ts'
 
@@ -27,7 +28,15 @@ function shapeSummary(shape: Shape | undefined): string {
  * STATE.md is generated, never written by hand, so it cannot drift from the log. It is the first
  * thing a fresh session reads; every line earns its place by answering "where did we leave this?".
  */
-export function renderState(config: StateConfig, state: ProjectState): string {
+export interface RenderOptions {
+  /**
+   * Freshness per run id, computed by `assessRuns`. Passed in rather than computed here because it
+   * needs the filesystem (the recipe files), and because the caller usually has it already.
+   */
+  freshness?: Map<string, RunFreshness>
+}
+
+export function renderState(config: StateConfig, state: ProjectState, options?: RenderOptions): string {
   const lines: string[] = []
   const datasets = [...state.datasets.values()]
   const totalPoints = datasets.reduce((sum, dataset) => sum + dataset.points.length, 0)
@@ -68,7 +77,11 @@ export function renderState(config: StateConfig, state: ProjectState): string {
     lines.push('## Analyses', '')
     for (const run of state.runs.slice(-6).reverse()) {
       const narrative = run.narrative ? ` — ${clip(run.narrative)}` : ''
-      lines.push(`- \`${run.recipe}\` · **${run.verdict}** · ${shortDate(run.at)}${narrative}`)
+      // Whether the result still holds is the first thing a reader needs, before the verdict: a
+      // confident sentence about data that has since changed is the most expensive kind of stale.
+      const note = freshnessNote(options?.freshness?.get(run.id))
+      const status = note === '' ? '' : ` · ${note}`
+      lines.push(`- \`${run.recipe}\` · **${run.verdict}** · ${shortDate(run.at)}${status}${narrative}`)
     }
     lines.push('')
   }

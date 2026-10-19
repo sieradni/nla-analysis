@@ -308,9 +308,11 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         half_width = t_critical * se_mean
         band_label = f"{percent}% confidence band on the fitted curve"
 
-    f_text = "F = n/a" if f_statistic is None else f"F = {f_statistic:.2f}"
+    # Only reached when a test was actually computed: the exact-fit path never prints one.
+    f_text = f"F = {f_statistic:.2f}" if f_statistic is not None else "no F test available"
 
     sentences: list[str] = []
+    show_coefficients = False
     if constant_y:
         sentences.append(
             f"Every one of the {n} y values is {float(y[0]):.6g}, so there is no variation for a curve "
@@ -321,11 +323,22 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
             f"A mean-only model is not beaten ({f_text}, {_describe_p(p_value)}), so these {n} points do not "
             f"yet support a trend of this shape."
         )
+    elif perfect_fit:
+        # No test is available here, so claiming one would be a fabrication. The residuals are zero,
+        # which is either an exact identity or a derived column -- and the caveat below says so.
+        sentences.append(
+            f"{n} points, {parameters} parameters, {dof} degrees of freedom; the fit passes through "
+            f"every point exactly, so no residual variation is left to test against a mean-only model."
+        )
+        show_coefficients = True
     else:
         sentences.append(
             f"{n} points, {parameters} parameters, {dof} degrees of freedom; the fit beats a mean-only "
             f"model ({f_text}, {_describe_p(p_value)})."
         )
+        show_coefficients = True
+
+    if show_coefficients:
         shown = coefficients[1] if degree == 1 else coefficients[degree]
         sentences.append(
             f"{shown['name']} = {shown['estimate']:.4g} [{shown['low']:.4g}, {shown['high']:.4g}] at "

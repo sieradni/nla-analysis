@@ -12,6 +12,10 @@ export interface Point {
   status: 'active' | 'retracted'
   /** Ids of correction events folded into this point, oldest first. */
   corrections: string[]
+  /** When the most recent correction landed. Distinct from `recordedAt`: the values moved later. */
+  correctedAt?: IsoTime
+  /** When it was withdrawn. Kept so an analysis can tell what left the evidence set, and when. */
+  retractedAt?: IsoTime
   retractionReason?: string
 }
 
@@ -34,6 +38,12 @@ export interface RunRecord {
   recipe: string
   verdict: Verdict
   narrative?: string
+  /** Carried so a run can be re-checked against the data later, without re-running it. */
+  recipeHash?: string
+  inputHash?: string
+  params?: Record<string, unknown>
+  dataset?: string
+  artifact?: string
 }
 
 export interface ProjectState {
@@ -132,6 +142,8 @@ export function bind(events: BenchEvent[]): ProjectState {
         }
         target.values = { ...target.values, ...event.values }
         target.corrections.push(event.id)
+        // The log is append-only, so events can be replayed out of order; keep the latest instant.
+        if (target.correctedAt === undefined || event.at > target.correctedAt) target.correctedAt = event.at
         break
       }
 
@@ -142,6 +154,7 @@ export function bind(events: BenchEvent[]): ProjectState {
           break
         }
         target.status = 'retracted'
+        if (target.retractedAt === undefined || event.at > target.retractedAt) target.retractedAt = event.at
         if (event.reason !== undefined) target.retractionReason = event.reason
         break
       }
@@ -152,7 +165,12 @@ export function bind(events: BenchEvent[]): ProjectState {
           at: event.at,
           recipe: event.recipe,
           verdict: event.verdict,
+          recipeHash: event.recipe_hash,
+          inputHash: event.input_hash,
+          params: { ...(event.params ?? {}) },
+          ...(event.dataset === undefined ? {} : { dataset: event.dataset }),
           ...(event.narrative === undefined ? {} : { narrative: event.narrative }),
+          ...(event.artifact === undefined ? {} : { artifact: event.artifact }),
         })
         break
 

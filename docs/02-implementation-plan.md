@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: Phase 0 and Phase 1 complete (2026-10-18); Phase 2 next.
+Status: Phases 0-3 largely complete (2026-10-19); the shape registry and dataset versions are next.
 Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 
 ## Progress
@@ -19,11 +19,14 @@ Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 | 3.2 one honest fit recipe | done | band, DOF, F test, verdict; refuses to draw when DOF ≤ 0 |
 | 3.3 cache / debounce / cancel | **not done** | every run recomputes; fine at this scale, needed for live sliders |
 | 3.4 changepoint | done | `recipes/drift.py`: Chow test at a given split, permutation test when the data chooses the split |
+| 3.5 analysis freshness + `runs` / `rerun` | done | three states (current / stale / cannot-be-checked) from the recorded input and recipe hashes; `STATE.md` carries it |
 | 4.3 csv / tsv / jsonl import | done | all-or-nothing, content-addressed `data/raw/` copy, hash dedupe; 7 CLI tests |
 | 4.x views / UI | not done | deferred per ADR 0002 |
 | windowed / rolling fit | not done | the third item on the time-variation menu |
+| dataset versions / replace / diff | not done | next; `dataset_version_created` is already a log type |
+| `shape extend` + migrations | not done | next; shape 2.2 is read-only today |
 
-Verification so far: 94 tests pass and `tsc --noEmit` is clean. `tests/cli.test.ts` runs the actual
+Verification so far: 103 tests pass and `tsc --noEmit` is clean. `tests/cli.test.ts` runs the actual
 binary, which is the only way to catch a difference between what the test runner's transpiler accepts
 and what Node's type stripping accepts — that gap hid a dead CLI behind 38 green tests once already.
 

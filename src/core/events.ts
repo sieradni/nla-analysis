@@ -103,6 +103,9 @@ export interface AnalysisRun extends EventBase {
   recipe: string
   recipe_hash: string
   params: Record<string, unknown>
+  /** The dataset the run read. Optional because runs recorded before this field existed lack it;
+   *  `assessRuns` reports those as unverifiable rather than assuming an answer. */
+  dataset?: string
   input_hash: string
   verdict: Verdict
   narrative?: string

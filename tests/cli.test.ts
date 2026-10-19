@@ -301,6 +301,52 @@ describe.skipIf(!analysisReady)('analysis through the CLI', () => {
     }
   })
 
+  it('marks an analysis stale when the data moves, and a rerun makes it current again', async () => {
+    const target = await mkdtemp(join(tmpdir(), 'bench-runs-'))
+    try {
+      await bench(['init', target, '--name', 'runs'])
+      for (let index = 1; index <= 6; index++) {
+        await bench(['--project', target, 'add', '--x', String(index), '--y', String(2.4 * index + 0.3)])
+      }
+      const first = await bench(['--project', target, 'run', 'fit', '--param', 'degree=1', '--json'])
+      expect(first.code).toBe(0)
+      const runId = (JSON.parse(first.stdout) as { data: { id: string } }).data.id
+
+      const current = await bench(['--project', target, 'runs', '--json'])
+      const before = JSON.parse(current.stdout) as { data: { id: string; params: unknown; freshness: { status: string } }[] }
+      expect(before.data[0]!.freshness.status).toBe('fresh')
+      // The parameters are recorded with the run, which is what makes a repeat a repeat.
+      expect(before.data[0]!.params).toEqual({ degree: 1 })
+
+      await bench(['--project', target, 'add', '--x', '7', '--y', '17.1'])
+
+      const stale = JSON.parse((await bench(['--project', target, 'runs', '--json'])).stdout) as {
+        data: { freshness: { status: string; addedSince?: number; reason?: string } }[]
+      }
+      expect(stale.data[0]!.freshness.status).toBe('stale')
+      expect(stale.data[0]!.freshness.addedSince).toBe(1)
+      expect(stale.data[0]!.freshness.reason).toContain('added since this run')
+
+      // The cold-start brief must not present a stale result as if it were current.
+      expect(await readFile(join(target, 'STATE.md'), 'utf8')).toContain('stale: 1 point(s) added since this run')
+
+      const again = await bench(['--project', target, 'rerun', 'fit', '--json'])
+      expect(again.code).toBe(0)
+      const repeated = JSON.parse(again.stdout) as { data: { repeated: string; params: unknown } }
+      expect(repeated.data.repeated).toBe(runId)
+      expect(repeated.data.params).toEqual({ degree: 1 })
+
+      const after = JSON.parse((await bench(['--project', target, 'runs', '--json'])).stdout) as {
+        data: { freshness: { status: string } }[]
+      }
+      // Newest first: the repeat is current, and the run it replaced stays honestly marked stale.
+      expect(after.data[0]!.freshness.status).toBe('fresh')
+      expect(after.data[1]!.freshness.status).toBe('stale')
+    } finally {
+      await rm(target, { recursive: true, force: true })
+    }
+  })
+
   it('draws a curve with a band when the data supports one, and says so on the artifact', async () => {
     const target = await mkdtemp(join(tmpdir(), 'bench-supported-'))
     try {

@@ -98,8 +98,13 @@ manifest: source, hash, row count, time span, parent version.
 
 - **Replace** ("here's the updated export") → new version, diff vs parent (`+120 −3 ~8 rows`).
 - **Add point** → a point event, not a new version. Both are cheap and both are recorded.
-- Analyses pin `(dataset, version)`. Views default to latest and show a **stale** badge when the
-  pinned version is behind, with one-command re-run.
+- Analyses pin what they consumed. **As built**, the pin is the content: a hash of the exact points
+  the run read, plus a hash of the recipe file, both recorded in the `analysis_run` event. `bench runs`
+  and `STATE.md` then answer *still current* / *stale: 2 point(s) added* / *cannot be checked* without
+  recomputing anything, and `bench rerun <recipe>` repeats a run with its recorded parameters.
+- Once dataset versions exist, the pin becomes `(dataset, version)` and a version behind means the
+  same thing the content hash already reports. Views default to latest and show the **stale** badge
+  from this same computation.
 
 Nothing about the old version is ever mutated, so "what did last week's conclusion rest on" stays
 answerable.

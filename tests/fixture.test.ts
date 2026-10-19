@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { assessRuns } from '../src/core/analysis.ts'
 import { activePoints, bind } from '../src/core/binder.ts'
 import { EventLog } from '../src/core/log.ts'
 import type { ProjectConfig } from '../src/core/project.ts'
@@ -30,10 +31,13 @@ describe('drift-sensor fixture', () => {
     expect(state.problems).toEqual([])
   })
 
-  it('keeps its committed STATE.md in sync with the log', async () => {
+  it('keeps its committed STATE.md in sync with the log, freshness included', async () => {
     const { config, state } = await loadFixture()
     const committed = await readFile(join(projectDir, 'STATE.md'), 'utf8')
-    expect(committed).toBe(renderState(config, state))
+    // Rendered exactly as the CLI renders it, freshness included. Comparing an easier version here
+    // would let the committed brief drift from what a session actually reads.
+    const freshness = await assessRuns(process.cwd(), state)
+    expect(committed).toBe(renderState(config, state, { freshness }))
   })
 
   it('validates cleanly: the only retracted record is excluded from validation', async () => {

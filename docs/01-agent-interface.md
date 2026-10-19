@@ -7,7 +7,7 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 
 | working | specified, not built |
 |---|---|
-| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `decide` | `dataset *`, `shape *`, `runs`, `rerun`, `view *`, `export` |
+| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide` | `dataset *`, `shape *`, `view *`, `export` |
 
 Available recipes: `fit` (curve, band, verdict) and `drift` (does the relationship change over time).
 
@@ -117,8 +117,26 @@ dependent analyses stale.
 | `bench recipes [--json]` | **working** | the catalog: each recipe's params, defaults, bounds, and source hash. Needs no project |
 | `bench run <recipe> [--param k=v] [--chart path] [--dataset id] [--json]` | **working** | execute, render the artifact, record `analysis_run` |
 | `bench recipe show <name>` | not built | full schema for one recipe |
-| `bench runs [--dataset] [--stale]` | not built | run history with verdicts (STATE.md shows the last six) |
-| `bench rerun --stale` | not built | re-execute analyses whose inputs changed |
+| `bench runs [--json]` | **working** | run history with verdicts and whether each still holds |
+| `bench rerun <recipe> [--param k=v]` | **working** | repeat a run with the parameters it recorded, and report what changed |
+
+The remaining filters — `runs --dataset`, `runs --stale`, `rerun --stale` — are not built; `runs`
+shows every run, newest first, and `rerun` repeats one by recipe name.
+
+#### Is this result still true?
+
+Every `analysis_run` records the dataset it read, a hash of the exact points it consumed, and a hash
+of the recipe file. `bench runs` and `STATE.md` use those to answer, offline and without recomputing:
+
+| answer | meaning |
+|---|---|
+| `still current` | nothing in the dataset changed after the run, and the recipe is the same file |
+| `stale: …` | what changed: `2 point(s) added`, `1 retracted`, `1 corrected`, or `the recipe has changed` |
+| `cannot be checked: …` | the run predates the fingerprint, or names a dataset or recipe that is gone |
+
+`cannot be checked` exists because the honest answer to "does this still hold?" is sometimes "nobody
+wrote down what it read". It is never reported as current. A stale result is not an error: it is the
+normal consequence of adding data, and re-running is one command.
 
 The rules a recipe must obey, and that `bench run` enforces by way of the envelope:
 

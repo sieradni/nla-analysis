@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { EventLog, newSession } from './log.ts'
 import { makeEvent } from './events.ts'
 import type { IsoTime, Shape } from './events.ts'
+import { APP_ROOT, assessRuns } from './analysis.ts'
 import { bind } from './binder.ts'
 import type { ProjectState } from './binder.ts'
 import { renderState } from './state.ts'
@@ -90,7 +91,10 @@ export async function openProject(dir: string, session = newSession()): Promise<
 export async function refreshState(handle: ProjectHandle): Promise<ProjectState> {
   const { events } = await handle.log.read()
   const state = bind(events)
-  await writeFile(join(handle.dir, 'STATE.md'), renderState(handle.config, state))
+  // Freshness is assessed on every write, so STATE.md can never claim an analysis is current when
+  // the point that invalidated it was appended by this very command.
+  const freshness = await assessRuns(APP_ROOT, state)
+  await writeFile(join(handle.dir, 'STATE.md'), renderState(handle.config, state, { freshness }))
   return state
 }
 

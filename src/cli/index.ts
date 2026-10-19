@@ -5,6 +5,7 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { assessRuns, buildRunInput, freshnessNote, hashInput } from '../core/analysis.ts'
 import { activePoints, bind, numericValue } from '../core/binder.ts'
 import type { DatasetState, Point, ProjectState } from '../core/binder.ts'
 import { makeEvent } from '../core/events.ts'
@@ -89,6 +90,8 @@ Usage
   bench chart [--out file.svg]          render the dataset to an SVG artifact
   bench import <file> [options]         bring rows in from csv, tsv, or jsonl
   bench recipes [--json]                list analysis recipes and their parameters
+  bench runs [--json]                   recorded analyses, and whether they still hold
+  bench rerun <recipe> [--param k=v]    repeat a run with its recorded parameters
   bench run <recipe> [--param k=v]      run an analysis, record it, and chart the result
   bench decide "<text>"                 record a decision the next session inherits
 
@@ -182,35 +185,11 @@ function parseParams(entries: string[] | undefined): Record<string, unknown> {
   return params
 }
 
-/** Content hash of the exact inputs an analysis was computed from. */
-function hashInput(input: RunInput): string {
-  const canonical = JSON.stringify({
-    dataset: input.dataset,
-    shape: input.shape,
-    points: input.points.map((point) => [point.id, point.t, point.values]),
-  })
-  return createHash('sha256').update(canonical).digest('hex')
-}
-
-/** Build the analysis input from the active set only: retracted points are not evidence. */
-function buildRunInput(state: ProjectState, datasetId: string): RunInput {
-  const dataset = state.datasets.get(datasetId)
-  if (!dataset) die(`no dataset "${datasetId}"`, EXIT_MISSING)
-  const shape = state.shapes.get(dataset.shape)
-  return {
-    dataset: datasetId,
-    shape: dataset.shape,
-    fields: (shape?.fields ?? []).map((field) => ({
-      name: field.name,
-      type: field.type,
-      ...(field.unit === undefined ? {} : { unit: field.unit }),
-    })),
-    points: activePoints(state, datasetId).map((point) => ({
-      id: point.id,
-      t: point.tObserved,
-      values: point.values,
-    })),
-  }
+/** The same input the run will hash, or a refusal -- never a silently empty analysis. */
+function requireRunInput(state: ProjectState, datasetId: string): RunInput {
+  const input = buildRunInput(state, datasetId)
+  if (!input) die(`no dataset "${datasetId}"`, EXIT_MISSING)
+  return input
 }
 
 async function withRunner<T>(root: string, use: (runner: RecipeRunner) => Promise<T>): Promise<T> {
@@ -705,6 +684,142 @@ async function main(): Promise<void> {
       return
     }
 
+    case 'runs': {
+      const handle = await locate(values.project)
+      const state = await loadState(handle)
+      const freshness = await assessRuns(APP_ROOT, state)
+      const runs = [...state.runs].reverse()
+
+      if (asJson) {
+        process.stdout.write(
+          JSON.stringify(
+            {
+              ok: true,
+              data: runs.map((run) => ({
+                id: run.id,
+                at: run.at,
+                recipe: run.recipe,
+                params: run.params ?? {},
+                dataset: run.dataset ?? null,
+                verdict: run.verdict,
+                narrative: run.narrative ?? null,
+                artifact: run.artifact ?? null,
+                freshness: freshness.get(run.id) ?? null,
+              })),
+            },
+            null,
+            2,
+          ) + '\n',
+        )
+        return
+      }
+
+      if (runs.length === 0) {
+        process.stdout.write('no analyses have been run in this project\n')
+        process.stdout.write('  next: bench run fit --param degree=1\n')
+        return
+      }
+      for (const run of runs) {
+        const note = freshnessNote(freshness.get(run.id))
+        process.stdout.write(
+          `${run.at}  ${run.recipe}  ${run.verdict}  ${note}\n`,
+        )
+        process.stdout.write(`  ${run.dataset ?? 'unknown dataset'} · ${JSON.stringify(run.params ?? {})}\n`)
+      }
+      return
+    }
+
+    case 'rerun': {
+      const recipeName = args[0]
+      if (!recipeName) die('missing recipe name', EXIT_INVALID, 'bench runs --json, then bench rerun <recipe>')
+      const handle = await locate(values.project)
+      const state = await loadState(handle)
+      // Re-run the most recent use of this recipe, with the parameters it was asked for. Carrying
+      // the parameters forward by hand is how a re-run silently becomes a different analysis.
+      const previous = [...state.runs].reverse().find((run) => run.recipe === recipeName)
+      if (!previous) {
+        die(`no previous \`${recipeName}\` run to repeat`, EXIT_MISSING, `bench run ${recipeName}`)
+      }
+      const datasetId = pickDataset(state, values.dataset ?? previous.dataset)
+      const params = { ...(previous.params ?? {}), ...parseParams(values.param) }
+      const input = requireRunInput(state, datasetId)
+      if (input.points.length === 0) {
+        die(`dataset \`${datasetId}\` has no active points`, EXIT_MISSING, 'bench add --x 1 --y 2')
+      }
+
+      const outcome = await withRunner(APP_ROOT, (runner) => runner.run(recipeName, params, input))
+      if (!outcome.ok) {
+        die(outcome.error.message, EXIT_INVARIANT, outcome.error.hint ?? `code: ${outcome.error.code}`)
+      }
+      const result = outcome.result
+      const level = Number(result.diagnostics.level)
+      const bandKind = typeof result.diagnostics.band === 'string' ? result.diagnostics.band : 'confidence'
+      const bandNote =
+        result.chart.band !== undefined && Number.isFinite(level)
+          ? `${Math.round(level * 100)}% ${bandKind} band`
+          : ''
+      const footer = [result.chart.footer ?? '', bandNote].filter((part) => part !== '').join(' · ')
+      const artifactName = `${recipeName}-${datasetId}.svg`
+      const artifactRef = previous.artifact ?? `artifacts/${artifactName}`
+      await mkdir(join(handle.dir, 'artifacts'), { recursive: true })
+      await writeFile(
+        join(handle.dir, artifactRef),
+        renderChart({
+          ...result.chart,
+          title: handle.config.name,
+          subtitle: `${datasetId} · ${recipeName}`,
+          ...(footer === '' ? {} : { footer }),
+          ...((result.caption ?? result.narrative) === ''
+            ? {}
+            : { caption: result.caption ?? result.narrative }),
+        }),
+      )
+
+      const event = makeEvent('analysis_run', handle.session, {
+        recipe: result.recipe,
+        recipe_hash: result.recipeHash,
+        params,
+        dataset: datasetId,
+        input_hash: hashInput(input),
+        verdict: result.verdict,
+        narrative: result.narrative,
+        artifact: artifactRef,
+      })
+      await handle.log.append(event)
+      await refreshState(handle)
+
+      if (asJson) {
+        process.stdout.write(
+          JSON.stringify(
+            {
+              ok: true,
+              data: {
+                id: event.id,
+                repeated: previous.id,
+                params,
+                verdict: result.verdict,
+                narrative: result.narrative,
+                artifact: artifactRef,
+                changed: previous.verdict !== result.verdict,
+              },
+            },
+            null,
+            2,
+          ) + '\n',
+        )
+        return
+      }
+      // Saying what changed is the whole point of repeating a run: the answer is allowed to differ.
+      const change =
+        previous.verdict === result.verdict
+          ? `verdict unchanged (${result.verdict})`
+          : `verdict changed ${previous.verdict} -> ${result.verdict}`
+      process.stdout.write(`${result.verdict.toUpperCase()}  ${result.narrative}\n`)
+      process.stdout.write(`  repeated ${previous.id} with ${JSON.stringify(params)}: ${change}\n`)
+      process.stdout.write(`  wrote ${artifactRef}\n`)
+      return
+    }
+
     case 'recipes': {
       // Deliberately does not require a project: this describes the analysis library bench ships.
       return withRunner(APP_ROOT, async (runner) => {
@@ -744,7 +859,7 @@ async function main(): Promise<void> {
       const handle = await locate(values.project)
       const state = await loadState(handle)
       const datasetId = pickDataset(state, values.dataset)
-      const input = buildRunInput(state, datasetId)
+      const input = requireRunInput(state, datasetId)
       if (input.points.length === 0) {
         die(`dataset "${datasetId}" has no active points`, EXIT_MISSING, 'bench add --x 1 --y 2')
       }
@@ -792,6 +907,8 @@ async function main(): Promise<void> {
         recipe: result.recipe,
         recipe_hash: result.recipeHash,
         params,
+        // Which dataset it read, so a later session can check the result rather than trust it.
+        dataset: datasetId,
         input_hash: hashInput(input),
         verdict: result.verdict,
         narrative: result.narrative,
