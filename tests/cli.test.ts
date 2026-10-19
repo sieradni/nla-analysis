@@ -761,7 +761,9 @@ describe('projects and views, as executed', () => {
     expect(after.data.status[0]!.state).toBe('current')
   })
 
-  it('adds a recipe panel, and the artifact carries its verdict and identity', async () => {
+  // Like the other recipe tests, this one needs the analysis environment; without it the CLI
+  // rightly refuses to draw a panel it cannot compute, so the test has nothing to assert.
+  it.skipIf(!analysisReady)('adds a recipe panel, and the artifact carries its verdict and identity', async () => {
     const added = await bench([
       '--project', dir, 'view', 'add', 'tab one',
       '--dataset', 'main', '--recipe', 'fit', '--param', 'degree=1', '--title', 'straight line',

@@ -197,4 +197,19 @@ describe('analysis freshness', () => {
     expect(verdict.status).toBe('unverifiable')
     expect(verdict.reason).toContain('missing')
   })
+
+  it('gives a recipe the same identity whether the checkout stored CRLF or LF', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bench-recipe-hash-'))
+    try {
+      await mkdir(join(dir, 'recipes'), { recursive: true })
+      await writeFile(join(dir, 'recipes', 'fit.py'), 'x = 1\ny = 2\n', 'utf8')
+      const lf = await hashRecipeFile(dir, 'fit')
+      await writeFile(join(dir, 'recipes', 'fit.py'), 'x = 1\r\ny = 2\r\n', 'utf8')
+      // Python runs both files identically, so a run must not read as stale because a checkout
+      // happened to use Windows line endings.
+      expect(await hashRecipeFile(dir, 'fit')).toBe(lf)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

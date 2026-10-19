@@ -148,8 +148,12 @@ export function chartSpecFor(result: RunResult, context: SpecContext): ChartSpec
 /** Matches what the Python runner reports, so the two can never disagree about a recipe's identity. */
 export async function hashRecipeFile(root: string, recipe: string): Promise<string | null> {
   try {
+    // Line endings are not part of a recipe's identity: Python runs a CRLF file exactly as it runs
+    // an LF one, and a Windows checkout can legitimately hold either. Hashing the raw bytes made
+    // the same file read as changed on one machine and current on another, so normalise first.
+    const source = await readFile(recipePath(root, recipe), 'utf8')
     return createHash('sha256')
-      .update(await readFile(recipePath(root, recipe)))
+      .update(source.replaceAll('\r\n', '\n'))
       .digest('hex')
   } catch {
     return null

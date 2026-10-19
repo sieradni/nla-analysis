@@ -72,7 +72,10 @@ def load_recipes() -> dict[str, tuple[dict[str, Any], Callable[..., Any]]]:
         if not isinstance(schema, dict) or not callable(run):
             continue
         described = dict(schema)
-        described["hash"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        # Line endings are not part of a recipe's identity: Python runs a CRLF file exactly as it
+        # runs an LF one, and a checkout can legitimately hold either. Normalise before hashing so
+        # a run recorded on one machine does not read as stale on another.
+        described["hash"] = hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         described["source"] = path.name
         found[described["name"]] = (described, run)
     return found
