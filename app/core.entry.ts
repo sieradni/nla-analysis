@@ -29,6 +29,8 @@ import { SHAPE_FIELD_TYPES } from '../src/core/shapes.ts'
 import { listProjects, rememberProject } from '../src/core/registry.ts'
 import type { KnownProject } from '../src/core/registry.ts'
 import { RecipeRunner } from '../src/core/runner.ts'
+import { sameStamp } from '../src/core/log.ts'
+import type { LogStamp } from '../src/core/log.ts'
 import { BenchError, Workspace } from '../src/core/workspace.ts'
 import type { PointDraft } from '../src/core/workspace.ts'
 import {
@@ -39,8 +41,12 @@ import {
   requireFreeName,
   saveView,
   selectInput,
+  viewPath,
 } from '../src/core/views.ts'
 import type { PanelStatus, ViewFile, ViewSummary } from '../src/core/views.ts'
+
+// The shell arms this, not the window: the main process is the one with the filesystem (ADR 0010).
+export { watchProject } from '../src/core/watch.ts'
 
 export interface RecipeChoice {
   name: string
@@ -140,7 +146,7 @@ export async function writeView(dir: string, draft: ViewDraft): Promise<OpenedVi
   }
 
   await saveView(workspace.dir, view)
-  sessionView = { dir: workspace.dir, view }
+  await cacheView(workspace.dir, view)
   return describe(workspace, view, reread)
 }
 
@@ -160,12 +166,24 @@ let session: Workspace | null = null
 /**
  * The open tab, kept here for the same reason the workspace is: appending a point must not re-read
  * and re-parse a view file, and the file the window repaints from is the file it saves afterwards.
+ *
+ * The stamp is what lets the shell tell its own save from another writer's: a watched event only
+ * costs a redraw when the log or this file has moved past what the session last read (ADR 0010).
  */
-let sessionView: { dir: string; view: ViewFile } | null = null
+let sessionView: { dir: string; view: ViewFile; stamp: LogStamp | null } | null = null
 
-function cacheView(dir: string, view: ViewFile): ViewFile {
-  sessionView = { dir, view }
+async function cacheView(dir: string, view: ViewFile): Promise<ViewFile> {
+  sessionView = { dir, view, stamp: await stampOf(viewPath(dir, view.name)) }
   return view
+}
+
+async function stampOf(file: string): Promise<LogStamp | null> {
+  try {
+    const info = await stat(file)
+    return { size: info.size, mtimeMs: info.mtimeMs }
+  } catch {
+    return null
+  }
 }
 
 async function openViewFile(dir: string, name: string): Promise<ViewFile> {
@@ -634,6 +652,9 @@ export async function refreshView(
   }
 
   if (refreshed.length > 0) await saveView(workspace.dir, view)
+  // Remember the file the window is holding, whenever it was last saved: a watcher event only has
+  // to compare stamps to know whether there is anything to redraw (ADR 0010).
+  await cacheView(workspace.dir, view)
   statuses = await panelStatuses(workspace, view)
   const freshness = draw ? await assessRuns(APP_ROOT, workspace.state) : null
   return {
@@ -647,5 +668,58 @@ export async function refreshView(
     counts: view.panels.map((panel) => (typeof panel.n === 'number' ? panel.n : 0)),
     footers: view.panels.map((panel) => panel.chart.footer ?? null),
     reread,
+  }
+}
+
+/** What a watched change means for the tab the window is drawing. */
+export type TabReload =
+  | { state: 'same' }
+  | { state: 'redrawn'; views: ViewSummary[]; view: RefreshedView }
+  | { state: 'gone'; views: ViewSummary[]; entry: EntryTarget | null; name: string }
+
+/**
+ * Answer a watcher event: did the files this tab was drawn from move, and if so what does the tab
+ * look like now?
+ *
+ * This is a reload, not a patch (ADR 0007): data that changed is re-materialized and the whole tab
+ * is drawn again. Asking first is what keeps the window's own saves from starting a read-and-render
+ * loop — after a write, the log and tab stamps are exactly the ones this session recorded (ADR 0010).
+ */
+export async function reloadTab(dir: string, name: string): Promise<TabReload> {
+  const workspace = await workspaceFor(dir)
+  if (!(await tabMoved(workspace, name))) return { state: 'same' }
+
+  const { views } = await listViews(workspace.dir)
+  if (!views.some((summary) => summary.name === name)) {
+    // The tab is gone but the project is not: the bar falls back to the first dataset, as it does
+    // for a project with no tabs at all.
+    const first = [...workspace.state.datasets.values()][0]
+    return {
+      state: 'gone',
+      views,
+      entry: first === undefined ? null : targetForDataset(workspace, first.id),
+      name,
+    }
+  }
+
+  // Another writer may have replaced the file, and the cached copy would hide that.
+  sessionView = null
+  return {
+    state: 'redrawn',
+    views,
+    view: await refreshView(workspace.dir, name, { draw: true }),
+  }
+}
+
+/** Whether the log or the open tab file has moved past what this session last read. */
+async function tabMoved(workspace: Workspace, name: string): Promise<boolean> {
+  if (await workspace.isStale()) return true
+  if (!sessionView || sessionView.dir !== workspace.dir || sessionView.view.name !== name) return true
+  try {
+    return !sameStamp(await stampOf(viewPath(workspace.dir, name)), sessionView.stamp)
+  } catch {
+    // A name that cannot be a file cannot be the tab that was on screen; report it as moved and let
+    // the reload say what happened rather than assume nothing did.
+    return true
   }
 }

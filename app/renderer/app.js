@@ -38,6 +38,9 @@
     // it is created.
     projectEntry: null,
     shapeChoice: null,
+    // The `dir\0name` the main process is watching, so the same tab is not re-registered on every
+    // repaint. `null` means nothing is being watched.
+    watching: null,
   }
   var settled = false
 
@@ -340,6 +343,12 @@
     // Scroll and the per-panel crop are carried across it: typing a number must not throw away the
     // zoom the user was reading.
     var scrollTop = restore ? restore.scrollTop : 0
+    // A repaint replaces every panel, including one the keyboard was in; remember which so focus can
+    // go back to it rather than to the document body.
+    var focusedPanel = Array.prototype.indexOf.call(
+      ui.grid.querySelectorAll('.panel-chart'),
+      document.activeElement,
+    )
     ui.grid.textContent = ''
     ui.grid.style.setProperty('--columns', String(view.layout.columns || 2))
     // A repaint replaces every panel handle, so a ring drawn on the previous drawing is gone with
@@ -399,8 +408,27 @@
       })
     })
 
+    var hosts = ui.grid.querySelectorAll('.panel-chart')
+    if (focusedPanel >= 0 && hosts[focusedPanel]) hosts[focusedPanel].focus()
     ui.grid.scrollTop = scrollTop
     renderEntry()
+    watchOpenTab()
+  }
+
+  /**
+   * Tell the main process which tab is on screen. The watcher lives there because the main process
+   * owns the filesystem (ADR 0003); the window only says what it is drawing.
+   */
+  function watchOpenTab() {
+    if (!bridge.watch) return
+    var name = state.view ? state.view.name : null
+    var key = state.project && name !== null ? state.project.dir + '\u0000' + name : null
+    if (key === state.watching) return
+    state.watching = key
+    call(bridge.watch(state.project ? state.project.dir : null, name)).catch(function (error) {
+      // The tab still works without a watcher; it just will not follow the project, and says so.
+      setStatus('error', 'This tab will not follow the project on disk: ' + ((error && error.message) || error))
+    })
   }
 
   // --- entry ----------------------------------------------------------------------------------
@@ -915,14 +943,29 @@
     state.busy = true
     renderEntry()
     try {
-      await call(
+      var retracted = await call(
         bridge.retractPoint(state.project.dir, target.id, 'undo from the window'),
       )
       state.lastPoint = null
+      state.timing = null
+      // A tab that was deleted on disk has nothing to rebuild; the bar's own count is enough.
+      if (!state.view) {
+        if (state.projectEntry) state.projectEntry.active = retracted.active
+        state.busy = false
+        renderEntry()
+        setStatus(
+          'ok',
+          'Retracted ' +
+            target.id +
+            ' with a point_retracted event. It stays in the log; the dataset is back to ' +
+            retracted.active +
+            ' active.',
+        )
+        return
+      }
       var refreshed = await call(bridge.refreshView(state.project.dir, state.view.name))
       state.opened = refreshed
       state.view = refreshed.view
-      state.timing = null
       state.busy = false
       renderTabs()
       renderView(captureRestore())
@@ -983,6 +1026,8 @@
     state.timing = null
     state.status = null
     ui.notice.hidden = true
+    // A new project means the old tab is no longer on screen; disarm before the first tab arms.
+    watchOpenTab()
 
     try {
       var listed = await call(bridge.projects())
@@ -1013,6 +1058,86 @@
     // leave the cursor where typing goes.
     renderEntry()
     focusFirstField()
+  }
+
+  /**
+   * A watched change, pushed by the main process: the files behind the open tab moved, and this is
+   * what the tab says now. A redraw is always a whole tab (ADR 0007) — never a patch of a stale
+   * drawing. The bar is not part of the drawing, so its half-typed text and cursor stay put.
+   */
+  function applyChange(change) {
+    if (!state.project || change.dir !== state.project.dir) return
+    // A write is in flight: its own response is about to draw the state after that write, and the
+    // main process asks again once the call settles. Repainting underneath it would race both.
+    if (state.busy) return
+
+    if (change.state === 'error') {
+      setStatus('error', 'The project changed on disk, but this tab could not be reread: ' + change.message)
+      return
+    }
+
+    state.views = change.views
+    if (change.state === 'gone') {
+      // The tab this was about is not necessarily the tab on screen any more.
+      if (state.view && state.view.name !== change.name) {
+        renderTabs()
+        return
+      }
+      var hadFocus = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.field : null
+      state.view = null
+      state.opened = null
+      // A correction belongs to the tab that was on screen; with no tab there is nowhere to save it.
+      state.correction = null
+      state.selection = null
+      if (change.entry) state.projectEntry = change.entry
+      watchOpenTab()
+      renderTabs()
+      showEmpty(
+        'This tab was removed',
+        '“' +
+          change.name +
+          '” is no longer in views/. Another writer replaced or deleted it; the project is still open.',
+        'bench --project "' + state.project.dir + '" view list',
+        { label: 'Create a tab…', run: openTabDialog },
+      )
+      // The empty state hid the bar; the project can still take a point, and a field that was being
+      // typed into gets its cursor back.
+      renderEntry()
+      if (hadFocus) {
+        var input = ui.entryFields.querySelector('input[data-field="' + hadFocus + '"]')
+        if (input) input.focus()
+      }
+      setStatus(
+        'ok',
+        '“' +
+          change.name +
+          '” was removed on disk. ' +
+          (change.views.length === 0 ? 'This project has no tabs left.' : change.views.length + ' other tab(s) remain.'),
+      )
+      return
+    }
+
+    // A tab created by another writer can change the rail without changing what is on screen.
+    if (!state.view || state.view.name !== change.view.view.name) {
+      renderTabs()
+      return
+    }
+    state.opened = change.view
+    state.view = change.view.view
+    if (state.projectEntry && change.view.entry) state.projectEntry.active = change.view.entry.active
+    renderTabs()
+    renderView(captureRestore())
+    // A refusal the user is reading is not replaced by good news about a redraw.
+    if (!state.status || state.status.kind !== 'error') {
+      setStatus(
+        'ok',
+        'The project changed on disk: “' +
+          state.view.name +
+          '” was reread and redrawn' +
+          (change.view.entry ? ' · ' + change.view.entry.active + ' active in ' + change.view.entry.dataset : '') +
+          '.',
+      )
+    }
   }
 
   // --- tabs ------------------------------------------------------------------------------------
@@ -1326,6 +1451,7 @@
       showFailure('The window cannot reach the core', new Error('preload bridge missing'))
       return
     }
+    if (bridge.onChanged) bridge.onChanged(applyChange)
 
     var startup = { projectDir: null }
     try {

@@ -132,7 +132,11 @@ const totals = samples.map((sample) => sample.total).sort((a, b) => a - b)
 const median = totals[Math.floor(totals.length / 2)]
 const p90 = totals[Math.min(totals.length - 1, Math.floor(totals.length * 0.9))]
 const pick = (key) => samples.map((sample) => sample[key]).sort((a, b) => a - b)[Math.floor(samples.length / 2)]
-const commits = samples.map((sample) => sample.commit).filter((value) => typeof value === 'number')
+// Only some points catch the tab file up after the paint; the ones that do not have no commit time.
+const commits = samples
+  .map((sample) => sample.commit)
+  .filter((value) => typeof value === 'number')
+  .sort((a, b) => a - b)
 
 console.log('')
 console.log(`${POINTS.toLocaleString()} points · 1 plot panel · ${samples.length} typed points`)
@@ -141,7 +145,9 @@ console.log(
   `  median split: record ${pick('record').toFixed(1)} ms · rebuild ${pick('rebuild').toFixed(1)} ms · paint ${pick('paint').toFixed(1)} ms`,
 )
 if (commits.length > 0) {
-  console.log(`  after the paint, the tab file catches up in ${pick('commit').toFixed(1)} ms (not on the keystroke path)`)
+  console.log(
+    `  after the paint, the tab file catches up in ${commits[Math.floor(commits.length / 2)].toFixed(1)} ms (not on the keystroke path)`,
+  )
 }
 if (rescale.length > 0) {
   console.log(

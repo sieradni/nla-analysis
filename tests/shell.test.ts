@@ -7,6 +7,8 @@ import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { interpreterCandidates } from '../src/core/runner.ts'
+import { Workspace } from '../src/core/workspace.ts'
+import { materializePanel, saveView, viewPath } from '../src/core/views.ts'
 
 /**
  * The desktop shell does not import `src/core`; it imports the bundle that `pnpm app:build` produces,
@@ -195,6 +197,49 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(corrected.view.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
 
     expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('14 active points')
+  })
+
+  it('reloads a tab another writer moved, and reports a tab that is gone', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    await api.openView!(dir, 'drift over time')
+
+    // A watcher event with nothing behind it: no read, no render.
+    expect(await api.reloadTab!(dir, 'drift over time')).toEqual({ state: 'same' })
+
+    // The window's own write must not make the watcher redraw it. The log stamp the append recorded
+    // is the one on disk, so the files have not moved past what the session already has.
+    await api.recordPoint!(dir, { values: { x: 7.2, y: 8.4 } }, 'drift over time')
+    expect(await api.reloadTab!(dir, 'drift over time')).toEqual({ state: 'same' })
+
+    // An agent's append is the case the window used to miss while idle.
+    const agent = await Workspace.open(dir)
+    await agent.recordPoint({ values: { x: 8.5, y: 12.5 } })
+    const changed = (await api.reloadTab!(dir, 'drift over time')) as Window
+    expect(changed.state).toBe('redrawn')
+    expect(changed.view.reread).toBe(true)
+    // The plot panel is rebuilt; the fitted one cannot be without the runtime, so it says so.
+    expect(changed.view.view.panels.map((panel: Window) => panel.n)).toEqual([14, 16])
+    expect(changed.view.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
+    expect(changed.views.map((view: Window) => view.name)).toContain('drift over time')
+    expect(await api.reloadTab!(dir, 'drift over time')).toEqual({ state: 'same' })
+
+    // A replacement is a different file with the same name: the window has to draw the file, not the
+    // copy it cached when the tab was opened.
+    const writer = await Workspace.open(dir)
+    const panel = (await materializePanel(writer, { dataset: 'main' })).panel
+    await saveView(dir, { v: 1, name: 'drift over time', layout: { columns: 1 }, panels: [panel] })
+    const replaced = (await api.reloadTab!(dir, 'drift over time')) as Window
+    expect(replaced.state).toBe('redrawn')
+    expect(replaced.view.view.panels).toHaveLength(1)
+    expect(replaced.view.view.panels[0].recipe).toBeUndefined()
+
+    // Deleting the file leaves a project with no tabs, which still has an entry target.
+    await rm(viewPath(dir, 'drift over time'))
+    const gone = (await api.reloadTab!(dir, 'drift over time')) as Window
+    expect(gone.state).toBe('gone')
+    expect(gone.views).toEqual([])
+    expect(gone.entry).toMatchObject({ dataset: 'main', active: 16 })
   })
 
   it('asks for a redraw when the point would move the axes', async () => {

@@ -11,7 +11,7 @@
  */
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { spawn } from 'node:child_process'
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as bench from './core.bundle.mjs'
@@ -70,18 +70,93 @@ function createWindow() {
     if (!captureDir) window.show()
   })
 
+  window.on('closed', () => {
+    stopWatching()
+    window = null
+  })
+
   window.loadFile(join(here, 'renderer', 'index.html'))
   return window
 }
 
+// --- live reload ------------------------------------------------------------------------------
+
+/**
+ * The tab on screen and the watcher for the project it came from. The renderer says which tab it is
+ * drawing; the main process owns the filesystem, so it owns the watching (ADR 0010).
+ */
+let watchedTab = null
+let stopWatcher = null
+let reloading = false
+let reloadQueued = false
+
+function stopWatching() {
+  if (stopWatcher) stopWatcher()
+  stopWatcher = null
+  watchedTab = null
+}
+
+/**
+ * Ask the core whether the files behind the open tab moved, and tell the window what it found.
+ *
+ * The core answers `same` for the window's own writes — the log and tab stamps it recorded are the
+ * ones on disk — so typing does not trigger a second read and render behind the keystroke. Anything
+ * else is a reload: a whole tab, redrawn, never a patch of a stale drawing (ADR 0007).
+ */
+async function reloadOpenTab() {
+  reloading = true
+  try {
+    do {
+      reloadQueued = false
+      const target = watchedTab
+      if (!target) return
+      let change
+      try {
+        change = await bench.reloadTab(target.dir, target.name)
+      } catch (error) {
+        change = { state: 'error', message: error instanceof Error ? error.message : String(error) }
+      }
+      // The window may have moved on while the read was in flight.
+      if (!window || !watchedTab || watchedTab.dir !== target.dir || watchedTab.name !== target.name) return
+      if (change.state !== 'same') {
+        window.webContents.send('bench:changed', { dir: target.dir, name: target.name, ...change })
+      }
+    } while (reloadQueued)
+  } finally {
+    reloading = false
+  }
+}
+
+function scheduleReload() {
+  if (windowCalls > 0) {
+    missedWhileBusy = true
+    return
+  }
+  if (reloading) {
+    reloadQueued = true
+    return
+  }
+  void reloadOpenTab()
+}
+
 // --- the core, exposed as calls -------------------------------------------------------------
+
+let windowCalls = 0
+let missedWhileBusy = false
 
 /**
  * Refusals cross the IPC boundary as data, not as thrown errors: Electron's structured clone keeps
  * an Error's message and drops the rest, and a window that shows "point rejected" without the list
  * of problems is worse than one that shows nothing.
+ *
+ * The two counters above are the live-refresh handshake: a call that saves a tab makes its own
+ * filesystem event, and reloading in the middle of that save would redraw a tab the window is
+ * already drawing. An event that arrives during a call is answered once the call settles, against
+ * the stamps the call left behind.
  */
+
 async function guarded(run) {
+  windowCalls += 1
   try {
     return { ok: true, value: await run() }
   } catch (error) {
@@ -92,6 +167,12 @@ async function guarded(run) {
         hint: error?.hint ?? null,
         problems: error?.problems ?? [],
       },
+    }
+  } finally {
+    windowCalls -= 1
+    if (windowCalls === 0 && missedWhileBusy) {
+      missedWhileBusy = false
+      scheduleReload()
     }
   }
 }
@@ -113,6 +194,20 @@ ipcMain.handle('bench:views', (_event, dir) =>
 )
 
 ipcMain.handle('bench:view', (_event, dir, name) => guarded(() => bench.openView(dir, name)))
+
+// One tab at a time, because one tab is on screen. The window calls this whenever the tab it is
+// drawing changes; `name: null` means nothing is open, and no watcher should be left running.
+ipcMain.handle('bench:watch', (_event, dir, name) =>
+  guarded(async () => {
+    stopWatching()
+    if (name === null) return { watching: false }
+    watchedTab = { dir, name }
+    stopWatcher = bench.watchProject(dir, scheduleReload)
+    // A window re-arming the same tab is asking after a write it just did; answer from the stamps.
+    scheduleReload()
+    return { watching: true }
+  }),
+)
 ipcMain.handle('bench:point', (_event, dir, id, viewName) => guarded(() => bench.point(dir, id, viewName)))
 ipcMain.handle('bench:recipes', () => guarded(() => bench.recipes()))
 ipcMain.handle('bench:shapeChoice', () => guarded(async () => bench.shapeChoice()))
@@ -290,6 +385,10 @@ async function entryState() {
       undoEnabled: !document.getElementById('entry-undo').disabled,
       timing: window.__benchTiming || null,
       marks: document.querySelectorAll('circle[data-point-id]').length,
+      panels: document.querySelectorAll('.panel').length,
+      tabs: document.querySelectorAll('#tabs .item').length,
+      empty: getComputedStyle(document.getElementById('empty')).display,
+      emptyText: (document.getElementById('empty').textContent || '').trim(),
     })
   })()`)
 }
@@ -313,12 +412,12 @@ async function currentTimingId() {
  * The real `bench` binary, as an agent in a terminal would run it. Capture-only: the window itself
  * never shells out to the CLI, because that would be a second write path (ADR 0003).
  */
-async function runCli(args) {
+async function runCli(args, dir = writableDir) {
   const cli = join(here, '..', 'src', 'cli', 'index.ts')
   await new Promise((done, fail) => {
     // `process.execPath` here is Electron, not Node: `ELECTRON_RUN_AS_NODE` is what makes the same
     // binary behave as the runtime the CLI expects, without depending on where `node` is installed.
-    const child = spawn(process.execPath, [cli, '--project', writableDir, ...args], {
+    const child = spawn(process.execPath, [cli, '--project', dir, ...args], {
       cwd: join(here, '..'),
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       stdio: 'ignore',
@@ -864,6 +963,111 @@ async function capture() {
       throw new Error(`the new project should hold one point: "${firstPoint.readout}"`)
     }
     await writeFile(join(captureDir, 'app-new-project.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // A tab that is open while an agent writes. Nothing is typed after the CLI runs, so the frame can
+    // only change if the window noticed the log move by itself: the watcher, a reload, a redraw.
+    const liveProject = join(dirname(writableDir), 'live-fixture')
+    await cp(startupDir, liveProject, { recursive: true })
+    nextStartup = liveProject
+    window.webContents.reload()
+    await new Promise((done) => ipcMain.once('bench:ready', done))
+    if (!(await focusWindowForInput())) throw new Error('the window never took focus for the live frame')
+    await sleep(700)
+
+    const liveBefore = JSON.parse(await entryState())
+    // Half a number, deliberately unfinished: the redraw must not clear it or move the cursor.
+    await focusField(0)
+    typeText('4')
+    await runCli(['add', '--x', '8.1', '--y', '9.9'], liveProject)
+
+    let live = liveBefore
+    for (let waited = 0; waited < 60; waited += 1) {
+      live = JSON.parse(await entryState())
+      if (live.marks > liveBefore.marks && /n = 15/.test(live.readout || '')) break
+      await sleep(100)
+    }
+    const liveFocus = await window.webContents.executeJavaScript(
+      "document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.field : null",
+    )
+    console.log(
+      '[bench] live ' +
+        JSON.stringify({
+          readout: live.readout,
+          marks: live.marks,
+          typed: live.typed,
+          focused: liveFocus,
+          status: live.status,
+        }),
+    )
+    if (!/n = 15/.test(live.readout || '')) {
+      throw new Error(`an idle window did not take the CLI's point: "${live.readout}"`)
+    }
+    if (live.marks <= liveBefore.marks) throw new Error('the idle window kept the old drawing')
+    if (live.typed.x !== '4') throw new Error('the live redraw lost the half-typed number')
+    if (liveFocus !== 'x') throw new Error('the live redraw lost the cursor')
+    if (!/reread and redrawn/.test(live.status || '')) {
+      throw new Error('the bar did not say the tab was reread and redrawn')
+    }
+    await writeFile(join(captureDir, 'app-live.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // Replaced, not deleted: the same tab name now holds a different file. The window has to draw the
+    // file, not the panels it cached when the tab was opened.
+    await runCli(['view', 'new', 'drift over time', '--dataset', 'main', '--force'], liveProject)
+    let replaced = live
+    for (let waited = 0; waited < 60; waited += 1) {
+      replaced = JSON.parse(await entryState())
+      if (replaced.panels === 1 && replaced.marks === 15 && /reread and redrawn/.test(replaced.status || '')) break
+      await sleep(100)
+    }
+    console.log(
+      '[bench] tab-replaced ' +
+        JSON.stringify({
+          panels: replaced.panels,
+          marks: replaced.marks,
+          readout: replaced.readout,
+          status: replaced.status,
+        }),
+    )
+    if (replaced.panels !== 1) {
+      throw new Error(`a replaced tab should hold one panel, the window shows ${replaced.panels}`)
+    }
+    if (!/reread and redrawn/.test(replaced.status || '')) {
+      throw new Error('the bar did not report the replaced tab')
+    }
+    await writeFile(join(captureDir, 'app-tab-replaced.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // Deleted under the window: an honest empty state, a rail without the tab, and a bar that still
+    // knows where a point would land.
+    await rm(join(liveProject, 'views', 'drift-over-time.json'))
+    let gone = replaced
+    for (let waited = 0; waited < 60; waited += 1) {
+      gone = JSON.parse(await entryState())
+      if (gone.empty !== 'none' && gone.tabs === 0) break
+      await sleep(100)
+    }
+    console.log(
+      '[bench] tab-gone ' +
+        JSON.stringify({
+          empty: gone.empty,
+          text: gone.emptyText,
+          tabs: gone.tabs,
+          readout: gone.readout,
+          status: gone.status,
+        }),
+    )
+    if (gone.empty === 'none') {
+      throw new Error('the window kept drawing a tab whose file is gone')
+    }
+    if (!/This tab was removed/.test(gone.emptyText || '')) {
+      throw new Error('the empty state does not say the tab was removed')
+    }
+    if (gone.tabs !== 0) throw new Error(`the rail still lists the deleted tab (${gone.tabs} items)`)
+    if (!/removed on disk/.test(gone.status || '')) throw new Error('the bar did not say the tab was removed')
+    if (!/n = 15/.test(gone.readout || '')) throw new Error(`the bar lost its target: "${gone.readout}"`)
+    await writeFile(join(captureDir, 'app-tab-gone.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
   }
 

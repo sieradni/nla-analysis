@@ -111,6 +111,7 @@ Within the 100 ms budget, and unchanged within noise from ADR 0006's 25.8 ms.
 ## Revisit if
 
 - The window is asked to show another writer's work while idle. That needs a watcher, a repaint
-  decision, and a rule for what happens to an entry bar aimed at a chart that just changed.
+  decision, and a rule for what happens to an entry bar aimed at a chart that just changed. **Done
+  in [ADR 0010](0010-live-refresh.md)**, which leaves this ADR's read-before-write rule untouched.
 - A second window opens the same project. Two `Workspace` instances already tolerate each other
   through this check; two *windows* would also need to agree on which one owns undo.

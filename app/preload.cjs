@@ -31,5 +31,9 @@ contextBridge.exposeInMainWorld('bench', {
     ipcRenderer.invoke('bench:correctPoint', dir, id, values, viewName),
   retractPoint: (dir, id, reason) => ipcRenderer.invoke('bench:retractPoint', dir, id, reason),
   refreshView: (dir, name, options) => ipcRenderer.invoke('bench:refreshView', dir, name, options),
+  // live updates: the window says which tab it is drawing, and the main process watches the project
+  // for that tab. `onChanged` is a push, not a call — the renderer never polls the disk.
+  watch: (dir, name) => ipcRenderer.invoke('bench:watch', dir, name),
+  onChanged: (callback) => ipcRenderer.on('bench:changed', (_event, change) => callback(change)),
   ready: () => ipcRenderer.send('bench:ready'),
 })
