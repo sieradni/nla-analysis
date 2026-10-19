@@ -263,6 +263,10 @@
       tools.appendChild(badge)
       tools.appendChild(zoom)
       tools.appendChild(reset)
+      // At 150% a two-column panel is only ~169 CSS px wide, so a long title ellipsizes. The native
+      // tooltip is the affordance for the rest of it without spending rows on wrapping, which would
+      // leave the two charts starting at different heights.
+      title.title = title.textContent
       strip.appendChild(title)
       strip.appendChild(facts)
       strip.appendChild(tools)

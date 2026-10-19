@@ -29,6 +29,10 @@ images there come from opening the folder instead.
   caption are inside the drawing; the strip above repeats the facts that matter so zooming into the
   plot cannot hide them.
 - **Scaling**: at 125% and 150% nothing clips or overlaps, and the panel grid keeps its two columns.
+  The cost: at 150% each panel is ~169 CSS px wide, so the long title ellipsizes to `slope before …`
+  (hover it for the full name) and the chart is 254×147 px. Dropping to one column below ~980 px is
+  the obvious fix — say whether the charts should grow or the side-by-side comparison should hold,
+  because that is a taste call, not a measurement.
 - **Refusals**: a corrupt view file, a missing project and an empty registry each have their own
   state — reachable with `BENCH_PROJECT=<dir> pnpm app`.
 
