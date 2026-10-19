@@ -16,13 +16,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: pnpm/action-setup@v4
         with:
           version: 11
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: pnpm
@@ -53,7 +53,7 @@ jobs:
           $zip = "bench-$tag-win32-x64.zip"
           7z a -tzip -mx=5 $zip .\artifacts\bench-win32-x64 | Select-Object -Last 3
           if (-not (Test-Path $zip)) { throw "7z produced no $zip" }
-          Write-Host "$zip: $([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB"
+          Write-Host "${zip}: $([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB"
 
       - uses: actions/upload-artifact@v4
         with:
