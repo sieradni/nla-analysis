@@ -558,6 +558,9 @@ async function main(): Promise<void> {
               data: {
                 id: recorded.event.id,
                 dataset: recorded.dataset,
+                // The version the event names, not the dataset's current one guessed afterwards:
+                // a reader of this JSON should be able to say which rows the point joined.
+                version: recorded.event.type === 'point_recorded' ? (recorded.event.version ?? 1) : 1,
                 values: pointValues,
                 t_observed: recorded.tObserved,
               },

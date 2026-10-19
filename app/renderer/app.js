@@ -300,13 +300,34 @@
     }, 0)
     var provenance = (view.panels[0] && view.panels[0].chart.provenance) || {}
     var active = entry ? entry.active : total
-    // Which version the drawing came from is part of what the panel is claiming, so it sits beside
+    // Which version the drawing came from is part of what the tab is claiming, so it sits beside
     // the dataset name rather than in a tooltip: `main \u00b7 v2` or `main \u00b7 v1 (now v2)`.
-    var pinned = view.panels[0] ? view.panels[0].version : undefined
+    // A tab may hold panels pinned to different versions — a refresh only repins the panels it
+    // redraws — so the label names every version present, not whichever panel happens to be first.
+    var dataset = provenance.dataset
+    var pinned = []
+    view.panels.forEach(function (panel) {
+      if (panel.dataset !== dataset) return
+      if (typeof panel.version !== 'number') return
+      if (pinned.indexOf(panel.version) === -1) pinned.push(panel.version)
+    })
     var now = entry && typeof entry.version === 'number' ? entry.version : undefined
     var versionLabel = null
-    if (provenance.dataset && typeof pinned === 'number') {
-      versionLabel = 'v' + pinned + (typeof now === 'number' && now !== pinned ? ' (now v' + now + ')' : '')
+    if (dataset && pinned.length > 0) {
+      pinned.sort(function (left, right) {
+        return left - right
+      })
+      var label =
+        pinned.length === 1
+          ? 'v' + pinned[0]
+          : pinned
+              .map(function (version) {
+                return 'v' + version
+              })
+              .join(', ')
+      // `now` is a fact about the dataset; it is worth saying only when no panel is drawn from it.
+      var behind = typeof now === 'number' && pinned.indexOf(now) === -1
+      versionLabel = label + (behind ? ' (now v' + now + ')' : '')
     }
     var meta = [
       provenance.dataset

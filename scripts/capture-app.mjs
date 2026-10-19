@@ -85,6 +85,7 @@ const frames = [
   'app-version-diff.png',
   'app-import-untimed.png',
   'app-import-time.png',
+  'app-mixed-versions.png',
 ]
 let missing = 0
 for (const frame of frames) {

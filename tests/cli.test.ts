@@ -99,10 +99,16 @@ describe('bench CLI, as executed', () => {
 
     const first = await bench(['--project', project, 'add', '--x', '1', '--y', '2.5', '--at', '2026-10-01T09:00:00Z', '--json'])
     expect(first.code).toBe(0)
-    const created = JSON.parse(first.stdout) as { ok: boolean; data: { id: string; t_observed: string } }
+    const created = JSON.parse(first.stdout) as {
+      ok: boolean
+      data: { id: string; t_observed: string; version: number }
+    }
     expect(created.ok).toBe(true)
     // Timestamps are normalised on write, so ordering by string and by instant agree.
     expect(created.data.t_observed).toBe('2026-10-01T09:00:00.000Z')
+    // The point belongs to the dataset's one version, and the JSON says so rather than making a
+    // caller read the log to find out.
+    expect(created.data.version).toBe(1)
 
     expect((await bench(['--project', project, 'add', '--x', '2', '--y', '4.6'])).code).toBe(0)
 
@@ -486,6 +492,12 @@ describe('bench import, as executed', () => {
       const diff = await bench(['--project', dir, 'dataset', 'diff', 'main', '1', '2'])
       expect(diff.stdout).toContain('main: version 1 → 2  +1 −0 ~1')
       expect(diff.stdout).toContain('x 2  y 4  →  x 2  y 9')
+
+      // A typed point joins the newest version, and `--json` names that version.
+      const added = await bench([
+        '--project', dir, 'add', '--x', '4', '--y', '8', '--at', '2026-02-01T09:03:00Z', '--json',
+      ])
+      expect(JSON.parse(added.stdout).data.version).toBe(2)
     })
   })
 })

@@ -1419,10 +1419,12 @@ async function capture() {
     if (!/n = 4/.test(reExportedState.readout || '')) {
       throw new Error(`the corrected re-export should leave n = 4, it reads "${reExportedState.readout}"`)
     }
-    // The strip says which version the drawing came from, and that the dataset has moved past it.
-    if (!/main · v2 \(now v4\)/.test(stripAfterReExport)) {
+    // The strip names every version on the tab: the plot panel was refreshed to v4 by the import,
+    // while the recipe panel stayed at v2 because the window will not rerun it here. Saying only
+    // `v2` would hide the panel that is current; saying only `v4` would hide the one that is not.
+    if (!/main · v2, v4/.test(stripAfterReExport)) {
       throw new Error(
-        'the strip does not name the version the panel was drawn from: ' + stripAfterReExport,
+        'the strip does not name every version the tab was drawn from: ' + stripAfterReExport,
       )
     }
     await writeFile(join(captureDir, 'app-version-diff.png'), (await window.webContents.capturePage()).toPNG())
@@ -1646,6 +1648,51 @@ async function capture() {
     if (!/main: version 4 → 5  \+1 −0 ~0/.test(namedDiff) || !/2026-10-16T09:00:00\.000Z/.test(namedDiff)) {
       throw new Error('the CLI diff does not name the added instant:\n' + namedDiff)
     }
+
+    // A tab whose panels were drawn from different versions. A refresh repins only the panels it
+    // redraws, so this is a state a tab reaches in normal use — the strip has to name every version
+    // on it, not whichever panel happens to be first.
+    const mixedProject = join(dirname(importProject), 'mixed-versions')
+    await cp(startupDir, mixedProject, { recursive: true })
+    await rm(join(mixedProject, 'views', 'drift-over-time.json'))
+    await readCli(['view', 'new', 'mixed versions', '--dataset', 'main'], mixedProject)
+    const mixedBase = JSON.parse(await readCli(['list', '--json'], mixedProject)).data
+    const csvOf = (rows) =>
+      't_observed,x,y\n' + rows.map((point) => `${point.t_observed},${point.values.x},${point.values.y}`).join('\n') + '\n'
+    // Version 3: the tab's first panel stays pinned to 2; the second is added after this import.
+    await writeFile(
+      join(dirname(mixedProject), 'mixed-v3.csv'),
+      csvOf(mixedBase) + '2026-10-17T09:00:00Z,9,21\n',
+    )
+    await readCli(['import', join(dirname(mixedProject), 'mixed-v3.csv'), '--map', 'x=x', '--map', 'y=y'], mixedProject)
+    await readCli(['view', 'add', 'mixed versions', '--dataset', 'main'], mixedProject)
+    // Version 4: the dataset moves past both panels, so the strip must say what is pinned and what
+    // the data is at now.
+    await writeFile(
+      join(dirname(mixedProject), 'mixed-v4.csv'),
+      csvOf(mixedBase) + '2026-10-17T09:00:00Z,9,21\n2026-10-18T09:00:00Z,10,23\n',
+    )
+    await readCli(['import', join(dirname(mixedProject), 'mixed-v4.csv'), '--map', 'x=x', '--map', 'y=y'], mixedProject)
+
+    nextStartup = mixedProject
+    window.webContents.reload()
+    await new Promise((done) => ipcMain.once('bench:ready', done))
+    await sleep(700)
+    const mixedStrip = await window.webContents.executeJavaScript(
+      "(() => document.getElementById('view-meta').textContent)()",
+    )
+    const mixedBadges = await window.webContents.executeJavaScript(
+      "(() => JSON.stringify(Array.prototype.map.call(document.querySelectorAll('.panel-strip .badge'), (badge) => badge.textContent)))()",
+    )
+    console.log('[bench] mixed-versions ' + JSON.stringify({ strip: mixedStrip, badges: JSON.parse(mixedBadges) }))
+    if (!/main · v2, v3 \(now v4\)/.test(mixedStrip)) {
+      throw new Error('the strip does not name every version the tab was drawn from: ' + mixedStrip)
+    }
+    if (JSON.parse(mixedBadges).length !== 2) {
+      throw new Error('the mixed tab did not paint two panels: ' + mixedBadges)
+    }
+    await writeFile(join(captureDir, 'app-mixed-versions.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
   }
 
   if (cspViolations > 0) console.log(`[bench] csp-inline-style-blocked=${cspViolations}`)
