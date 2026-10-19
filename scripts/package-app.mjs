@@ -93,7 +93,7 @@ function fail(message) {
 }
 
 if (!existsSync(dist)) {
-  fail(`no Electron runtime at ${dist} — run \`pnpm install\` first`)
+  fail(`no Electron runtime at ${dist} — run \`pnpm exec install-electron\` first`)
 }
 if (!existsSync(join(root, 'app', 'core.bundle.mjs'))) {
   fail('app/core.bundle.mjs is missing — run `pnpm app:build` first (or `pnpm app:package`)')
@@ -110,7 +110,7 @@ const runtime = (await readFile(join(dist, 'version'), 'utf8')).trim()
 await rm(out, { recursive: true, force: true })
 await mkdir(join(out, 'resources', 'app'), { recursive: true })
 
-// 1. The runtime, as installed.
+// 1. The runtime, as fetched.
 await cp(dist, out, { recursive: true })
 await rm(join(out, 'electron.exe'))
 await cp(join(dist, 'electron.exe'), join(out, 'bench.exe'))

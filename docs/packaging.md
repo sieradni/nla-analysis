@@ -26,9 +26,10 @@ artifacts/bench-win32-x64/
     app.asar                 (absent on purpose — the app is plain files)
 ```
 
-No download happens during the build. It copies `node_modules/electron/dist`, which the install
-already put there, renames `electron.exe` to `bench.exe`, and drops the application into
-`resources/app` from an explicit file list.
+Electron 44 no longer fetches its runtime from a `postinstall`, so `app:package` runs
+`pnpm exec install-electron` first: a no-op when `node_modules/electron/dist` is already there, a
+one-time download otherwise. The build then copies that folder, renames `electron.exe` to
+`bench.exe`, and drops the application into `resources/app` from an explicit file list.
 
 ## Launch it
 

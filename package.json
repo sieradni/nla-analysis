@@ -22,7 +22,7 @@
     "app:build:cli": "esbuild src/cli/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=app/src/cli/index.mjs",
     "app:capture": "pnpm app:build && node scripts/capture-app.mjs",
     "app:measure": "pnpm app:build && node scripts/measure-window.mjs",
-    "app:package": "pnpm app:build && node scripts/package-app.mjs",
+    "app:package": "pnpm app:build && pnpm exec install-electron && node scripts/package-app.mjs",
     "app:package:check": "node scripts/check-packaged.mjs"
   },
   "engines": {
