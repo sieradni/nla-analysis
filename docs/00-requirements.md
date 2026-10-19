@@ -138,6 +138,11 @@ Every analysis artifact therefore carries a machine-checkable verdict:
 | `supported` | beats a null model on held-out / information-criterion grounds |
 | `contradicted` | a competing model or the null wins |
 
+**Implemented** in `recipes/fit.py`: `insufficient` when DOF ≤ 0 (no curve drawn at all), otherwise an
+F test against a mean-only model decides `contradicted` / `tentative` / `supported`, with a higher-degree
+term whose interval spans zero downgrading a fit to `tentative`. Charts carry the verdict, n, DOF and
+the band in the footer, plus the conclusion written on the artifact as a caption.
+
 Panels always show n, parameters, DOF, an uncertainty band (not a bare line), residuals, and the
 verdict. Exact-by-construction fits say so in words: *"3 points, 3 parameters — this fit tells you
 nothing yet. Add a fourth point to constrain it."*
@@ -232,8 +237,11 @@ Tauri shell (Rust)
 ```
 
 - Embedded CPython via `python-build-standalone`, deps via `uv` + lockfile. No system Python.
-- Runner warms at launch. Request `{id, recipe, params, input}` → response envelope; `{id, cancel}`
-  for live slider refits.
+- Runner speaks newline-delimited JSON: request `{id, kind, recipe, params, input}` → response
+  envelope echoing `id`. The client keeps one process alive for many requests; the CLI currently
+  starts one per command, which is enough without an interactive surface.
+- **Cancellation is specified but not implemented.** Live slider refits will need it, and it will
+  need a worker or thread on the Python side, since the loop is strictly sequential today.
 - Results cached by `(recipe hash, params hash, data hash)` → re-render is instant; recompute is
   debounced ~250 ms after entry settles and streamed in.
 - Runner crash degrades to "charts work, analysis panel shows stale + reason."
@@ -251,7 +259,7 @@ reviewable code instead of a hand-rolled TypeScript statistics library.
 | shell | **Tauri 2** — small exe, MSI/NSIS, per-user install, no admin, WebView2 ships with Win10/11 | deferred, Phase 5 |
 | UI | **Svelte 5** + Vite | deferred, Phase 5 |
 | charts | restricted declarative spec; SVG renderer today, canvas when the app lands — swappable either way | **in use** (`bench chart`) |
-| analysis | **Python** sidecar, pinned env, JSON envelope, no Python in the entry path | not built |
+| analysis | **Python** sidecar, pinned env, JSON envelope, no Python in the entry path | **in use** (`bench run`) |
 | storage | JSONL event log (truth) | **in use** |
 | index | SQLite derived projection | deferred until a measured query is slow |
 | shapes | declared by log events, validated on write | **in use** (extend/migrate not built) |

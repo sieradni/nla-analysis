@@ -23,6 +23,12 @@ index.sqlite
 index.sqlite-journal
 index.sqlite-wal
 
+# --- Python analysis environment --------------------------------------------
+# Recreated from recipes/requirements.lock.txt by `pnpm setup:recipes`.
+recipes/.venv/
+__pycache__/
+*.py[cod]
+
 # --- Machine-local tooling state --------------------------------------------
 # Specific to this checkout, not to the project.
 .freebuff/

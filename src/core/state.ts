@@ -10,6 +10,11 @@ function shortDate(value: IsoTime): string {
   return value.slice(0, 10)
 }
 
+/** Keep STATE.md skimmable: a narrative is a sentence for the reader, not a wall of text. */
+function clip(text: string, limit = 160): string {
+  return text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`
+}
+
 function shapeSummary(shape: Shape | undefined): string {
   if (!shape) return 'missing shape'
   const fields = shape.fields
@@ -62,7 +67,7 @@ export function renderState(config: StateConfig, state: ProjectState): string {
   if (state.runs.length > 0) {
     lines.push('## Analyses', '')
     for (const run of state.runs.slice(-6).reverse()) {
-      const narrative = run.narrative ? ` — ${run.narrative}` : ''
+      const narrative = run.narrative ? ` — ${clip(run.narrative)}` : ''
       lines.push(`- \`${run.recipe}\` · **${run.verdict}** · ${shortDate(run.at)}${narrative}`)
     }
     lines.push('')

@@ -75,18 +75,36 @@ The app should look like an instrument, not a dashboard template.
 
 ## Where things live
 
+**Two layouts. Do not confuse them.** This repository is the *application*. A user's *project* is a
+folder somewhere else, created by `bench init` and opened by `bench --project <dir>`.
+
+This repository (the app):
+
+```
+src/core/           log, binder, shapes, chart spec, state, Python runner — no UI imports
+src/cli/            the bench command surface
+recipes/            the Python analysis library, pinned by requirements.lock.txt
+recipes/.venv/      the analysis environment, recreated by `pnpm setup:recipes` (ignored)
+tests/              unit tests, plus CLI tests that run the real binary
+fixtures/projects/  committed demo projects, rebuilt by `pnpm fixture`
+docs/               requirements, plan, ADRs, decision log, UI review log
+```
+
+A user's project:
+
 ```
 data/events.jsonl   truth (append-only, via bench only)
 data/raw/           untouched imports
-shapes/             point shape registry
-recipes/            analysis code (Python) with declared schemas
+shapes/             point shape registry (declared in the log)
 views/              tab and panel definitions (JSON)
 artifacts/          generated output, all regenerable
-index.sqlite        derived index, disposable
-tasks/              in-app requests queued for the agent
-docs/               requirements, ADRs, decision log, UI review log
-STATE.md            generated cold-start brief
+index.sqlite        derived index, disposable (not built yet)
+AGENTS.md           this project's own rules, written by `bench init`
+STATE.md            generated cold-start brief — never edit by hand
 ```
+
+Recipes are **app-level**, not per-project: they are the analysis library bench ships, versioned and
+pinned. A project owns data, shapes, views and decisions. Per-project recipes are a later feature.
 
 ## When in doubt
 

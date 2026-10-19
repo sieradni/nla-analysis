@@ -1,7 +1,9 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import { fileURLToPath } from 'node:url'
 import { activePoints, bind, numericValue } from '../core/binder.ts'
 import type { DatasetState, Point, ProjectState } from '../core/binder.ts'
 import { makeEvent } from '../core/events.ts'
@@ -17,7 +19,19 @@ import {
   refreshState,
 } from '../core/project.ts'
 import type { ProjectHandle } from '../core/project.ts'
+import { RecipeRunner } from '../core/runner.ts'
+import type { RecipeSchema, RunInput } from '../core/runner.ts'
 import { renderState } from '../core/state.ts'
+
+/**
+ * Recipes belong to the application, not to the user's project: they are the analysis library that
+ * ships with bench, pinned and shared. A project owns data, shapes, views and decisions; it will be
+ * able to add its own recipes later, but it does not carry a copy of these.
+ *
+ * Resolved from this file's own location rather than from the working directory, so `bench` works
+ * from anywhere -- inside a project, from a parent folder, or from a completely unrelated path.
+ */
+const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 const EXIT_OK = 0
 const EXIT_INVALID = 1
@@ -34,6 +48,8 @@ const OPTIONS = {
   note: { type: 'string' },
   reason: { type: 'string' },
   tag: { type: 'string', multiple: true },
+  param: { type: 'string', multiple: true },
+  chart: { type: 'string' },
   out: { type: 'string' },
   project: { type: 'string' },
   json: { type: 'boolean' },
@@ -64,6 +80,8 @@ Usage
   bench state [--json]                  regenerate and print STATE.md
   bench check [--json]                  validate the log and shapes
   bench chart [--out file.svg]          render the dataset to an SVG artifact
+  bench recipes [--json]                list analysis recipes and their parameters
+  bench run <recipe> [--param k=v]      run an analysis, record it, and chart the result
   bench decide "<text>"                 record a decision the next session inherits
 
 Options for add
@@ -73,6 +91,8 @@ Options for add
   --reason <text>            why a point was corrected or retracted
   --tag <tag>                repeatable
   --dataset <id>             defaults to main
+  --param <name=value>       recipe parameter, repeatable (numbers and booleans inferred)
+  --chart <path>             where to write the rendered artifact
 
 Global
   --project <dir>   operate on a project other than the enclosing one
@@ -129,6 +149,74 @@ function findPoint(state: ProjectState, id: string): { dataset: DatasetState; po
     if (point) return { dataset, point }
   }
   return undefined
+}
+
+/** Coerce `--param k=v` text into the type the recipe declared. */
+function parseParams(entries: string[] | undefined): Record<string, unknown> {
+  const params: Record<string, unknown> = {}
+  for (const entry of entries ?? []) {
+    const separator = entry.indexOf('=')
+    if (separator <= 0) die(`--param must look like name=value, got "${entry}"`)
+    const name = entry.slice(0, separator).trim()
+    const raw = entry.slice(separator + 1).trim()
+    if (raw === 'true') params[name] = true
+    else if (raw === 'false') params[name] = false
+    else if (raw !== '' && Number.isFinite(Number(raw))) params[name] = Number(raw)
+    else params[name] = raw
+  }
+  return params
+}
+
+/** Content hash of the exact inputs an analysis was computed from. */
+function hashInput(input: RunInput): string {
+  const canonical = JSON.stringify({
+    dataset: input.dataset,
+    shape: input.shape,
+    points: input.points.map((point) => [point.id, point.t, point.values]),
+  })
+  return createHash('sha256').update(canonical).digest('hex')
+}
+
+/** Build the analysis input from the active set only: retracted points are not evidence. */
+function buildRunInput(state: ProjectState, datasetId: string): RunInput {
+  const dataset = state.datasets.get(datasetId)
+  if (!dataset) die(`no dataset "${datasetId}"`, EXIT_MISSING)
+  const shape = state.shapes.get(dataset.shape)
+  return {
+    dataset: datasetId,
+    shape: dataset.shape,
+    fields: (shape?.fields ?? []).map((field) => ({
+      name: field.name,
+      type: field.type,
+      ...(field.unit === undefined ? {} : { unit: field.unit }),
+    })),
+    points: activePoints(state, datasetId).map((point) => ({
+      id: point.id,
+      t: point.tObserved,
+      values: point.values,
+    })),
+  }
+}
+
+async function withRunner<T>(root: string, use: (runner: RecipeRunner) => Promise<T>): Promise<T> {
+  const runner = new RecipeRunner(root)
+  try {
+    await runner.start()
+    return await use(runner)
+  } catch (error) {
+    // The interpreter is a separate process with no write access to the log, so a failure here can
+    // never damage the data. Say so, because "analysis broke" reads as "data is at risk".
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`${message} — the analysis runtime cannot modify the log, so nothing was lost`)
+  } finally {
+    await runner.dispose()
+  }
+}
+
+/** Compact display for a coefficient; six significant figures is more than a reader can use. */
+function shortNumber(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return String(Number(value.toPrecision(6)))
 }
 
 function parse(argv: string[]) {
@@ -392,6 +480,136 @@ async function main(): Promise<void> {
       } else {
         process.stdout.write(`wrote ${out}  (${plotted.length} points)\n`)
       }
+      return
+    }
+
+    case 'recipes': {
+      // Deliberately does not require a project: this describes the analysis library bench ships.
+      return withRunner(APP_ROOT, async (runner) => {
+        const catalog = await runner.catalog()
+        const environment = await runner.environment()
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify({ ok: true, data: { recipes: catalog, environment } }, null, 2) + '\n',
+          )
+          return
+        }
+        process.stdout.write(
+          `runtime: python ${environment.python} · numpy ${environment.numpy} · scipy ${environment.scipy}\n`,
+        )
+        for (const recipe of catalog) {
+          process.stdout.write(`\n${recipe.name} — ${recipe.summary}\n`)
+          process.stdout.write(`  ${recipe.source} · sha256 ${recipe.hash.slice(0, 12)}\n`)
+          for (const param of recipe.params) {
+            const notes = [
+              param.values ? param.values.join(' | ') : '',
+              param.min !== undefined ? `min ${param.min}` : '',
+              param.max !== undefined ? `max ${param.max}` : '',
+            ]
+              .filter((note) => note !== '')
+              .join(', ')
+            process.stdout.write(
+              `  --param ${param.name}=${String(param.default)}${notes === '' ? '' : `   (${notes})`}\n`,
+            )
+          }
+        }
+      })
+    }
+
+    case 'run': {
+      const recipeName = args[0]
+      if (!recipeName) die('missing recipe name', EXIT_INVALID, 'run `bench recipes` to see what exists')
+      const handle = await locate(values.project)
+      const state = await loadState(handle)
+      const datasetId = pickDataset(state, values.dataset)
+      const input = buildRunInput(state, datasetId)
+      if (input.points.length === 0) {
+        die(`dataset "${datasetId}" has no active points`, EXIT_MISSING, 'bench add --x 1 --y 2')
+      }
+      const params = parseParams(values.param)
+
+      const outcome = await withRunner(APP_ROOT, (runner) => runner.run(recipeName, params, input))
+      if (!outcome.ok) {
+        die(outcome.error.message, EXIT_INVARIANT, outcome.error.hint ?? `code: ${outcome.error.code}`)
+      }
+      const result = outcome.result
+
+      // Only mention a band when one was actually drawn. A caption promising a band that is not on
+      // the canvas is the same class of lie as a curve without an interval.
+      const level = Number(result.diagnostics.level)
+      const bandKind = typeof result.diagnostics.band === 'string' ? result.diagnostics.band : 'confidence'
+      const bandNote =
+        result.chart.band !== undefined && Number.isFinite(level)
+          ? `${Math.round(level * 100)}% ${bandKind} band`
+          : ''
+      const footer = [result.chart.footer ?? '', bandNote].filter((part) => part !== '').join(' · ')
+
+      const spec: ChartSpec = {
+        ...result.chart,
+        title: handle.config.name,
+        subtitle: `${datasetId} · ${recipeName}`,
+        ...(footer === '' ? {} : { footer }),
+        // The artifact carries its own conclusion: the terminal scrollback is not durable.
+        ...(result.narrative === '' ? {} : { caption: result.narrative }),
+      }
+
+      // The log stores a project-relative path: an absolute one would bake this machine's layout -
+      // and its user name - into a file meant to outlive the machine.
+      const artifactName = `${recipeName}-${datasetId}.svg`
+      const out = values.chart ? resolve(values.chart) : join(handle.dir, 'artifacts', artifactName)
+      // Forward slashes even on Windows: the log is a portable record, and a backslash in it is a
+      // trap for anything that later parses it on another platform.
+      const artifactRef = values.chart ?? `artifacts/${artifactName}`
+      await mkdir(dirname(out), { recursive: true })
+      await writeFile(out, renderChart(spec))
+
+      const event = makeEvent('analysis_run', handle.session, {
+        recipe: result.recipe,
+        recipe_hash: result.recipeHash,
+        params,
+        input_hash: hashInput(input),
+        verdict: result.verdict,
+        narrative: result.narrative,
+        artifact: artifactRef,
+      })
+      await handle.log.append(event)
+      await refreshState(handle)
+
+      const coefficients = Array.isArray(result.data.coefficients)
+        ? (result.data.coefficients as Record<string, unknown>[])
+        : []
+
+      if (asJson) {
+        process.stdout.write(
+          JSON.stringify(
+            {
+              ok: true,
+              data: {
+                id: event.id,
+                verdict: result.verdict,
+                narrative: result.narrative,
+                artifact: artifactRef,
+                diagnostics: result.diagnostics,
+                coefficients,
+              },
+              warnings: result.warnings,
+            },
+            null,
+            2,
+          ) + '\n',
+        )
+        return
+      }
+
+      for (const warning of result.warnings) process.stderr.write(`  warning: ${warning}\n`)
+      process.stdout.write(`${result.verdict.toUpperCase()}  ${result.narrative}\n`)
+      for (const coefficient of coefficients) {
+        process.stdout.write(
+          `  ${String(coefficient.name).padEnd(10)} ${shortNumber(coefficient.estimate)}` +
+            `  [${shortNumber(coefficient.low)}, ${shortNumber(coefficient.high)}]\n`,
+        )
+      }
+      process.stdout.write(`wrote ${out}\n`)
       return
     }
 

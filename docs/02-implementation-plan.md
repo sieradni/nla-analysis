@@ -15,9 +15,15 @@ Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 | 1.4 entry ergonomics | **superseded** | ADR 0002: v1 is agent-only, so the entry bar moved to Phase 5 |
 | 2.1 corrections + retractions | done early | `bench correct` / `bench retract`; original records preserved in the log |
 | 2.2 shapes registry + validation | partial | read + validate exist; `shape extend` and migrations do not |
+| 3.1 Python runner | done | JSON over stdio, `uv`-pinned 3.13 env, id echoed, crash contained |
+| 3.2 one honest fit recipe | done | band, DOF, F test, verdict; refuses to draw when DOF ≤ 0 |
+| 3.3 cache / debounce / cancel | **not done** | every run recomputes; fine at this scale, needed for live sliders |
+| 3.4 windowed fit + changepoint | not done | the fixture data is shaped for exactly this |
+| 4.x views / import / UI | not done | deferred per ADR 0002 |
 
-Verification so far: 27 tests pass, `tsc --noEmit` clean, plus one end-to-end run through the real
-CLI covering a mistyped field, a retraction, and a correction.
+Verification so far: 62 tests pass and `tsc --noEmit` is clean. `tests/cli.test.ts` runs the actual
+binary, which is the only way to catch a difference between what the test runner's transpiler accepts
+and what Node's type stripping accepts — that gap hid a dead CLI behind 38 green tests once already.
 
 ### Two layouts, kept separate
 

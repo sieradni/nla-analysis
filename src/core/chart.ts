@@ -19,6 +19,11 @@ export interface ChartSpec {
   band?: { x: number; y0: number; y1: number }[]
   /** Evidence line, e.g. "n = 14 · 2 parameters · DOF 12 · tentative". Always shown when present. */
   footer?: string
+  /**
+   * The conclusion, in words, wrapped under the axes. An artifact outlives the terminal session that
+   * produced it, so it has to explain itself to whoever opens the file later.
+   */
+  caption?: string
 }
 
 const INK = '#1b1d1f'
@@ -53,6 +58,31 @@ function formatNumber(value: number): string {
   if (magnitude >= 100) return value.toFixed(0)
   if (magnitude >= 10) return value.toFixed(1).replace(/\.0$/, '')
   return value.toFixed(2).replace(/\.?0+$/, '')
+}
+
+/** Wrap prose to the canvas. Long captions are clipped at three lines with an ellipsis; the full
+ *  text always lives in the log. */
+export function wrapCaption(text: string, maxChars = 112, maxLines = 3): string[] {
+  const words = text.split(/\s+/).filter((word) => word !== '')
+  if (words.length === 0) return []
+
+  const lines: string[] = []
+  let current = ''
+  for (const word of words) {
+    const candidate = current === '' ? word : `${current} ${word}`
+    if (candidate.length <= maxChars) {
+      current = candidate
+      continue
+    }
+    lines.push(current)
+    current = word
+  }
+  if (current !== '') lines.push(current)
+
+  if (lines.length <= maxLines) return lines
+  const kept = lines.slice(0, maxLines)
+  kept[maxLines - 1] = `${kept[maxLines - 1]!}…`
+  return kept
 }
 
 function niceStep(range: number): number {
@@ -119,8 +149,11 @@ export function renderChart(spec: ChartSpec): string {
   if (spec.footer) cursor += 15
   const top = cursor + 9
 
+  const captionLines = spec.caption ? wrapCaption(spec.caption) : []
+  const bottom = BOTTOM + captionLines.length * 15
+
   const plotW = WIDTH - LEFT - RIGHT
-  const plotH = HEIGHT - top - BOTTOM
+  const plotH = HEIGHT - top - bottom
   const bottomEdge = top + plotH
 
   const sx = (value: number): number => LEFT + ((value - x0) / (x1 - x0)) * plotW
@@ -194,10 +227,17 @@ export function renderChart(spec: ChartSpec): string {
   parts.push(
     `<line x1="${LEFT}" y1="${bottomEdge.toFixed(2)}" x2="${(LEFT + plotW).toFixed(2)}" y2="${bottomEdge.toFixed(2)}" stroke="${MUTED}" stroke-width="1"/>`,
     `<line x1="${LEFT}" y1="${top}" x2="${LEFT}" y2="${bottomEdge.toFixed(2)}" stroke="${MUTED}" stroke-width="1"/>`,
-    `<text x="${(LEFT + plotW / 2).toFixed(2)}" y="${HEIGHT - 16}" text-anchor="middle" font-family="${LABELS}" font-size="11.5" fill="${INK}">${escapeXml(xLabel)}</text>`,
+    `<text x="${(LEFT + plotW / 2).toFixed(2)}" y="${(bottomEdge + 40).toFixed(2)}" text-anchor="middle" font-family="${LABELS}" font-size="11.5" fill="${INK}">${escapeXml(xLabel)}</text>`,
     `<text transform="translate(18 ${(top + plotH / 2).toFixed(2)}) rotate(-90)" text-anchor="middle" font-family="${LABELS}" font-size="11.5" fill="${INK}">${escapeXml(yLabel)}</text>`,
-    '</svg>',
   )
+
+  captionLines.forEach((line, index) => {
+    parts.push(
+      `<text class="caption" x="${LEFT}" y="${(bottomEdge + 59 + index * 15).toFixed(2)}" font-family="${LABELS}" font-size="11" fill="${MUTED}">${escapeXml(line)}</text>`,
+    )
+  })
+
+  parts.push('</svg>')
 
   return parts.join('\n')
 }

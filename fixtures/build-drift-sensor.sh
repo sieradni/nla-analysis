@@ -44,6 +44,11 @@ bench add --x 9 --y 21.5 --at 2026-10-13T09:30:00Z --note "re-recorded after fie
 bad="$(bench add --x 6 --y 99.9 --at 2026-10-14T09:00:00Z --json | id_of)"
 bench correct "$bad" --values '{"y":16.0}' --reason "transcription error" >/dev/null
 
+# A recorded analysis, so the fixture exercises the verdict path and STATE's Analyses section.
+# The pooled slope is a compromise between the two weeks -- which is exactly the question a
+# time-varying analysis has to answer, and why this data set is shaped the way it is.
+bench run fit --param degree=1 >/dev/null
+
 bench chart >/dev/null
 bench check
 echo "fixture rebuilt at $project"

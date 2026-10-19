@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { renderChart, ticks } from '../src/core/chart.ts'
+import { renderChart, ticks, wrapCaption } from '../src/core/chart.ts'
 
 const base = { x: { label: 'x' }, y: { label: 'y' } }
 
@@ -18,7 +18,50 @@ describe('ticks', () => {
   })
 })
 
+describe('wrapCaption', () => {
+  it('leaves a short caption on one line', () => {
+    expect(wrapCaption('n = 12 · supported')).toEqual(['n = 12 · supported'])
+  })
+
+  it('wraps long prose without splitting or losing words', () => {
+    const text = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet'
+    // A high line limit so nothing is truncated: this is about wrapping, not clipping.
+    const lines = wrapCaption(text, 20, 50)
+
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(20)
+      for (const word of line.split(' ')) expect(word).not.toBe('')
+    }
+    expect(lines.join(' ')).toBe(text)
+    expect(lines.length).toBeGreaterThan(1)
+  })
+
+  it('caps at three lines and signals the truncation', () => {
+    const lines = wrapCaption('word '.repeat(200), 40, 3)
+    expect(lines).toHaveLength(3)
+    expect(lines[2]!.endsWith('…')).toBe(true)
+  })
+
+  it('returns nothing for empty text', () => {
+    expect(wrapCaption('')).toEqual([])
+    expect(wrapCaption('   ')).toEqual([])
+  })
+})
+
 describe('renderChart', () => {
+  it('renders a caption with its own class, inside a fixed canvas', () => {
+    const svg = renderChart({
+      ...base,
+      points: [{ x: 1, y: 1 }],
+      caption: 'Twelve points, two parameters: the fit beats a mean-only model.',
+    })
+
+    expect(svg).toContain('class="caption"')
+    expect(svg).toContain('Twelve points, two parameters')
+    expect(svg).toContain('viewBox="0 0 760 440"')
+    expect(svg).toContain('height="440"')
+  })
+
   it('renders a valid svg with the footer evidence line', () => {
     const svg = renderChart({
       ...base,

@@ -7,11 +7,15 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 
 | working | specified, not built |
 |---|---|
-| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `decide` | `import`, `dataset *`, `shape *`, `recipe *`, `run`, `runs`, `rerun`, `view *`, `export` |
+| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `recipes`, `run`, `decide` | `import`, `dataset *`, `shape *`, `runs`, `rerun`, `view *`, `export` |
 
 Exit codes, `--json`, `--project`, and non-interactive behavior are in place. `--dry-run` and
 `--id` (idempotent retries) are specified but not yet implemented. Everything in the tables below is
 the target contract, not a description of the current binary.
+
+`bench recipes` deliberately does **not** require a project: recipes belong to the application, not
+to a data set. `bench run` writes the rendered artifact, appends an `analysis_run` event carrying the
+recipe hash, the input hash, the verdict and the narrative, and refreshes `STATE.md`.
 
 ## Contract rules
 
@@ -81,12 +85,20 @@ dependent analyses stale.
 
 ### Analysis
 
-| command | purpose |
-|---|---|
-| `bench recipe list` / `show <name>` | schema: params, defaults, bounds, outputs |
-| `bench run <recipe> [--param k=v] [--dataset] [--version] [--json]` | execute, record `analysis_run` |
-| `bench runs [--dataset] [--stale]` | run history with verdicts |
-| `bench rerun --stale` | re-execute analyses whose inputs changed |
+| command | status | purpose |
+|---|---|---|
+| `bench recipes [--json]` | **working** | the catalog: each recipe's params, defaults, bounds, and source hash. Needs no project |
+| `bench run <recipe> [--param k=v] [--chart path] [--dataset id] [--json]` | **working** | execute, render the artifact, record `analysis_run` |
+| `bench recipe show <name>` | not built | full schema for one recipe |
+| `bench runs [--dataset] [--stale]` | not built | run history with verdicts (STATE.md shows the last six) |
+| `bench rerun --stale` | not built | re-execute analyses whose inputs changed |
+
+The rules a recipe must obey, and that `bench run` enforces by way of the envelope:
+
+- It returns `verdict` alongside any curve, and `insufficient` means no curve is drawn at all.
+- Every number it emits is finite or null. `Infinity` is not valid JSON and is rejected upstream.
+- It never writes to the log; the CLI records the run. A recipe that raises returns an error
+  envelope and leaves the project untouched.
 
 `bench run` returns the analysis envelope, which the UI renders verbatim:
 
@@ -112,16 +124,21 @@ dependent analyses stale.
 ## Example: the flagship session
 
 ```bash
-bench add --dataset drift --values '{"x":1.02,"y":3.1}' --note "first reading"
-bench add --dataset drift --values '{"x":1.11,"y":3.4}'
-bench run fit --dataset drift --param model=linear --param band=0.95
-# verdict: insufficient — 2 points, 2 parameters.
+bench init ./drift --name drift
+bench --project ./drift add --x 1.02 --y 3.1 --note "first reading"
+bench --project ./drift add --x 1.11 --y 3.4 --at 2026-10-01T09:00:00Z
 
-bench dataset replace drift --from new_export.csv   # +42 -1 ~3 rows
-bench rerun --stale
-bench view create drift-over-time --panels views/drift.json
-bench state
+bench --project ./drift run fit --param degree=1
+# INSUFFICIENT 2 points, 2 parameters, zero degrees of freedom: this fit is exact by
+# construction, so it says nothing about the relationship. Add a 3rd point...
+# No curve is drawn, and the artifact says so.
+
+bench --project ./drift run fit --param degree=1 --param level=0.9
+bench --project ./drift check
+bench --project ./drift state
 ```
+
+The `dataset replace` / `rerun --stale` steps below become available in Phase 2.
 
 ## Non-goals for the CLI
 

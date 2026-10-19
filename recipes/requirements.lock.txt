@@ -1,0 +1,9 @@
+# Analysis runtime. Recreate the environment with:
+#   pnpm setup:recipes
+#
+# Pinned exactly: a fit that changes its answer because numpy moved two minor versions is not a
+# reproducible fit. Nothing here is ever allowed in the entry path -- the UI never waits on this.
+#
+# Resolved on CPython 3.13.5.
+numpy==2.5.4
+scipy==1.18.1
