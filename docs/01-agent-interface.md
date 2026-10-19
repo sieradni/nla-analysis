@@ -7,14 +7,14 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 
 | working | specified, not built |
 |---|---|
-| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `view list\|show\|new\|add\|save\|render` | `dataset *`, `shape *`, `export` |
+| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `dataset list\|versions\|diff`, `view list\|show\|new\|add\|save\|render` | `dataset replace\|show\|export`, `shape *`, `annotate`, `add --stdin`, `view create\|open`, `recipe show` |
 
 Available recipes: `fit` (curve, band, verdict) and `drift` (does the relationship change over time).
 
 Exit codes, `--json`, `--project`, and non-interactive behavior are in place. `--dry-run` exists on
 `import`; on the other mutating commands, and `--id` (idempotent retries) everywhere, it is specified
-but not yet implemented. Everything in the tables below is the target contract, not a description of
-the current binary.
+but not yet implemented. The tables below mark what is **not built**; a row with no such note is
+implemented.
 
 `bench recipes` deliberately does **not** require a project: recipes belong to the application, not
 to a data set. `bench run` writes the rendered artifact, appends an `analysis_run` event carrying the
@@ -41,11 +41,11 @@ A **view is the tab format** ([ADR 0004](adr/0004-views-and-projects.md)): one J
     {
       "title": "slope before and after the split",
       "dataset": "main",
-      "version": "latest",
+      "version": 2,
       "query": { "where": [{ "field": "y", "op": ">", "value": 0 }] },
       "recipe": "drift",
       "params": { "split": "auto" },
-      "chart": { "x": { "label": "x" }, "y": { "label": "y" }, "points": [{ "x": 1, "y": 2.55, "id": "01J..." }], "provenance": { "dataset": "main", "shape": "xy.v1" } },
+      "chart": { "x": { "label": "x" }, "y": { "label": "y" }, "points": [{ "x": 1, "y": 2.55, "id": "01J..." }], "provenance": { "dataset": "main", "shape": "xy.v1", "version": 2 } },
       "verdict": "tentative",
       "n": 14,
       "recipe_hash": "…",
@@ -88,12 +88,15 @@ project logic of its own. Two consequences worth knowing when reading this docum
 ## Contract rules
 
 1. **Non-interactive.** Never prompts, never waits. Missing arguments are an error with a fix hint.
-2. **`--json` on everything.** Stable envelope. Human-readable output is the default.
-3. **`--dry-run` on every mutating command.** Prints the events that would be appended.
-4. **`--id <ulid>` for idempotent retries.** Re-running with the same id is a no-op.
+2. **`--json` on everything that returns data.** Stable envelope; human-readable output is the
+   default. *In place everywhere that matters today; see the status table above.*
+3. **`--dry-run` on every mutating command.** Prints the events that would be appended. *In place on
+   `import` only.*
+4. **`--id <ulid>` for idempotent retries.** Re-running with the same id is a no-op. *Not built.*
 5. **Errors are for agents.** `{"ok": false, "code": "...", "message": "...", "hint": "..."}`.
    Exit codes: `0` ok, `1` invalid input, `2` not found, `3` would break an invariant.
 6. **Streams over files.** `--stdin` accepts JSONL or TSV; never require an interactive confirm.
+   *Not built for `add`; `view save --file -` is the one stdin path today.*
 
 ## Response envelope
 
@@ -111,8 +114,8 @@ project logic of its own. Two consequences worth knowing when reading this docum
 | command | purpose |
 |---|---|
 | `bench init <dir> [--name]` | scaffold project, `AGENTS.md`, first shape, `STATE.md` |
-| `bench state [--json] [--brief]` | regenerate and print the cold-start brief |
-| `bench check [--fix]` | validate log, shapes, views, artifacts, orphaned files |
+| `bench state [--json]` | regenerate and print the cold-start brief. `--brief` is **not built**. |
+| `bench check [--json]` | validate the log and shapes. `--fix` is **not built**; nothing is auto-repaired. |
 | `bench decide "<text>" [--tag]` | record a decision in the log and `docs/decisions.md` |
 
 `bench state` is the most important command: it is how a new session becomes oriented. It must
@@ -124,10 +127,10 @@ exist, which analyses are stale, what the last decisions were, and what is unres
 | command | purpose |
 |---|---|
 | `bench add --dataset <d> --values '{"x":1.2,"y":3.4}' [--at ISO] [--note] [--tag]` | record a point |
-| `bench add --stdin` | bulk points: JSONL or TSV with `--columns x,y,t` |
+| `bench add --stdin` | bulk points: JSONL or TSV with `--columns x,y,t`. **Not built.** |
 | `bench correct <point-id> --values '{"y":3.5}' --reason "typo"` | supersede a point |
 | `bench retract <point-id> --reason` | mark as withdrawn (kept, excluded from analysis) |
-| `bench annotate <point-id> --note/--tag` | add context without changing values |
+| `bench annotate <point-id> --note/--tag` | add context without changing values. **Not built**; notes and tags are set when a point is added or corrected. |
 | `bench import <file> [--map field=column]… [--time <col>] [--format csv\|tsv\|jsonl] [--dry-run] [--force]` | preserve in `data/raw/`, then load |
 
 #### Import behaviour, as built
@@ -161,16 +164,21 @@ exist, which analyses are stale, what the last decisions were, and what is unres
 
 | command | purpose |
 |---|---|
-| `bench dataset list` | id, rows, version, time span, last change |
-| `bench dataset show <id>` | shape, fields, units, provenance chain |
-| `bench dataset replace <id> --from <file>` | new version + diff vs parent |
-| `bench dataset diff <id> <v1> <v2>` | row-level `+n −n ~n`, plus sample changes |
-| `bench dataset export <id> [--version] --format csv\|parquet` | analysis-ready copy |
+| `bench dataset list` | id, shape, version, active/recorded rows, time span |
+| `bench dataset versions <id>` | every version, the diff that created it, and its row count now |
+| `bench dataset diff <id> [v1] [v2]` | row-level `+n −n ~n` between two versions (default: the newest pair) |
+| `bench dataset show <id>` | shape, fields, units, provenance chain. **Not built.** |
+| `bench dataset replace <id> --from <file>` | new version + diff vs parent. **Not built**; import into a populated dataset is the replace surface. |
+| `bench dataset export <id> [--version] --format csv\|parquet` | analysis-ready copy. **Not built.** |
 
-Replace never destroys: it appends `dataset_version_created`, computes the diff, and marks
-dependent analyses stale.
+Replacing never destroys: `bench import` into a populated dataset appends `dataset_version_created`
+with a parent and a diff, and marks dependent analyses stale. There is deliberately no `dataset
+replace` command to duplicate that path ([ADR 0012](adr/0012-dataset-versions.md)).
 
 ### Shapes
+
+None of these commands exist yet: the registry is read and validated, but `bench` has no `shape`
+subcommand.
 
 | command | purpose |
 |---|---|
@@ -230,9 +238,9 @@ The rules a recipe must obey, and that `bench run` enforces by way of the envelo
 
 | command | purpose |
 |---|---|
-| `bench view list` / `show <name>` | tab and panel definitions |
-| `bench view create <name> --panels <json>` | write a view file |
-| `bench view open <name>` | tell a running app to focus it (fails soft if app is closed) |
+| `bench view list` / `show <name>` | tab and panel definitions — **working** |
+| `bench view create <name> --panels <json>` | write a view file. **Not built**; `view new`/`view add`/`view save` cover it. |
+| `bench view open <name>` | tell a running app to focus it. **Not built.** |
 
 ## Example: the flagship session
 
@@ -251,7 +259,8 @@ bench --project ./drift check
 bench --project ./drift state
 ```
 
-The `dataset replace` / `rerun --stale` steps below become available in Phase 2.
+`dataset replace` and `rerun --stale` are not built; the example stops at `check` and `state` for
+that reason.
 
 ## Non-goals for the CLI
 

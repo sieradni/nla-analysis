@@ -1,7 +1,7 @@
 # ADR 0004 — A tab is a view file; projects are a registry of folders
 
 Date: 2026-10-19
-Status: accepted
+Status: accepted; **superseded in part** by [0012](0012-dataset-versions.md) for the `version` field
 Related: [0002](0002-agent-only-v1.md) (agent-only v1), [0003](0003-in-process-core.md) (the write path)
 
 ## Context
@@ -49,6 +49,10 @@ Two questions had to be answered before this could be built:
 8. **Deleting a view or a registry entry is not a CLI operation.** A view the user built is history;
    replacing one is explicit (`--force`).
 
+`version` is now a pinned dataset version; `latest` survives only as the value a hand-written view may
+use before its first render. The revisit condition ("dataset versions land") has happened, and
+[0012](0012-dataset-versions.md) records the answer.
+
 ## Consequences
 
 - The window has what it needs to start: a list to switch between, a tab format to render, and a
@@ -65,7 +69,6 @@ Two questions had to be answered before this could be built:
 
 ## Revisit if
 
-- Dataset versions land: `version` becomes a real choice and panels need pinning rather than `latest`.
 - A panel needs derived values on the chart (a rolling fit, a residual plot): the query language must
   stay select-only, so that work belongs in a recipe that returns a spec, not in the view format.
 - The registry needs more than recency (tags, workspaces, a "last open tab"): that is a UI concern,

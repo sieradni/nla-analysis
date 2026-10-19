@@ -3,6 +3,10 @@
 Status: Phases 0-3 complete (2026-10-19); the in-process seam ([ADR 0003](adr/0003-in-process-core.md)), the tab/project layer ([ADR 0004](adr/0004-views-and-projects.md)), a first desktop window ([ADR 0005](adr/0005-desktop-shell.md)), its write path ([ADR 0006](adr/0006-window-write-path.md)) and dataset versions ([ADR 0012](adr/0012-dataset-versions.md)) landed; the shape registry is next, and the window's frames are waiting on a visual verdict.
 Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 
+Where an early phase below says Tauri, `src/ui`, or `bench/perf.ts`, the shipped tree is Electron
+([ADR 0005](adr/0005-desktop-shell.md)), `app/renderer`, and `scripts/measure-window.mjs` — read
+those passages as the plan as it was written, not as a description of today's layout.
+
 ## Progress
 
 | step | state | evidence |
@@ -12,7 +16,7 @@ Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 | 1.1 event log core | done | append-only verified by byte-prefix test; torn tail tolerated |
 | 1.2 init / add / state / check | done | `fixtures/projects/drift-sensor` built entirely through the CLI |
 | 1.3 chart artifact | done | `bench chart` writes SVG; renderer is a core module, not CLI glue |
-| 1.4 entry ergonomics | **superseded** | ADR 0002: v1 is agent-only, so the entry bar moved to Phase 5 |
+| 1.4 entry ergonomics | **partial** | ADR 0002 made v1 agent-only; the bar, optimistic append, correction and undo landed with the window (5.4). Paste, stream, auto-advance and shortcuts are not built |
 | 2.1 corrections + retractions | done early | `bench correct` / `bench retract`; original records preserved in the log |
 | 2.2 shapes registry + validation | partial | read + validate exist; `shape extend` and migrations do not |
 | 3.1 Python runner | done | JSON over stdio, `uv`-pinned 3.13 env, id echoed, crash contained |
@@ -20,7 +24,7 @@ Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 | 3.3 cache / debounce / cancel | **not done** | every run recomputes; fine at this scale, needed for live sliders |
 | 3.4 changepoint | done | `recipes/drift.py`: Chow test at a given split, permutation test when the data chooses the split |
 | 3.5 analysis freshness + `runs` / `rerun` | done | three states (current / stale / cannot-be-checked) from the recorded input and recipe hashes; `STATE.md` carries it |
-| 4.3 csv / tsv / jsonl import | done | all-or-nothing, content-addressed `data/raw/` copy, hash dedupe; 7 CLI tests |
+| 4.3 csv / tsv / jsonl import | done | all-or-nothing, content-addressed `data/raw/` copy, hash dedupe; 9 CLI tests |
 | 4.4 in-process seam (`Workspace`) | done | [ADR 0003](adr/0003-in-process-core.md); one append and analysis path for CLI and UI. `rerun` had 52 of its 85 lines identical to `run`; that body now lives in `Workspace.recordAnalysis`, and each command is argument parsing, the call, and printing |
 | 4.5 artifact identity + provenance | done | `ChartSpec.points[].id` and `provenance`; both recipes echo ids; `data-point-id` on every mark, covered by tests |
 | 4.6 project registry | done | [ADR 0004](adr/0004-views-and-projects.md); `bench projects`, recents, `--project <name>`, `--scan`; atomic writes, tolerant reads |
@@ -29,19 +33,22 @@ Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 | 5.2 shell: Electron vs Tauri+sidecar | decided | [ADR 0005](adr/0005-desktop-shell.md): Electron, because the core is TypeScript and stays in one process. Measured here: 369 MB dev install, 205–242 ms cold start, 466–514 MB working set (summed, so an upper bound) |
 | 5.3 first window slice | done | `pnpm app`: projects and tabs switch, a tab's panels draw from their stored specs, hover resolves a mark to its record id, wheel zoom and pan move the `viewBox`. Frames in `docs/ui-review/`, waiting on the user's verdict |
 | 5.4 window write path | done | [ADR 0006](adr/0006-window-write-path.md): the entry bar appends through `Workspace` in process, a point inside the drawn axes arrives as one mark the core placed (0.8 ms), a point that rescales the axes asks for a full redraw, the tab file catches up after the paint, and undo is a `point_retracted` event. Refusals keep the typed values and name the field |
-| 5.5 entry-path measurement | done | `pnpm app:measure` builds a 10k-point project and types into the real window: **median 25.8 ms** keystroke→paint (p90 63.1) against the 100 ms budget; record 13 · rebuild 1 · paint 12, tab file 29 ms later. A rescale is 135 ms — see 5.6 |
-| 5.6 canvas renderer | not done | the measured trigger is now real: 135 ms for a point that moves the axes, and paint growing with the point count. §4 expects canvas at 10k |
-| 5.5 installer / signing | not done | no packaging, no code signing; `pnpm app` is how it runs |
+| 5.5 entry-path measurement | done | `pnpm app:measure` builds a 10k-point project and types into the real window: **median 24.6 ms** keystroke→paint (p90 40.1) against the 100 ms budget; record 14.1 · rebuild 1.1 · paint 8.8, tab file 33.6 ms later. A rescale is 133.8 ms — see 5.6 |
+| 5.6 canvas renderer | not done | the measured trigger is now real: 133.8 ms for a point that moves the axes, and paint growing with the point count. §4 expects canvas at 10k |
+| 5.7 installer / signing | not done | no packaging, no code signing; `pnpm app` is how it runs |
+| 5.8 entry extras (paste, stream, auto-advance, shortcuts) | not done | the entry bar itself is built; these are not |
 | 4.x Tauri shell / views UI | superseded | the shell landed as Electron instead ([ADR 0005](adr/0005-desktop-shell.md)) |
 | windowed / rolling fit | not done | the third item on the time-variation menu |
 | 2.4 dataset versions / replace / diff | done | [ADR 0012](adr/0012-dataset-versions.md): an import into a populated dataset writes `dataset_version_created` with a parent and a `+n −n ~n` diff, the parent's rows are retracted/corrected rather than rewritten, and `foldVersion` rebuilds any older version from the log. Runs and panels pin `(dataset, version)`; `bench dataset versions\|diff` and the window's sheet read the same plan; an import with no observation time is refused in both doors, and the sheet picks the column that holds it |
+| 2.5 fixture matrix | not done | the committed drift-sensor project plus duplicate-time and re-export cases exist; 2-point, 1e5-point, unicode, missing-value, garbage-paste and post-migration fixtures do not |
 | `shape extend` + migrations | not done | next; shape 2.2 is read-only today |
+| chart golden snapshots | not done | no snapshot tests; fits are checked numerically against closed-form results. Nothing in docs/ decides the format |
 
 Verification so far: 212 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
 (`pnpm app:build`) before the suite, because the desktop shell loads that bundle rather than `src/core`,
 and a bundle that is only exercised by launching an app breaks silently — it did, once. The entry path is measured, not
 assumed: 15.7 ms keystroke→paint in process at 10k points against a 100 ms budget (ADR 0003), and
-25.8 ms for the whole path in the window, including the append and the paint
+24.6 ms for the whole path in the window, including the append and the paint
 ([ADR 0006](adr/0006-window-write-path.md)).
 `tests/cli.test.ts` runs the actual binary, which is the only way to catch a difference between what
 the test runner's transpiler accepts and what Node's type stripping accepts — that gap hid a dead CLI
@@ -96,8 +103,8 @@ the integration risk can be retired in the first step instead of the last.
 - **Size**: one capability, ≤ ~400 line diff, reviewable in ~10 minutes.
 - **Tests**: logic gets a test that would fail if the behavior regressed. Stats get numeric
   assertions against closed-form or reference values, not shape checks.
-- **Perf harness exists from step 4 and never regresses**: `pnpm perf` measures
-  keystroke→paint and re-render at 10k points and exits non-zero over budget.
+- **Perf harness exists from step 4 and never regresses**: `pnpm app:measure` measures
+  keystroke→paint at 10k points in the real window and exits non-zero when the median is over budget.
 - **Visual steps**: screenshot at 100/125/150% + a two-line "what to look at" note, logged in
   [ui-review-log.md](ui-review-log.md). I never self-approve.
 - **`bench check` green** at the end of every phase.
