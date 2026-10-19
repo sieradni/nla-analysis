@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>bench — desktop shell review</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: ui-sans-serif, 'Segoe UI', system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #f5f5f3;
+        color: #1b1d1f;
+        padding: 24px 28px 56px;
+      }
+      h1 {
+        font-size: 19px;
+        margin: 0 0 4px;
+      }
+      p {
+        margin: 0 0 24px;
+        color: #71767c;
+        font-size: 13px;
+      }
+      figure {
+        margin: 0 0 28px;
+        background: #fff;
+        border: 1px solid #e6e7e4;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      figcaption {
+        padding: 8px 12px;
+        border-bottom: 1px solid #e6e7e4;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 12px;
+        color: #4a4f55;
+      }
+      img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>bench desktop shell — review frames</h1>
+    <p>
+      Captured from the real Electron window by <code>pnpm app:capture</code> (project:
+      fixtures/projects/drift-sensor, tab: “drift over time”).
+    </p>
+    <figure>
+      <figcaption>100% scaling — app-100.png</figcaption>
+      <img src="app-100.png" alt="bench window at 100% scaling" />
+    </figure>
+    <figure>
+      <figcaption>125% scaling — app-125.png</figcaption>
+      <img src="app-125.png" alt="bench window at 125% scaling" />
+    </figure>
+    <figure>
+      <figcaption>150% scaling — app-150.png</figcaption>
+      <img src="app-150.png" alt="bench window at 150% scaling" />
+    </figure>
+    <figure>
+      <figcaption>hover, zoom (2.1×) and pan — app-interaction.png</figcaption>
+      <img src="app-interaction.png" alt="bench window after wheel zoom and hover" />
+    </figure>
+  </body>
+</html>

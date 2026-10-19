@@ -248,11 +248,17 @@ through `bench`, which is why the CLI must answer "what's here?" in one call.
 **Python computes. TypeScript renders. JSON is the contract.**
 
 ```
-Tauri shell (Rust)
-├── WebView UI (TS) ── reads index.sqlite, renders charts, entry bar
-├── bench CLI (TS)  ── append API, validation, state generation
+Electron shell (Node main process)          [ADR 0005; was: Tauri shell (Rust)]
+├── WebView renderer ── draws the core's chart specs; hover, pan, zoom; tabs
+├── src/core (TS, bundled) ── the same seam the CLI wraps; no second write path
+├── bench CLI (TS)  ── argument parsing over that seam
 └── runner (Python, long-lived) ── JSON-RPC over stdio, cancellable
 ```
+
+The shell hosts the core **in process** ([ADR 0003](adr/0003-in-process-core.md), measured at 15.7 ms
+per keystroke against a 160 ms floor for starting a command), so the core imports directly into the
+main process rather than being reached through a subprocess. [ADR 0005](adr/0005-desktop-shell.md)
+weighs Electron against Tauri-with-a-Node-sidecar and records the costs it accepted.
 
 - Embedded CPython via `python-build-standalone`, deps via `uv` + lockfile. No system Python.
 - Runner speaks newline-delimited JSON: request `{id, kind, recipe, params, input}` → response
@@ -274,9 +280,9 @@ reviewable code instead of a hand-rolled TypeScript statistics library.
 
 | concern | choice | status |
 |---|---|---|
-| shell | **Tauri 2** — small exe, MSI/NSIS, per-user install, no admin, WebView2 ships with Win10/11 | deferred, Phase 5 |
-| UI | **Svelte 5** + Vite | deferred, Phase 5 |
-| charts | restricted declarative spec; SVG renderer today, canvas when the app lands — swappable either way | **in use** (`bench chart`) |
+| shell | **Electron** ([ADR 0005](adr/0005-desktop-shell.md)) — the core is TypeScript and must run in process; ~370 MB dev install, ~490 MB working set, no installer built yet. Tauri 2 was the earlier plan; it needs a Node sidecar to host this core | **in use, unbuilt for distribution** (`pnpm app`) |
+| UI | hand-written HTML/CSS/JS in `app/renderer`, no framework yet. Svelte 5 remains the plan if the renderer outgrows it | **in use, first slice** |
+| charts | restricted declarative spec; the core's SVG today, zoom/pan by `viewBox`, canvas when a measurement says so — swappable either way | **in use** (`bench chart`, the window) |
 | analysis | **Python** sidecar, pinned env, JSON envelope, no Python in the entry path | **in use** (`bench run`) |
 | storage | JSONL event log (truth) | **in use** |
 | index | SQLite derived projection | deferred until a measured query is slow |

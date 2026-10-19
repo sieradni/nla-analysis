@@ -19,5 +19,7 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src", "tests"]
+  // `app` is the desktop shell's TypeScript entry: it is bundled by esbuild, but if it is not
+  // typechecked here the seam between the window and the core can rot silently.
+  "include": ["src", "tests", "app"]
 }

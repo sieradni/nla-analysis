@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'"
+    />
+    <title>bench</title>
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="rail" aria-label="Projects and tabs">
+        <div class="brand">
+          <span class="brand-name">bench</span>
+          <span class="brand-sub">workspace</span>
+        </div>
+
+        <section class="rail-block projects">
+          <div class="rail-head">
+            <h2 id="projects-heading">Projects</h2>
+            <button id="toggle-missing" class="ghost" type="button" hidden></button>
+            <button id="open-project" class="ghost" type="button">Open…</button>
+          </div>
+          <ul id="projects" class="list" aria-labelledby="projects-heading"></ul>
+        </section>
+
+        <section class="rail-block tabs">
+          <div class="rail-head">
+            <h2 id="tabs-heading">Tabs</h2>
+            <span id="tab-count" class="count"></span>
+          </div>
+          <ul id="tabs" class="list" aria-labelledby="tabs-heading"></ul>
+        </section>
+
+        <div class="rail-foot" id="rail-foot"></div>
+      </aside>
+
+      <main class="stage">
+        <header class="stage-head">
+          <div>
+            <div id="crumb" class="crumb">bench</div>
+            <h1 id="view-title">No tab open</h1>
+          </div>
+          <div id="view-meta" class="meta" aria-label="View facts"></div>
+        </header>
+        <div id="notice" class="notice" hidden></div>
+        <div id="panel-grid" class="grid" style="--columns: 2"></div>
+        <div id="empty" class="empty">
+          <h2>Open a project</h2>
+          <p>Choose a bench project folder. The window lists its saved tabs; it never edits data.</p>
+          <p><button id="open-project-main" class="ghost" type="button">Open a project…</button></p>
+        </div>
+      </main>
+    </div>
+
+    <div id="tooltip" class="tooltip" role="status" hidden></div>
+
+    <script src="chart.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

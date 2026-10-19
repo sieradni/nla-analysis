@@ -1,0 +1,6 @@
+# pnpm blocks dependency build scripts by default. Both of these need one to be usable, and both are
+# dev-only: esbuild fetches its platform binary, electron fetches the Chromium runtime it launches.
+# See ADR 0005 for why the desktop shell is Electron rather than a separate Rust application.
+allowBuilds:
+  esbuild: true
+  electron: true

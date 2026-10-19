@@ -21,6 +21,14 @@ user's behalf, so a fresh session must be able to pick up the project without re
 6. **Never draw a curve without n, DOF, an interval band, and a verdict.**
 7. **Never change a point's shape silently.** Extending a shape is a recorded migration.
 
+## Running it
+
+- **CLI**: `pnpm bench <command>` (or `node src/cli/index.ts <command>`).
+- **Desktop window**: `pnpm app` — builds the core bundle with esbuild, then launches Electron.
+  `pnpm app:capture` does the same and writes review frames to `docs/ui-review/`.
+  `BENCH_PROJECT=<dir> pnpm app` opens a specific project on launch.
+- **Everything else**: `pnpm verify` (typecheck, bundle, tests), `pnpm fixture`, `pnpm review`.
+
 ## How work gets done
 
 - **Small steps.** One user-visible capability per step. Aim for a diff under ~400 lines, reviewable
@@ -89,6 +97,8 @@ src/core/workspace.ts
                     through it, and the CLI is a wrapper over it (ADR 0003). The app will bind
                     this directly; it must never learn about windows or drawing.
 src/cli/            the bench command surface — argument parsing, a call, and printing
+app/                the desktop shell (ADR 0005): Electron main + preload + renderer, and
+                    core.entry.ts, which is bundled to app/core.bundle.mjs by `pnpm app:build`
 src/core/registry.ts
                     which projects exist on this machine ($BENCH_HOME/projects.json, outside every
                     project). App state, disposable: losing it loses recency, not data.

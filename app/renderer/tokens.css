@@ -1,0 +1,48 @@
+/*
+ * Design tokens. Every colour, radius, spacing step and type size in the window comes from here, so
+ * the look is one decision rather than a hundred. Light only for this slice: the app is an instrument
+ * beside a data folder, and a half-tested dark theme would be a second visual system to review.
+ */
+:root {
+  /* surfaces */
+  --paper: #fbfbfa;
+  --surface: #ffffff;
+  --rail: #f5f5f3;
+  --line: #e6e7e4;
+  --line-strong: #d4d6d2;
+
+  /* ink */
+  --ink: #1b1d1f;
+  --ink-soft: #4a4f55;
+  --muted: #71767c;
+
+  /* one accent, plus the two states that must never be mistaken for it */
+  --accent: #1f6feb;
+  --accent-soft: rgba(31, 111, 235, 0.09);
+  --warn: #9a5b00;
+  --warn-soft: rgba(154, 91, 0, 0.1);
+  --danger: #a4262c;
+  --danger-soft: rgba(164, 38, 44, 0.1);
+  --ok: #1a6b3c;
+
+  /* spacing */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+
+  /* shape */
+  --radius: 6px;
+  --rail-width: 268px;
+
+  /* type */
+  --font-ui: ui-sans-serif, 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-num: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 19px;
+}

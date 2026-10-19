@@ -12,16 +12,21 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "tsc --noEmit",
-    "verify": "pnpm check && pnpm test",
+    "verify": "pnpm check && pnpm app:build && pnpm test",
     "setup:recipes": "uv venv recipes/.venv --allow-existing && uv pip install --python recipes/.venv -r recipes/requirements.lock.txt",
     "fixture": "bash fixtures/build-drift-sensor.sh",
-    "review": "node scripts/review-charts.mjs"
+    "review": "node scripts/review-charts.mjs",
+    "app": "pnpm app:build && electron app/main.js",
+    "app:build": "esbuild app/core.entry.ts --bundle --platform=node --format=esm --target=node20 --outfile=app/core.bundle.mjs",
+    "app:capture": "pnpm app:build && node scripts/capture-app.mjs"
   },
   "engines": {
     "node": ">=22.18"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "electron": "^44.9.0",
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   }
