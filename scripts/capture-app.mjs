@@ -9,8 +9,9 @@
  * Usage: pnpm app:capture
  *   BENCH_PROJECT=<dir>   project to open (defaults to the committed drift-sensor fixture)
  *
- * Frames: three scalings and an interaction frame from the project, then an append and its undo —
- * captured on a scratch copy of the project, so the committed log is never written by a review run.
+ * Frames: three scalings and an interaction frame from the project, then an append, its undo, a
+ * refusal, and a point typed after the real CLI appended behind the window's back — captured on a
+ * scratch copy of the project, so the committed log is never written by a review run.
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -72,6 +73,7 @@ const frames = [
   'app-entry.png',
   'app-undo.png',
   'app-refused.png',
+  'app-second-writer.png',
 ]
 let missing = 0
 for (const frame of frames) {

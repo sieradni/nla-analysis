@@ -1,4 +1,4 @@
-import { mkdir, open, readFile } from 'node:fs/promises'
+import { mkdir, open, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { ulid } from './ids.ts'
 import type { BenchEvent } from './events.ts'
@@ -6,6 +6,22 @@ import type { BenchEvent } from './events.ts'
 export interface LogRead {
   events: BenchEvent[]
   problems: string[]
+}
+
+/**
+ * What the log file looked like when a reader last looked at it. Appends only ever grow the file, so
+ * a different size means someone else has written since. `mtimeMs` rides along because a second
+ * writer that appends and then truncates (a restore from a backup, say) would otherwise be invisible
+ * by size alone.
+ */
+export interface LogStamp {
+  size: number
+  mtimeMs: number
+}
+
+export function sameStamp(left: LogStamp | null, right: LogStamp | null): boolean {
+  if (left === null || right === null) return left === right
+  return left.size === right.size && left.mtimeMs === right.mtimeMs
 }
 
 export class EventLog {
@@ -34,9 +50,12 @@ export class EventLog {
    * Append several events as one write. Importing ten thousand rows one fsync at a time takes long
    * enough to look broken, and an import that half-lands after an interruption is worse than one
    * that never started.
+   *
+   * Returns the number of bytes written, so a caller can tell whether the file grew by exactly its
+   * own write or by more than that — i.e. whether another writer slipped an event in alongside it.
    */
-  async appendMany(events: BenchEvent[]): Promise<void> {
-    if (events.length === 0) return
+  async appendMany(events: BenchEvent[]): Promise<number> {
+    if (events.length === 0) return 0
     await mkdir(dirname(this.file), { recursive: true })
     const payload = events.map((event) => JSON.stringify(event) + '\n').join('')
     const handle = await open(this.file, 'a')
@@ -45,6 +64,22 @@ export class EventLog {
       await handle.sync()
     } finally {
       await handle.close()
+    }
+    return Buffer.byteLength(payload)
+  }
+
+  /**
+   * The file's identity right now, or null when there is no file yet. It is one `stat`, which is
+   * what makes it affordable to ask before every mutation — as against not asking, which costs a
+   * number that no longer traces to the log.
+   */
+  async stamp(): Promise<LogStamp | null> {
+    try {
+      const info = await stat(this.file)
+      return { size: info.size, mtimeMs: info.mtimeMs }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
     }
   }
 

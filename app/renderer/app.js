@@ -524,9 +524,10 @@
       state.lastPoint = { id: recorded.id, dataset: recorded.dataset, values: recorded.values }
 
       var afterRebuild
-      if (recorded.redraw) {
-        // A point that moves the axes, or a panel that cannot be patched: redraw the tab, which is
-        // the whole grid, and pay for it. The bar reports this number honestly.
+      if (recorded.redraw || recorded.reread) {
+        // A point that moves the axes, a panel that cannot be patched, or a log another writer grew
+        // while this window was idle: in every case the drawing on screen was made from a state the
+        // log has moved past, and patching one mark onto it would mark it current while it lies.
         var refreshed = await call(bridge.refreshView(state.project.dir, state.view.name, { draw: true }))
         afterRebuild = performance.now()
         state.opened = refreshed
@@ -556,6 +557,9 @@
         ' active in ' +
         recorded.dataset
       if (recorded.warnings.length > 0) note += ' · warning: ' + recorded.warnings.join('; ')
+      if (recorded.reread) {
+        note += ' · the log had changed on disk, so it was reread before this point was added'
+      }
       setStatus('ok', note)
 
       // Enter → painted frame, not Enter → DOM updated: two frames put the measurement after the
@@ -571,7 +575,7 @@
             record: afterRecord - startedAt,
             rebuild: afterRebuild - afterRecord,
             paint: painted - afterRebuild,
-            incremental: !recorded.redraw,
+            incremental: !recorded.redraw && !recorded.reread,
             marks: recorded.marks.length,
             untouched: recorded.untouched.length,
             commit: null,
@@ -638,6 +642,22 @@
     var startedAt = performance.now()
     try {
       var settled = await call(bridge.refreshView(state.project.dir, viewName, { draw: false }))
+      if (settled.reread) {
+        // Another writer grew the log between the paint and this catch-up. Saving the tab now would
+        // fingerprint the new log against a drawing made from the old one, so redraw instead: the
+        // tab is the thing on screen, and it has to be the thing the file describes.
+        settled = await call(bridge.refreshView(state.project.dir, viewName, { draw: true }))
+        state.opened = settled
+        state.view = settled.view
+        renderTabs()
+        renderView(captureRestore())
+        setStatus(
+          'error',
+          'The log changed on disk while this tab was open — it was reread and the tab redrawn. ' +
+            'Anything the other writer added is in that drawing, not in the one before it.',
+        )
+        return
+      }
       state.opened = settled
       state.view = settled.view
       settled.counts.forEach(function (count, index) {
@@ -710,6 +730,12 @@
       state.entryKey = null
       renderTabs()
       renderView()
+      if (state.opened.reread) {
+        setStatus(
+          'ok',
+          'The log had changed on disk since this window read it, so it was reread before this tab was drawn.',
+        )
+      }
       // The product is typing a number. Opening a tab puts the cursor where that happens; Tab still
       // reaches the panel for keyboard pan and zoom.
       focusFirstField()

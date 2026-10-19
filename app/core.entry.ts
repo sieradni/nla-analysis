@@ -12,9 +12,10 @@
  *
  * One `Workspace` is kept per open project. That is what makes the write path a keystroke rather
  * than a log re-read: `recordPoint` folds the new event into memory instead of re-reading the file
- * (ADR 0003). It also means the window sees its own writes immediately and other processes' writes
- * only when a tab is reopened — `openView` pulls before answering, `refreshView` does not, because
- * refresh runs on the hot path right after an append this process made.
+ * (ADR 0003). Another process's writes are picked up by the `stat` check `Workspace` runs before
+ * every mutation and before every persist (ADR 0007), so a long-lived window cannot report a count
+ * that contradicts the log. The facade only reports when a repair happened; it never makes one
+ * itself, because then there would be two places that decide what "current" means.
  */
 import { APP_ROOT, assessRuns } from '../src/core/analysis.ts'
 import { incrementalMark, renderChart } from '../src/core/chart.ts'
@@ -118,6 +119,11 @@ export interface OpenedView {
   staleRuns: number
   /** Where a typed point would land, and which fields to ask for. */
   entry: EntryTarget | null
+  /**
+   * True when the log had changed on disk and was reread before this answer was built. The window
+   * says so when it happens: a reader is entitled to know the ground moved underneath a tab.
+   */
+  reread: boolean
 }
 
 /**
@@ -140,7 +146,7 @@ function entryTarget(workspace: Workspace, view: ViewFile): EntryTarget | null {
   }
 }
 
-async function describe(workspace: Workspace, view: ViewFile): Promise<OpenedView> {
+async function describe(workspace: Workspace, view: ViewFile, reread = false): Promise<OpenedView> {
   const statuses = await panelStatuses(workspace, view)
   const freshness = await assessRuns(APP_ROOT, workspace.state)
   return {
@@ -149,17 +155,19 @@ async function describe(workspace: Workspace, view: ViewFile): Promise<OpenedVie
     svgs: view.panels.map((panel) => renderChart(panel.chart)),
     staleRuns: [...freshness.values()].filter((entry) => entry.status !== 'fresh').length,
     entry: entryTarget(workspace, view),
+    reread,
   }
 }
 
 export async function openView(dir: string, name: string): Promise<OpenedView> {
   const workspace = await workspaceFor(dir)
-  // A tab click is not on the keystroke path, so pay for a fresh read: a CLI append made while the
-  // window was idle must not be invisible. `refreshView` deliberately does not do this.
-  await workspace.pull()
+  // A tab click is not on the keystroke path, so it pays for a fresh read when one is needed: an
+  // append made by the CLI while the window was idle must not be invisible. `freshen` decides, and
+  // costs one `stat` when nothing has changed.
+  const reread = await workspace.freshen()
   sessionView = null
   const view = await openViewFile(workspace.dir, name)
-  return describe(workspace, view)
+  return describe(workspace, view, reread)
 }
 
 export interface IncrementalMark {
@@ -187,6 +195,8 @@ export interface AppendedPoint {
   untouched: number[]
   /** True when the window has to repaint the whole tab instead of patching it. */
   redraw: boolean
+  /** True when the log had been changed by another writer and was reread before this append. */
+  reread: boolean
 }
 
 /**
@@ -196,6 +206,9 @@ export interface AppendedPoint {
  */
 export async function recordPoint(dir: string, draft: PointDraft, viewName?: string): Promise<AppendedPoint> {
   const workspace = await workspaceFor(dir)
+  // Counted around the whole call: `Workspace` repairs itself before it reads anything it will
+  // validate against, and this is how the window learns that a repair happened.
+  const readsBefore = workspace.logReads
   const recorded = await workspace.recordPoint(draft)
   await workspace.writeStateBrief()
   const base = {
@@ -207,8 +220,10 @@ export async function recordPoint(dir: string, draft: PointDraft, viewName?: str
     active: workspace.dataset(recorded.dataset).points.length,
   }
 
+  const reread = workspace.logReads > readsBefore
+
   // No tab is open, or the point is not a plotted pair: nothing to patch, and nothing to draw either.
-  if (viewName === undefined) return { ...base, marks: [], untouched: [], redraw: false }
+  if (viewName === undefined) return { ...base, marks: [], untouched: [], redraw: false, reread }
 
   const view = await openViewFile(workspace.dir, viewName)
   const point: ChartPoint = {
@@ -259,7 +274,7 @@ export async function recordPoint(dir: string, draft: PointDraft, viewName?: str
     })
   }
 
-  return { ...base, marks, untouched, redraw }
+  return { ...base, marks, untouched, redraw, reread }
 }
 
 /** Read a coordinate back out of the mark the core just produced, rather than computing it twice. */
@@ -297,6 +312,8 @@ export interface RefreshedView {
   counts: number[]
   /** Each panel's evidence line after the rebuild, for a drawing that was patched rather than redrawn. */
   footers: (string | null)[]
+  /** True when the log had changed on disk and was reread before this rebuild. */
+  reread: boolean
 }
 
 export interface RefreshOptions {
@@ -323,6 +340,9 @@ export async function refreshView(
 ): Promise<RefreshedView> {
   const draw = options.draw !== false
   const workspace = await workspaceFor(dir)
+  // This saves the tab, so it is a persist path like STATE.md: it must not fingerprint a bind the
+  // file has moved past. After a write this process made, the stat matches and nothing is reread.
+  const reread = await workspace.freshen()
   const view = await openViewFile(workspace.dir, name)
   let statuses = await panelStatuses(workspace, view)
   const refreshed: number[] = []
@@ -364,5 +384,6 @@ export async function refreshView(
     kept,
     counts: view.panels.map((panel) => (typeof panel.n === 'number' ? panel.n : 0)),
     footers: view.panels.map((panel) => panel.chart.footer ?? null),
+    reread,
   }
 }

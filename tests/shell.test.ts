@@ -1,9 +1,11 @@
+import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { promisify } from 'node:util'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 /**
  * The desktop shell does not import `src/core`; it imports the bundle that `pnpm app:build` produces,
@@ -88,6 +90,7 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     const dir = await scratchProject()
     const opened = (await api.openView!(dir, 'drift over time')) as Window
     expect(opened.entry).toMatchObject({ dataset: 'main', shape: 'xy.v1', active: 14 })
+    expect(opened.reread).toBe(false)
     expect(opened.entry.fields.map((field: { name: string }) => field.name)).toEqual(['x', 'y'])
 
     const recorded = (await api.recordPoint!(dir, { values: { x: 6.5, y: 16.4 } }, 'drift over time')) as Window
@@ -96,6 +99,9 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     // (6.5, 16.4) is inside the axes the tab already has, so the window can draw it as one more
     // mark instead of re-rendering ten thousand of them: that is what keeps a keystroke cheap.
     expect(recorded.redraw).toBe(false)
+    // Nothing else wrote to the log, so no re-read was paid for on the keystroke path: the stat
+    // check must be a no-op in the common case, or the entry budget pays for a rare event.
+    expect(recorded.reread).toBe(false)
     expect(recorded.marks).toHaveLength(1)
     expect(recorded.marks[0].index).toBe(1)
     expect(recorded.marks[0].id).toBe(recorded.id)
@@ -108,6 +114,7 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     // drawn by a recipe, so it is kept — and said to be kept — rather than silently left claiming
     // to describe data it no longer read.
     expect(refreshed.refreshed).toEqual([1])
+    expect(refreshed.reread).toBe(false)
     expect(refreshed.kept).toHaveLength(1)
     expect(refreshed.kept[0].index).toBe(0)
     expect(refreshed.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
@@ -186,5 +193,108 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     })
     // Nothing was written: a refusal is not a partial append.
     expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
+  })
+})
+
+/**
+ * The scenario the audit could only reproduce at the core layer: a window stays open while a real
+ * agent runs `bench` in a terminal, and the window's next write has to be built on what the file now
+ * says. The harness drives the *bundle* (the same module the IPC handlers call) and spawns the real
+ * binary, so the two writers are genuinely separate processes — no shared in-memory state can hide a
+ * missed re-read.
+ */
+describe.skipIf(!built)('the bundled core, with the CLI writing beside it', () => {
+  const scratch: string[] = []
+  let benchHome: string
+  const cli = join(process.cwd(), 'src', 'cli', 'index.ts')
+
+  beforeAll(async () => {
+    // Every CLI command records a recent. Point the registry at a throwaway home so this harness
+    // cannot leave scratch projects in the operator's list, and so the bundle's own writes land there
+    // too.
+    benchHome = await mkdtemp(join(tmpdir(), 'bench-shell-cli-home-'))
+    process.env.BENCH_HOME = benchHome
+  })
+
+  async function scratchProject(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'bench-shell-cli-'))
+    scratch.push(root)
+    const dir = join(root, 'drift-sensor')
+    await cp(fixture, dir, { recursive: true })
+    return dir
+  }
+
+  async function bench(dir: string, args: string[]): Promise<string> {
+    const { stdout } = await promisify(execFile)('node', [cli, '--project', dir, ...args], {
+      cwd: process.cwd(),
+      env: { ...process.env, BENCH_HOME: benchHome },
+    })
+    return stdout
+  }
+
+  const shell = () => import(pathToFileURL(bundlePath).href) as Promise<Window>
+
+  afterEach(async () => {
+    while (scratch.length > 0) await rm(scratch.pop()!, { recursive: true, force: true })
+  })
+
+  it('rereads a log the CLI grew, and persists only counts the log supports', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const opened = (await api.openView!(dir, 'drift over time')) as Window
+    expect(opened.entry.active).toBe(14)
+
+    // The window sits idle in the background; an agent — the way this product is meant to be
+    // operated — appends a point through the real binary.
+    const cliLine = await bench(dir, ['add', '--x', '7.1', '--y', '18.2'])
+    expect(cliLine).toContain('active in main')
+
+    // The window has not looked yet. That is the point: it is the *next write* that must repair.
+    const recorded = (await api.recordPoint!(dir, { values: { x: 6.5, y: 16.4 } }, 'drift over time')) as Window
+    expect(recorded.reread).toBe(true)
+    // 14 in the fixture + the CLI's row + this one. Before the check it would have said 15, and said
+    // it in STATE.md and in the tab it then saved.
+    expect(recorded.active).toBe(16)
+
+    const refreshed = (await api.refreshView!(dir, 'drift over time')) as Window
+    expect(refreshed.view.panels[1].n).toBe(16)
+
+    // Ground truth from a third reader: the CLI's own view of the same file.
+    const listed = JSON.parse(await bench(dir, ['list', '--json'])) as { data: unknown[] }
+    expect(listed.data).toHaveLength(16)
+
+    const saved = JSON.parse(await readFile(join(dir, 'views', 'drift-over-time.json'), 'utf8')) as Window
+    expect(saved.panels[1].n).toBe(16)
+    expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('16 active points (17 recorded)')
+    // The tab's fingerprint was taken against the full log, so reopening it is not a stale tab.
+    const shown = JSON.parse(await bench(dir, ['view', 'show', 'drift over time', '--json'])) as Window
+    expect(shown.data.status[1].state).toBe('current')
+  })
+
+  it('does not undo a point the CLI retracted while the window still held it', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    await api.openView!(dir, 'drift over time')
+
+    const recorded = (await api.recordPoint!(dir, { values: { x: 6.5, y: 16.4 } }, 'drift over time')) as Window
+    // The same point is withdrawn from the terminal, not from this window.
+    await bench(dir, ['retract', recorded.id, '--reason', 'withdrawn by the agent'])
+
+    // Undo from the window must refuse rather than append a second retraction, and must name the
+    // point: the window's cached bind still shows it active, so this answer can only come from a
+    // reread that happened before the write was built.
+    await expect(api.retractPoint!(dir, recorded.id, 'undo from the window')).rejects.toThrow(
+      new RegExp(`point "${recorded.id}" is already retracted`),
+    )
+
+    const log = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+    const retractions = log
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      // The fixture already carries one retraction of its own, so count only this point's.
+      .filter((event: Window) => event.type === 'point_retracted' && event.supersedes === recorded.id)
+    expect(retractions).toHaveLength(1)
+    expect(retractions[0].reason).toBe('withdrawn by the agent')
   })
 })

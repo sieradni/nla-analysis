@@ -10,7 +10,8 @@
  * answer belongs in `src/core`, not here.
  */
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as bench from './core.bundle.mjs'
@@ -205,6 +206,14 @@ async function submitEntry(x, y) {
   return { timing: await waitForTiming(before), synthetic: true }
 }
 
+/** Empty both entry fields, so the next typed point starts from nothing. */
+function clearFields() {
+  return window.webContents.executeJavaScript(`(() => {
+    document.querySelectorAll('#entry-fields input').forEach((input) => { input.value = '' })
+    return true
+  })()`)
+}
+
 /** Read one entry field, so a harness can tell "typed" from "not delivered". */
 function fieldValue(name) {
   return window.webContents.executeJavaScript(
@@ -280,6 +289,25 @@ async function currentTimingId() {
  * Type a point and press Enter, exactly as a person would, then report what the window did with it.
  * `values` is [x, y]: the fixture's shape is `xy.v1`, and both fields are required.
  */
+/**
+ * The real `bench` binary, as an agent in a terminal would run it. Capture-only: the window itself
+ * never shells out to the CLI, because that would be a second write path (ADR 0003).
+ */
+async function runCli(args) {
+  const cli = join(here, '..', 'src', 'cli', 'index.ts')
+  await new Promise((done, fail) => {
+    // `process.execPath` here is Electron, not Node: `ELECTRON_RUN_AS_NODE` is what makes the same
+    // binary behave as the runtime the CLI expects, without depending on where `node` is installed.
+    const child = spawn(process.execPath, [cli, '--project', writableDir, ...args], {
+      cwd: join(here, '..'),
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      stdio: 'ignore',
+    })
+    child.on('error', fail)
+    child.on('exit', (code) => (code === 0 ? done() : fail(new Error(`bench ${args[0]} exited ${code}`))))
+  })
+}
+
 /** The capture run's entry: real keystrokes, and loudly wrong if they do not land. */
 async function enterPoint(x, y) {
   const { timing, synthetic } = await submitEntry(x, y)
@@ -443,6 +471,45 @@ async function capture() {
       throw new Error('the refused entry did not keep what was typed')
     }
     await writeFile(join(captureDir, 'app-refused.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // A second writer, which is how this product is meant to be operated: an agent runs `bench` in a
+    // terminal while the window is open. This spawns the real binary, not a second Workspace in this
+    // process, so the window's cached bind is genuinely behind the file (ADR 0007).
+    await clearFields()
+    await runCli(['add', '--x', '7.2', '--y', '8.4'])
+    // A child process can take the focus on Windows; without it the entry frame would be synthetic.
+    if (!(await focusWindowForInput())) throw new Error('the window never took focus back')
+    await clearFields()
+    const stale = JSON.parse(await entryState())
+    console.log('[bench] second-writer-stale ' + JSON.stringify({ readout: stale.readout, marks: stale.marks }))
+
+    const secondTiming = await enterPoint(6.4, 17.1)
+    await sleep(800)
+    const settledState = JSON.parse(await entryState())
+    const savedView = JSON.parse(await readFile(join(writableDir, 'views', 'drift-over-time.json'), 'utf8'))
+    console.log(
+      '[bench] second-writer ' +
+        JSON.stringify({
+          timing: secondTiming,
+          status: settledState.status,
+          readout: settledState.readout,
+          marks: settledState.marks,
+          panelN: savedView.panels[1].n,
+        }),
+    )
+    // The frame is only worth anything if it shows the repair: the count has to include the row this
+    // window never saw arrive, the bar has to say it reread, and the saved tab must agree.
+    if (!/the log had changed on disk/.test(settledState.status || '')) {
+      throw new Error('the window did not say it reread the log before writing')
+    }
+    if (!/n = 16/.test(settledState.readout)) {
+      throw new Error(`the bar should read n = 16, it reads "${settledState.readout}"`)
+    }
+    if (savedView.panels[1].n !== 16) {
+      throw new Error(`the saved tab says n = ${savedView.panels[1].n}, the log holds 16`)
+    }
+    await writeFile(join(captureDir, 'app-second-writer.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
   }
 

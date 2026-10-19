@@ -69,6 +69,46 @@ describe('Workspace', () => {
     expect(pulled.datasets.get('main')!.points).toHaveLength(before + 1)
   })
 
+  it('does not append onto a bind the log has moved past', async () => {
+    const workspace = await Workspace.open(project)
+    const before = workspace.dataset().points.length
+    const readsBefore = workspace.logReads
+
+    // An agent runs `bench add` in a terminal while this workspace holds its cached state. This is
+    // the scenario that produced a quiet lie: the next append folded onto a bind without this row,
+    // and every count after it was one short of the log it claimed to summarise.
+    await run('node', [cli, '--project', project, 'add', '--x', '4', '--y', '8'], { cwd: process.cwd() })
+    expect(workspace.dataset().points).toHaveLength(before)
+
+    await workspace.recordPoint({ values: { x: 2, y: 3 } })
+    // A repair happened, and it happened before the write — not after it, as a correction.
+    expect(workspace.logReads).toBeGreaterThan(readsBefore)
+    expect(workspace.dataset().points).toHaveLength(before + 2)
+
+    // The file is the authority: a workspace opened now agrees, point for point, with no gap of one.
+    const fresh = await Workspace.open(project)
+    const ids = (points: { id: string }[]) => points.map((point) => point.id).sort()
+    expect(ids(fresh.dataset().points)).toEqual(ids(workspace.dataset().points))
+  })
+
+  it('writes STATE.md from the log, not from a bind another writer has outgrown', async () => {
+    const workspace = await Workspace.open(project)
+    const readsBefore = workspace.logReads
+
+    await run('node', [cli, '--project', project, 'add', '--x', '5', '--y', '10'], { cwd: process.cwd() })
+    const stale = workspace.dataset().points.length
+
+    await workspace.writeStateBrief()
+    expect(workspace.logReads).toBeGreaterThan(readsBefore)
+
+    // The brief is the cold-start view of the log. If it were written from the stale bind it would
+    // say one point fewer than the file holds — the precise lie this check exists to prevent.
+    const fresh = await Workspace.open(project)
+    expect(stale).toBe(fresh.dataset().points.length - 1)
+    const brief = await readFile(join(project, 'STATE.md'), 'utf8')
+    expect(brief).toContain(`${fresh.dataset().points.length} active points`)
+  })
+
   it('refuses a point its own shape rejects, and writes nothing', async () => {
     const workspace = await Workspace.open(project)
     const before = await readFile(join(project, 'data', 'events.jsonl'), 'utf8')

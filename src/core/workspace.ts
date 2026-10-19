@@ -19,6 +19,7 @@ import { APP_ROOT, assessRuns, buildRunInput, chartSpecFor, hashInput, type RunF
 import { activePoints, bind, type Point, type ProjectState, type RunRecord } from './binder.ts'
 import { renderChart, type ChartSpec } from './chart.ts'
 import { BenchError } from './errors.ts'
+import { sameStamp, type LogStamp } from './log.ts'
 import { makeEvent } from './events.ts'
 import type { BenchEvent, PointValue, Shape } from './events.ts'
 import {
@@ -109,6 +110,15 @@ export class Workspace {
   private events: BenchEvent[]
   private current: ProjectState
   private logProblems: string[]
+  /**
+   * The file as this workspace last saw it. Every mutation checks this first: a window that stays
+   * open while an agent appends through `bench` would otherwise fold its own event onto a bind that
+   * never contained the agent's, and then persist counts — into STATE.md and into a tab's saved
+   * view — that contradict the log. The check is one `stat`; the repair is a re-read.
+   */
+  private logStamp: LogStamp | null = null
+  /** How many times the log has been read from disk. Callers use it to report a repair, not to make one. */
+  private reads = 0
 
   /** The open project: its directory, config, log and session id. */
   readonly handle: ProjectHandle
@@ -118,11 +128,14 @@ export class Workspace {
     events: BenchEvent[],
     state: ProjectState,
     logProblems: string[],
+    logStamp: LogStamp | null,
   ) {
     this.handle = handle
     this.events = events
     this.current = state
     this.logProblems = logProblems
+    this.logStamp = logStamp
+    this.reads = 1
   }
 
   /** Open the project containing `dir`, or at `dir` itself. */
@@ -134,8 +147,12 @@ export class Workspace {
       })
     }
     const handle = session === undefined ? await openProject(found) : await openProject(found, session)
+    // Stamped *before* the read on purpose: a write landing in between leaves us stamped older than
+    // the file, so the next check rereads. The opposite order would let a concurrent append be
+    // attributed to our own read, which is the one mistake that cannot be recovered from.
+    const stamp = await handle.log.stamp()
     const { events, problems } = await handle.log.read()
-    return new Workspace(handle, events, bind(events), problems)
+    return new Workspace(handle, events, bind(events), problems, stamp)
   }
 
   // --- reading -------------------------------------------------------------------------------
@@ -164,6 +181,11 @@ export class Workspace {
   /** Problems found while reading the log, as opposed to while folding it. */
   get problems(): string[] {
     return this.logProblems
+  }
+
+  /** How many times this workspace has read the log. A change means a repair happened. */
+  get logReads(): number {
+    return this.reads
   }
 
   /**
@@ -229,37 +251,84 @@ export class Workspace {
     return assessRuns(APP_ROOT, this.current)
   }
 
+  // --- freshness -----------------------------------------------------------------------------
+
+  /**
+   * Whether the log on disk is still the one this workspace bound.
+   *
+   * The check is a `stat` (45 µs measured) and the repair is a re-read (21 ms at 10k points). Paying
+   * microseconds on every mutation to avoid a repair that costs milliseconds *and* produces a number
+   * nobody can trace is not a close call. See ADR 0007.
+   */
+  async isStale(): Promise<boolean> {
+    return !sameStamp(await this.handle.log.stamp(), this.logStamp)
+  }
+
+  /**
+   * Re-read the log if someone else has written since this workspace read it. Returns true when a
+   * repair happened, so a caller can say so rather than pretending it knew all along.
+   */
+  async freshen(): Promise<boolean> {
+    if (!(await this.isStale())) return false
+    await this.pull()
+    return true
+  }
+
+  /**
+   * Re-read the log from disk. Use when another process may have appended.
+   *
+   * The stamp is taken before the read, for the same reason `open` does it: an append that lands
+   * while we are reading leaves us stamped older than the file, and the worst outcome is one extra
+   * re-read — never a silently missed event.
+   */
+  async pull(): Promise<ProjectState> {
+    const stamp = await this.handle.log.stamp()
+    const { events, problems } = await this.handle.log.read()
+    this.events = events
+    this.logProblems = problems
+    this.current = bind(events)
+    this.logStamp = stamp
+    this.reads += 1
+    return this.current
+  }
+
   // --- writing -------------------------------------------------------------------------------
 
   /**
    * Append to the log, fold it into the in-memory state, and leave the disk brief alone.
    *
    * Folding into memory rather than re-reading the file is what keeps a keystroke inside budget
-   * (ADR 0003: 15.7 ms versus a full re-read on top). `pull` exists for when something else may have
-   * written to the log.
+   * (ADR 0003: 15.7 ms versus a full re-read on top). The freshness check at the top is the backstop
+   * for the invariant: no write may be built on a bind that no longer matches the file. The mutating
+   * methods below check earlier still, before they *read* the state they validate against.
    */
   private async append(events: BenchEvent[]): Promise<void> {
     if (events.length === 0) return
-    await this.handle.log.appendMany(events)
+    await this.freshen()
+    const before = this.logStamp
+    const written = await this.handle.log.appendMany(events)
     this.events = [...this.events, ...events]
     this.current = bind(this.events)
-  }
-
-  /** Re-read the log from disk. Use when another process may have appended. */
-  async pull(): Promise<ProjectState> {
-    const { events, problems } = await this.handle.log.read()
-    this.events = events
-    this.logProblems = problems
-    this.current = bind(events)
-    return this.current
+    const after = await this.handle.log.stamp()
+    // The file must have grown by exactly what we wrote. More than that means another writer put an
+    // event in beside ours, and the bind we just built does not contain it — so forget the stamp and
+    // let the next check reread, rather than believing a size that includes an event we never read.
+    this.logStamp =
+      before !== null && after !== null && after.size === before.size + written ? after : null
   }
 
   /** Write STATE.md from the current state. The CLI does this after every mutation. */
   async writeStateBrief(): Promise<void> {
+    // It persists, so it checks first: a brief written from a bind the file has moved past is a lie
+    // of exactly the kind this whole mechanism exists to prevent.
+    await this.freshen()
     await writeStateBrief(this.handle, this.current)
   }
 
   async recordPoint(draft: PointDraft): Promise<RecordedPoint> {
+    // Before anything is read out of the state — which shape validates this, which dataset it lands
+    // in — because a value read from a stale bind is a wrong answer, not a slow one.
+    await this.freshen()
     const datasetId = this.resolveDataset(draft.dataset)
     const shape = this.shapeOf(datasetId)
     if (Object.keys(draft.values).length === 0) {
@@ -294,11 +363,13 @@ export class Workspace {
 
   /** Bulk append, one write. Used by import, where a per-row fsync would be a lie about speed. */
   async appendAll(events: BenchEvent[]): Promise<ProjectState> {
+    await this.freshen()
     await this.append(events)
     return this.current
   }
 
   async correctPoint(id: string, patch: Record<string, PointValue>, reason?: string): Promise<PointCorrection> {
+    await this.freshen()
     const found = this.findPoint(id)
     if (!found) throw new BenchError('missing', `no point with id "${id}"`)
     if (Object.keys(patch).length === 0) {
@@ -332,8 +403,17 @@ export class Workspace {
   }
 
   async retractPoint(id: string, reason?: string): Promise<PointRetraction> {
+    await this.freshen()
     const found = this.findPoint(id)
     if (!found) throw new BenchError('missing', `no point with id "${id}"`)
+    // A second retraction would be a record of an act that changed nothing. This is reachable from
+    // the window: undo a point, and then undo again — or undo one the CLI already withdrew while the
+    // window was open. Refuse, and name the point, rather than appending a duplicate event.
+    if (found.point.status === 'retracted') {
+      throw new BenchError('invalid', `point "${id}" is already retracted`, {
+        hint: 'nothing to retract; `bench list` shows active points',
+      })
+    }
 
     const event = makeEvent('point_retracted', this.handle.session, {
       dataset: found.dataset,
@@ -345,6 +425,7 @@ export class Workspace {
   }
 
   async recordDecision(text: string, tags?: string[]): Promise<BenchEvent> {
+    await this.freshen()
     const event = makeEvent('decision_recorded', this.handle.session, {
       text,
       ...(tags === undefined ? {} : { tags }),
@@ -358,6 +439,7 @@ export class Workspace {
    * they differ in where the parameters come from and in what they print, not in any of this.
    */
   async recordAnalysis(runner: RecipeRunner, request: AnalysisRequest): Promise<AnalysisOutcome> {
+    await this.freshen()
     const datasetId = this.resolveDataset(request.dataset ?? request.repeatOf?.dataset)
     const input = buildRunInput(this.current, datasetId)
     if (!input) throw new BenchError('missing', `no dataset "${datasetId}"`)

@@ -17,16 +17,20 @@ Format: date · step · what to look at · verdict · follow-up.
 | 2026-10-19 | Point entry (ADR 0006) | (1) Type `6.5`, `Tab`, `16.4`, Enter: the mark appears, the plot's own `n = 15` and the footer agree, and the bar reports what it recorded plus `13 ms` for the whole path. (2) The fitted panel turns `stale` with the exact command that fixes it, while the plot beside it is `current` — the window refreshed what it can and says what it cannot. | **pending** | captured on a scratch copy of the fixture, so the committed log was not written by a review run. The stale fitted panel is the intended behaviour, not a failure — say if it reads that way |
 | 2026-10-19 | Undo (Ctrl+Z in an empty bar) | (1) The point disappears and **both** panels return to `current`: the retraction put the input fingerprint back to what the file was drawn from. (2) The status line names the record and says it stays in the log — nothing was deleted. | **pending** | keyboard-only path: only fires when the bar is empty, so it never steals away an edit-in-progress undo |
 | 2026-10-19 | Entry refused | (1) `seven` is still in the `x` field after the refusal — a rejection that ate the number would be a worse bug than the rejection. (2) Both fields are marked and the two problems are named the way the shape names them, so the fix is obvious from the frame. Nothing was written: the count is still 14. | **pending** | the capture asserts the text survived (`typed.x === 'seven'`), so this frame cannot silently rot |
+| 2026-10-19 | A second writer (ADR 0007) | (1) [app-second-writer.png](ui-review/app-second-writer.png): the bar says `16 active in main · the log had changed on disk, so it was reread before this point was added`, and `n = 16` — the capture asserts the same numbers, so the frame cannot rot. (2) The distance from stale to right is the caption's whole point: before the typed point the bar read `n = 14` while the log held 15, and the plot panel under the strip had 14 marks. | **pending** | captured by spawning the real `bench` binary in the middle of the capture run, so this is a genuine two-process frame; the fitted panel beside it still reads `stale`, which is correct and not the defect |
 
 ## Desktop window — what to look at
 
 The frames are [app-100.png](ui-review/app-100.png), [app-125.png](ui-review/app-125.png),
 [app-150.png](ui-review/app-150.png), [app-interaction.png](ui-review/app-interaction.png),
-[app-entry.png](ui-review/app-entry.png), [app-undo.png](ui-review/app-undo.png) and
-[app-refused.png](ui-review/app-refused.png), captured from the real window by `pnpm app:capture`. The
-entry, undo and refusal frames are typed into with real keystrokes, on a scratch copy of the project
-so the committed log stays untouched. `docs/ui-review/index.html` shows all seven on one page when
-opened in a browser; the in-app Preview tab serves only the HTML file it is handed, so the images
+[app-entry.png](ui-review/app-entry.png), [app-undo.png](ui-review/app-undo.png),
+[app-refused.png](ui-review/app-refused.png) and
+[app-second-writer.png](ui-review/app-second-writer.png), captured from the real window by
+`pnpm app:capture`. The entry, undo, refusal and second-writer frames are typed into with real
+keystrokes, on a scratch copy of the project so the committed log stays untouched. The last of them
+runs the real `bench` binary mid-capture — another process writes the log, then a point is typed —
+so it is evidence about two writers, not one. `docs/ui-review/index.html` shows all eight on one page
+when opened in a browser; the in-app Preview tab serves only the HTML file it is handed, so the images
 there come from opening the folder instead.
 
 - **Rail**: projects most-recent-first, the open one marked; tabs under it with panel counts. Projects

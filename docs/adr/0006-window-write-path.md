@@ -76,10 +76,14 @@ deep-copying it.
 
 - 135 ms when a typed point rescales the axes, because that is a full redraw. Canvas renderers exist
   for this and requirement §4 already anticipates one; this is the number that would trigger it.
-- The window holds a `Workspace` and a view in memory, so an append made by the *CLI* while the
-  window is open is not visible until a tab is reopened. Opening a tab pulls from disk; the hot path
-  does not, because re-reading a 10k-point log per keystroke is the thing ADR 0003 measured away.
-- Two megabytes of view JSON are written per point, after the paint. That is disk churn a snapshot
+- The window holds a `Workspace` and a view in memory. What that means for another writer was
+  mis-stated here at first: it is not just that a CLI append is invisible until a tab is reopened —
+  the window's *next write* used to be built on the pre-append bind, and persisted a count one short
+  of the log into `STATE.md` and into the tab file. [ADR 0007](0007-freshness-before-writes.md) puts a
+  `stat` check in front of every mutation and every persist (0.045 ms, 20.8 ms when a repair actually
+  happens). An idle window still draws what it last read.
+- **1.14 MB of view JSON is written per point, after the paint** (measured at 10k points; this ADR
+  first said two megabytes, which was an estimate, not a measurement). That is disk churn a snapshot
   format would avoid, and it is the price of "a tab is a file".
 
 ## Revisit if
@@ -87,4 +91,5 @@ deep-copying it.
 - The rescale case becomes common (a window that is usually showing a point the user is about to
   leave behind). Then the answer is a canvas renderer with a fixed cost, not a cleverer patch.
 - Someone needs a window that is *not* the only writer — a second window, an agent mid-session.
-  That needs a cheap "did the log change?" check before painting, which does not exist yet.
+  Writes are safe now (ADR 0007); what does not exist is a *live* window, one that shows another
+  writer's work without being asked to.
