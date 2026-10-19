@@ -26,6 +26,7 @@ user's behalf, so a fresh session must be able to pick up the project without re
 - **CLI**: `pnpm bench <command>` (or `node src/cli/index.ts <command>`).
 - **Desktop window**: `pnpm app` — builds the core bundle with esbuild, then launches Electron.
   `pnpm app:capture` does the same and writes review frames to `docs/ui-review/`.
+  `pnpm app:measure` builds a 10k-point project and reports keystroke→paint in the real window.
   `BENCH_PROJECT=<dir> pnpm app` opens a specific project on launch.
 - **Everything else**: `pnpm verify` (typecheck, bundle, tests), `pnpm fixture`, `pnpm review`.
 

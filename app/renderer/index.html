@@ -50,9 +50,24 @@
         <div id="panel-grid" class="grid" style="--columns: 2"></div>
         <div id="empty" class="empty">
           <h2>Open a project</h2>
-          <p>Choose a bench project folder. The window lists its saved tabs; it never edits data.</p>
+          <p>Choose a bench project folder. The window lists its saved tabs and appends points.</p>
           <p><button id="open-project-main" class="ghost" type="button">Open a project…</button></p>
         </div>
+
+        <!-- The entry path: one row of fields for the open tab's shape, and the two facts that make
+             a write trustworthy — what it recorded, and how long the repaint took. -->
+        <form id="entry" class="entry" hidden autocomplete="off" novalidate>
+          <div id="entry-fields" class="entry-fields"></div>
+          <button id="entry-add" class="entry-add" type="submit">
+            <span>Add point</span>
+            <kbd>Enter</kbd>
+          </button>
+          <button id="entry-undo" class="ghost entry-undo" type="button" disabled>
+            Undo last point
+          </button>
+          <div id="entry-readout" class="entry-readout"></div>
+          <div id="entry-status" class="entry-status" role="status" aria-live="polite" hidden></div>
+        </form>
       </main>
     </div>
 

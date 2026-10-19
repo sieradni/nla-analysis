@@ -14,14 +14,19 @@ Format: date · step · what to look at · verdict · follow-up.
 | 2026-10-19 | Two regimes (`bench run drift`, fixture) | (1) One accent hue doing two jobs: solid before the recalibration, dashed after, named in a legend on its own plate. (2) The caption states both slopes with intervals and the p-value, so the file is readable without the terminal. | **pending** | the verdict is `tentative`, not `supported` — the permutation penalty for a data-chosen split. Worth confirming that reads as honest rather than weak |
 | 2026-10-19 | Desktop window, first slice (ADR 0005) | (1) Projects in the rail, tabs under them, and the chart filling the stage — the window opens on `drift-sensor` / “drift over time” with two panels side by side. (2) Each panel's strip carries the facts that survive zooming: dataset, recipe and params, verdict, `n`, and a `current` badge from the fingerprint check. | **pending** | no data entry in this slice; the empty state and error states were only seen by forcing them. Panels keep the chart's own aspect ratio, so a two-panel view leaves the lower stage empty |
 | 2026-10-19 | Window interaction (hover, zoom, pan) | (1) The ring sits on the hovered mark and the tooltip names the record — `01M58Y41VF83K6TQ8XWWK9VN0S`, `x 3  y 8.09`, `main · xy.v1` — so a mark can be traced to the log. (2) The zoom badge reads `2.1×` after two wheel steps and the crop has moved: zoom is a crop of the same drawing, so labels and marks cannot drift from each other. | **pending** | the tooltip shows the raw ULID; shortened ids would be easier to read but harder to match in the log. Zoom crops the axis labels with the plot — pinning them needs a redraw, not a `viewBox` move |
+| 2026-10-19 | Point entry (ADR 0006) | (1) Type `6.5`, `Tab`, `16.4`, Enter: the mark appears, the plot's own `n = 15` and the footer agree, and the bar reports what it recorded plus `13 ms` for the whole path. (2) The fitted panel turns `stale` with the exact command that fixes it, while the plot beside it is `current` — the window refreshed what it can and says what it cannot. | **pending** | captured on a scratch copy of the fixture, so the committed log was not written by a review run. The stale fitted panel is the intended behaviour, not a failure — say if it reads that way |
+| 2026-10-19 | Undo (Ctrl+Z in an empty bar) | (1) The point disappears and **both** panels return to `current`: the retraction put the input fingerprint back to what the file was drawn from. (2) The status line names the record and says it stays in the log — nothing was deleted. | **pending** | keyboard-only path: only fires when the bar is empty, so it never steals away an edit-in-progress undo |
+| 2026-10-19 | Entry refused (missing frame) | A typo is not in the frames: the capture types valid numbers. The refusal path is covered by tests and by hand — the field is marked, focus moves to it, and the typed text stays exactly where it was. | **pending** | worth a frame of its own once the verdict says the bar is staying |
 
 ## Desktop window — what to look at
 
 The frames are [app-100.png](ui-review/app-100.png), [app-125.png](ui-review/app-125.png),
-[app-150.png](ui-review/app-150.png) and [app-interaction.png](ui-review/app-interaction.png),
-captured from the real window by `pnpm app:capture`. `docs/ui-review/index.html` shows all four on one
-page when opened in a browser; the in-app Preview tab serves only the HTML file it is handed, so the
-images there come from opening the folder instead.
+[app-150.png](ui-review/app-150.png), [app-interaction.png](ui-review/app-interaction.png),
+[app-entry.png](ui-review/app-entry.png) and [app-undo.png](ui-review/app-undo.png), captured from the
+real window by `pnpm app:capture`. The two entry frames are typed into with real keystrokes, on a
+scratch copy of the project so the committed log stays untouched. `docs/ui-review/index.html` shows
+all six on one page when opened in a browser; the in-app Preview tab serves only the HTML file it is
+handed, so the images there come from opening the folder instead.
 
 - **Rail**: projects most-recent-first, the open one marked; tabs under it with panel counts. Projects
   whose folder is gone are hidden behind a count — say if that should be visible by default instead.
@@ -33,8 +38,12 @@ images there come from opening the folder instead.
   (hover it for the full name) and the chart is 254×147 px. Dropping to one column below ~980 px is
   the obvious fix — say whether the charts should grow or the side-by-side comparison should hold,
   because that is a taste call, not a measurement.
+- **Entry bar**: one field per shape field, the button, and undo. It is focused when a tab opens,
+  because typing a number is the thing this window is for; `Tab` still reaches the panel for
+  keyboard zoom and pan.
 - **Refusals**: a corrupt view file, a missing project and an empty registry each have their own
-  state — reachable with `BENCH_PROJECT=<dir> pnpm app`.
+  state — reachable with `BENCH_PROJECT=<dir> pnpm app`. Typing nonsense into a field is the fourth:
+  the field is marked, focus lands on it, and the text stays exactly where it was typed.
 
 ## How to reproduce a review
 

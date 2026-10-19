@@ -18,7 +18,8 @@
     "review": "node scripts/review-charts.mjs",
     "app": "pnpm app:build && electron app/main.js",
     "app:build": "esbuild app/core.entry.ts --bundle --platform=node --format=esm --target=node20 --outfile=app/core.bundle.mjs",
-    "app:capture": "pnpm app:build && node scripts/capture-app.mjs"
+    "app:capture": "pnpm app:build && node scripts/capture-app.mjs",
+    "app:measure": "pnpm app:build && node scripts/measure-window.mjs"
   },
   "engines": {
     "node": ">=22.18"

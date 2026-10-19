@@ -194,6 +194,13 @@ manual entry must not feel like a compromise.
 Targets: keystroke→paint < 100 ms; re-render < 50 ms at 10k points; cold start < 1.5 s;
 100 points in under 60 s.
 
+**Measured 2026-10-19** in the window (`pnpm app:measure`, 10,000 points, one plot panel, eight typed
+points): keystroke→paint a median of **25.8 ms** (p90 63.1 ms) when the point lands inside the axes the
+tab already draws — the log append is 13 ms of it, and the mark itself 1 ms plus a 12 ms paint. A
+point that *rescales* the axes is a full redraw at 135 ms, which is over this budget and is the
+measured trigger for the canvas renderer. The tab's saved file catches up 29 ms after the paint,
+off the keystroke path. See [ADR 0006](adr/0006-window-write-path.md).
+
 ---
 
 ## 7. Agent interface
@@ -281,8 +288,8 @@ reviewable code instead of a hand-rolled TypeScript statistics library.
 | concern | choice | status |
 |---|---|---|
 | shell | **Electron** ([ADR 0005](adr/0005-desktop-shell.md)) — the core is TypeScript and must run in process; ~370 MB dev install, ~490 MB working set, no installer built yet. Tauri 2 was the earlier plan; it needs a Node sidecar to host this core | **in use, unbuilt for distribution** (`pnpm app`) |
-| UI | hand-written HTML/CSS/JS in `app/renderer`, no framework yet. Svelte 5 remains the plan if the renderer outgrows it | **in use, first slice** |
-| charts | restricted declarative spec; the core's SVG today, zoom/pan by `viewBox`, canvas when a measurement says so — swappable either way | **in use** (`bench chart`, the window) |
+| UI | hand-written HTML/CSS/JS in `app/renderer`, no framework yet. Svelte 5 remains the plan if the renderer outgrows it | **in use**: projects, tabs, hover, pan/zoom, point entry and undo |
+| charts | restricted declarative spec; the core's SVG today, zoom/pan by `viewBox`, and a typed point drawn as one mark the core placed — canvas when a measurement says so (135 ms for a rescale) | **in use** (`bench chart`, the window) |
 | analysis | **Python** sidecar, pinned env, JSON envelope, no Python in the entry path | **in use** (`bench run`) |
 | storage | JSONL event log (truth) | **in use** |
 | index | SQLite derived projection | deferred until a measured query is slow |

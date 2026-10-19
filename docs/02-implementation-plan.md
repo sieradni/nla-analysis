@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: Phases 0-3 complete (2026-10-19); the in-process seam ([ADR 0003](adr/0003-in-process-core.md)), the tab/project layer ([ADR 0004](adr/0004-views-and-projects.md)) and a first desktop window ([ADR 0005](adr/0005-desktop-shell.md)) landed; the shape registry and dataset versions are next, and the window is waiting on a visual verdict.
+Status: Phases 0-3 complete (2026-10-19); the in-process seam ([ADR 0003](adr/0003-in-process-core.md)), the tab/project layer ([ADR 0004](adr/0004-views-and-projects.md)), a first desktop window ([ADR 0005](adr/0005-desktop-shell.md)) and its write path ([ADR 0006](adr/0006-window-write-path.md)) landed; the shape registry and dataset versions are next, and the window's entry bar is waiting on a visual verdict.
 Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 
 ## Progress
@@ -28,17 +28,21 @@ Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 | 5.1 UI write path | decided | in process, not through the CLI: 15.7 ms versus 160 ms+ per command (ADR 0003) |
 | 5.2 shell: Electron vs Tauri+sidecar | decided | [ADR 0005](adr/0005-desktop-shell.md): Electron, because the core is TypeScript and stays in one process. Measured here: 369 MB dev install, 205–242 ms cold start, 466–514 MB working set (summed, so an upper bound) |
 | 5.3 first window slice | done | `pnpm app`: projects and tabs switch, a tab's panels draw from their stored specs, hover resolves a mark to its record id, wheel zoom and pan move the `viewBox`. Frames in `docs/ui-review/`, waiting on the user's verdict |
-| 5.4 canvas renderer | not done | deferred until the SVG is measured to be too slow; §4 expects canvas at 10k points |
+| 5.4 window write path | done | [ADR 0006](adr/0006-window-write-path.md): the entry bar appends through `Workspace` in process, a point inside the drawn axes arrives as one mark the core placed (0.8 ms), a point that rescales the axes asks for a full redraw, the tab file catches up after the paint, and undo is a `point_retracted` event. Refusals keep the typed values and name the field |
+| 5.5 entry-path measurement | done | `pnpm app:measure` builds a 10k-point project and types into the real window: **median 25.8 ms** keystroke→paint (p90 63.1) against the 100 ms budget; record 13 · rebuild 1 · paint 12, tab file 29 ms later. A rescale is 135 ms — see 5.6 |
+| 5.6 canvas renderer | not done | the measured trigger is now real: 135 ms for a point that moves the axes, and paint growing with the point count. §4 expects canvas at 10k |
 | 5.5 installer / signing | not done | no packaging, no code signing; `pnpm app` is how it runs |
 | 4.x Tauri shell / views UI | superseded | the shell landed as Electron instead ([ADR 0005](adr/0005-desktop-shell.md)) |
 | windowed / rolling fit | not done | the third item on the time-variation menu |
 | dataset versions / replace / diff | not done | next; `dataset_version_created` is already a log type |
 | `shape extend` + migrations | not done | next; shape 2.2 is read-only today |
 
-Verification so far: 160 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
+Verification so far: 169 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
 (`pnpm app:build`) before the suite, because the desktop shell loads that bundle rather than `src/core`,
 and a bundle that is only exercised by launching an app breaks silently — it did, once. The entry path is measured, not
-assumed: 15.7 ms keystroke→paint in process at 10k points, against a 100 ms budget (ADR 0003).
+assumed: 15.7 ms keystroke→paint in process at 10k points against a 100 ms budget (ADR 0003), and
+25.8 ms for the whole path in the window, including the append and the paint
+([ADR 0006](adr/0006-window-write-path.md)).
 `tests/cli.test.ts` runs the actual binary, which is the only way to catch a difference between what
 the test runner's transpiler accepts and what Node's type stripping accepts — that gap hid a dead CLI
 behind 38 green tests once, and again behind a parameter property in this step.

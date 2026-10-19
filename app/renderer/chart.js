@@ -24,26 +24,45 @@
     return value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
   }
 
-  function parse(text) {
-    var doc = new DOMParser().parseFromString(text, 'image/svg+xml')
-    var node = doc.documentElement
+  /**
+   * Parse the core's markup into a live SVG.
+   *
+   * `DOMParser` + `importNode` is the obvious way and is what this did first; at 10k points it was
+   * the single largest cost of typing a point — a whole second document parsed and then deep-copied
+   * into this one. The HTML parser builds SVG content in place, in the foreign-content namespace,
+   * and the markup is well-formed XML by construction (the core's own test asserts it), so the
+   * faster path cannot accept something the slower one would reject.
+   */
+  function parse(host, text) {
+    host.innerHTML = text
+    var node = host.firstElementChild
     if (!node || node.nodeName.toLowerCase() !== 'svg') {
+      host.textContent = ''
       throw new Error('the core returned something that is not an SVG')
     }
-    return document.importNode(node, true)
+    return node
   }
 
   function mount(host, panel, svgText, options) {
-    var svg = parse(svgText)
+    var svg = parse(host, svgText)
     // The host owns the size; the SVG keeps its own coordinate system.
     svg.removeAttribute('width')
     svg.removeAttribute('height')
-    host.appendChild(svg)
 
     var viewBox = svg.viewBox.baseVal
     var base = { x: viewBox.x, y: viewBox.y, w: viewBox.width, h: viewBox.height }
     var box = { x: base.x, y: base.y, w: base.w, h: base.h }
     var drag = null
+
+    // A repaint replaces the drawing but keeps the crop the user was reading. The old box is applied
+    // to the new drawing and then constrained, so a rescaled chart cannot leave the view outside it.
+    if (options.viewBox) {
+      var parts = String(options.viewBox).trim().split(/[\s,]+/).map(Number)
+      if (parts.length === 4 && parts.every(isFinite) && parts[2] > 0 && parts[3] > 0) {
+        box = { x: parts[0], y: parts[1], w: parts[2], h: parts[3] }
+        constrain()
+      }
+    }
 
     // Hit-testing works on what was actually drawn, not on the data. The core draws each point at a
     // projected pixel position inside the canvas, so a pointer maps back to *canvas* coordinates —
@@ -255,7 +274,18 @@
     })
 
     apply()
-    return { reset: reset, zoom: zoomFactor }
+
+    /**
+     * Register a mark that was appended to the drawing after this mount. The panel's hit-testing
+     * works off the marks it knows about, so a point that arrived without a redraw has to be added
+     * here too — otherwise it is on screen and unreachable by hover.
+     */
+    function addMark(id, cx, cy, point) {
+      marks.push({ id: id, cx: cx, cy: cy })
+      if (point) values[id] = point
+    }
+
+    return { reset: reset, zoom: zoomFactor, addMark: addMark }
   }
 
   window.BenchCharts = { mount: mount }

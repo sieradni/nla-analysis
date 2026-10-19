@@ -501,3 +501,137 @@ button {
 .failure code {
   font-family: var(--font-num);
 }
+
+/* --- entry ---------------------------------------------------------------------------------
+   A command strip, not a dialog: the chart stays visible while a number is typed, because the point
+   of typing one is watching it land. The status row is reserved rather than appearing on demand, so
+   a refusal cannot shove the charts upward. */
+
+.entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "fields add undo"
+    "status status readout";
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  padding: var(--s3) var(--s5) var(--s3);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.entry-fields {
+  grid-area: fields;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.entry-field {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.entry-field span {
+  font-family: var(--font-num);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.entry-field input {
+  width: 88px;
+  padding: 5px var(--s2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--text-md);
+}
+
+.entry-field input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.entry-field.invalid span {
+  color: var(--danger);
+}
+
+.entry-field.invalid input {
+  border-color: var(--danger);
+}
+
+.entry-add {
+  grid-area: add;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 6px var(--s3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.entry-add:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.entry-add kbd {
+  font-family: var(--font-num);
+  font-size: 10px;
+  font-weight: 400;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.entry-undo {
+  grid-area: undo;
+  padding: 5px var(--s3);
+  font-size: var(--text-sm);
+}
+
+.entry-status {
+  grid-area: status;
+  min-height: 18px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.entry-status.is-error {
+  color: var(--danger);
+}
+
+.entry-status code {
+  font-family: var(--font-num);
+}
+
+.entry-status ul {
+  margin: 2px 0 0;
+  padding-left: var(--s4);
+}
+
+.entry-readout {
+  grid-area: readout;
+  justify-self: end;
+  font-family: var(--font-num);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.entry-readout b {
+  color: var(--ink-soft);
+  font-weight: 600;
+}

@@ -8,10 +8,14 @@
  *
  * Usage: pnpm app:capture
  *   BENCH_PROJECT=<dir>   project to open (defaults to the committed drift-sensor fixture)
+ *
+ * Frames: three scalings and an interaction frame from the project, then an append and its undo —
+ * captured on a scratch copy of the project, so the committed log is never written by a review run.
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, stat } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import electron from 'electron'
@@ -29,12 +33,23 @@ if (!existsSync(join(root, 'app', 'core.bundle.mjs'))) {
 
 await mkdir(outDir, { recursive: true })
 
+// The entry frames append a point. They do it on a copy: the committed fixture's log is evidence a
+// test reads, and a capture run must never rewrite it.
+const scratch = await mkdtemp(join(tmpdir(), 'bench-capture-'))
+const writable = join(scratch, 'drift-sensor')
+await cp(project, writable, { recursive: true })
+// And the run gets its own project registry. Opening a project records a recent, so without this
+// every capture left another temp copy in the operator's real project list.
+const benchHome = await mkdtemp(join(tmpdir(), 'bench-capture-home-'))
+
 const child = spawn(electron, [join(root, 'app', 'main.js')], {
   cwd: root,
   env: {
     ...process.env,
     BENCH_CAPTURE: outDir,
     BENCH_APP_PROJECT: project,
+    BENCH_CAPTURE_WRITABLE: writable,
+    BENCH_HOME: benchHome,
     // Electron writes its Chromium cache into the user profile; keep the review run self-contained.
     ELECTRON_USER_DATA_DIR: join(root, 'artifacts', 'electron-profile'),
   },
@@ -49,7 +64,14 @@ const code = await new Promise((done) => {
   })
 })
 
-const frames = ['app-100.png', 'app-125.png', 'app-150.png', 'app-interaction.png']
+const frames = [
+  'app-100.png',
+  'app-125.png',
+  'app-150.png',
+  'app-interaction.png',
+  'app-entry.png',
+  'app-undo.png',
+]
 let missing = 0
 for (const frame of frames) {
   const path = join(outDir, frame)
@@ -60,6 +82,13 @@ for (const frame of frames) {
   }
   const size = await stat(path)
   console.log(`captured ${frame} (${(size.size / 1024).toFixed(0)} KB)`)
+}
+
+if (code === 0) {
+  await rm(scratch, { recursive: true, force: true })
+  await rm(benchHome, { recursive: true, force: true })
+} else {
+  console.error(`capture failed; the scratch project is still at ${writable}`)
 }
 
 process.exit(code === 0 && missing === 0 ? 0 : 1)
