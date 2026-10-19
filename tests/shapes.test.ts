@@ -39,7 +39,7 @@ describe('validateShapeDefinition', () => {
     )
   })
 
-  it('refuses an id without a version, because a shape is versioned by name', () => {
+  it('refuses an id that is not a versioned shape name', () => {
     for (const id of ['load', 'load.v0', 'Load.v1']) {
       expect(() => validateShapeDefinition({ id, fields: [{ name: 'x', type: 'number' }] })).toThrow(
         /not a shape id/,

@@ -129,9 +129,7 @@ await writeFile(
       packaged: report.packaged,
       electron: report.electron,
       url: report.url.replace(/^.*resources[\\/]app/i, 'resources/app'),
-      // The notice names a command with the scratch project's path in it; the receipt does not need
-      // this machine's layout, so it keeps only what was checked.
-      facts: { ...report.facts, notice: undefined },
+      facts: report.facts,
       tabDialog: report.tabDialog,
       recipes: report.recipes,
       elapsedMs: elapsed,

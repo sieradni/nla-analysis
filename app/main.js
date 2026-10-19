@@ -273,9 +273,7 @@ async function focusField(index) {
 async function entryState() {
   return window.webContents.executeJavaScript(`(() => {
     const status = document.getElementById('entry-status')
-    const notice = document.getElementById('notice')
     return JSON.stringify({
-      focused: document.activeElement && (document.activeElement.dataset.field || document.activeElement.tagName),
       // Keyed by field name, because a project may declare fields that are not x and y.
       typed: (() => {
         const out = {}
@@ -286,11 +284,7 @@ async function entryState() {
       })(),
       badges: Array.prototype.map.call(document.querySelectorAll('.panel-strip .badge'), (b) => b.textContent),
       correcting: !document.getElementById('entry-correct').hidden,
-      correctLabel: document.getElementById('entry-correct').hidden
-        ? null
-        : document.getElementById('entry-correct-label').textContent,
       status: status.hidden ? null : status.textContent,
-      notice: notice.hidden ? null : notice.textContent,
       readout: document.getElementById('entry-readout').textContent,
       meta: document.getElementById('view-meta').textContent,
       undoEnabled: !document.getElementById('entry-undo').disabled,
@@ -315,10 +309,6 @@ async function currentTimingId() {
   return window.webContents.executeJavaScript('(window.__benchTiming && window.__benchTiming.id) || null')
 }
 
-/**
- * Type a point and press Enter, exactly as a person would, then report what the window did with it.
- * `values` is [x, y]: the fixture's shape is `xy.v1`, and both fields are required.
- */
 /**
  * The real `bench` binary, as an agent in a terminal would run it. Capture-only: the window itself
  * never shells out to the CLI, because that would be a second write path (ADR 0003).
@@ -644,7 +634,7 @@ async function capture() {
     const strip = JSON.parse(await entryState())
     console.log(
       '[bench] correction-open ' +
-        JSON.stringify({ id: selected, label: strip.correctLabel, values: strip.typed, status: strip.status }),
+        JSON.stringify({ id: selected, values: strip.typed, status: strip.status }),
     )
     if (!strip.correcting) throw new Error('clicking a mark did not open the correction strip')
     if (strip.typed.x === '' || strip.typed.y === '') {
@@ -652,20 +642,12 @@ async function capture() {
     }
     // The correction row adds a line to a strip that already holds fields, a button and a readout.
     // Overflow here would clip the record id, which is the one thing the row exists to name.
-    const stripLayout = await window.webContents.executeJavaScript(`(() => {
-      const entry = document.getElementById('entry')
+    const overflowX = await window.webContents.executeJavaScript(`(() => {
       const label = document.getElementById('entry-correct-label')
-      return JSON.stringify({
-        entry: { w: Math.round(entry.getBoundingClientRect().width), h: Math.round(entry.getBoundingClientRect().height) },
-        label: { w: Math.round(label.getBoundingClientRect().width), scroll: label.scrollWidth },
-        overflowX: label.scrollWidth - Math.round(label.getBoundingClientRect().width),
-      })
+      return label.scrollWidth - Math.round(label.getBoundingClientRect().width)
     })()`)
-    console.log('[bench] correction-layout ' + stripLayout)
-    const stripBox = JSON.parse(stripLayout)
-    if (stripBox.overflowX > 1) {
-      throw new Error(`the correction row overflows by ${stripBox.overflowX}px`)
-    }
+    console.log('[bench] correction-overflow ' + overflowX + 'px')
+    if (overflowX > 1) throw new Error(`the correction row overflows by ${overflowX}px`)
 
     await focusField(1)
     pressKey('a', ['control'])

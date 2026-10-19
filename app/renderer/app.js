@@ -1131,16 +1131,6 @@
     ui.projectCustom.hidden = true
     ui.projectFields.textContent = ''
     syncProjectPreview()
-    if (state.shapeChoice) {
-      ui.projectShape.options[0].textContent =
-        state.shapeChoice.id +
-        ' · ' +
-        state.shapeChoice.fields
-          .map(function (field) {
-            return field.name + ' (' + field.type + ')'
-          })
-          .join(', ')
-    }
     ui.projectDialog.showModal()
     ui.projectName.focus()
   }
@@ -1343,9 +1333,18 @@
     } catch (error) {
       /* start without a hint */
     }
-    // One cheap read, so the create dialog opens without waiting on the core.
+    // One cheap read, so the create dialog opens without waiting on the core. The shipped shape's
+    // name and fields are the core's, so the option is labelled from here rather than hardcoded.
     try {
       state.shapeChoice = await call(bridge.shapeChoice())
+      ui.projectShape.options[0].textContent =
+        state.shapeChoice.id +
+        ' · ' +
+        state.shapeChoice.fields
+          .map(function (field) {
+            return field.name + ' (' + field.type + ')'
+          })
+          .join(', ')
     } catch (error) {
       /* the dialog still works; it just cannot name the shipped shape */
     }
