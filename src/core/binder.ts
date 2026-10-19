@@ -109,6 +109,78 @@ const byTime = (a: Point, b: Point): number => {
 }
 
 /**
+ * The mutable core of a point fold: the map being built, the version horizon, and where structural
+ * problems go. `bind` runs it with no horizon over the whole log; `foldVersion` runs it with a cut
+ * and one dataset. The three functions below are the only place a row is recorded, a correction is
+ * applied, or a row is withdrawn — so changing how a correction lands changes it once.
+ */
+interface PointFold {
+  points: Map<string, Point>
+  /** Rows and changes above this version are not part of the fold. */
+  upTo: number
+  /** Unknown ids and unannounced versions, when the caller is building current state. */
+  problems?: string[]
+}
+
+function applyRecorded(
+  fold: PointFold,
+  event: Extract<BenchEvent, { type: 'point_recorded' }>,
+  dataset?: DatasetState,
+): Point | undefined {
+  const version = event.version ?? 1
+  if (version > fold.upTo) return undefined
+  // A row tagged with a version nobody announced is a structural problem worth naming: it is either
+  // a hand-written event or a bug in a writer, and folding it quietly would hide both.
+  if (
+    dataset &&
+    fold.problems &&
+    dataset.versions.length > 0 &&
+    !dataset.versions.some((record) => record.version === version)
+  ) {
+    fold.problems.push(`point ${event.id} names version ${version}, which was never created`)
+  }
+  const point: Point = {
+    id: event.id,
+    dataset: event.dataset,
+    values: { ...event.values },
+    tObserved: event.t_observed,
+    recordedAt: event.at,
+    version,
+    tags: [...(event.tags ?? [])],
+    status: 'active',
+    corrections: [],
+    ...(event.note === undefined ? {} : { note: event.note }),
+  }
+  fold.points.set(event.id, point)
+  return point
+}
+
+function applyCorrected(fold: PointFold, event: Extract<BenchEvent, { type: 'point_corrected' }>): void {
+  if ((event.version ?? 1) > fold.upTo) return
+  const target = fold.points.get(event.supersedes)
+  if (!target) {
+    fold.problems?.push(`correction ${event.id} targets unknown point ${event.supersedes}`)
+    return
+  }
+  target.values = { ...target.values, ...event.values }
+  target.corrections.push(event.id)
+  // The log is append-only, so events can be replayed out of order; keep the latest instant.
+  if (target.correctedAt === undefined || event.at > target.correctedAt) target.correctedAt = event.at
+}
+
+function applyRetracted(fold: PointFold, event: Extract<BenchEvent, { type: 'point_retracted' }>): void {
+  if ((event.version ?? 1) > fold.upTo) return
+  const target = fold.points.get(event.supersedes)
+  if (!target) {
+    fold.problems?.push(`retraction ${event.id} targets unknown point ${event.supersedes}`)
+    return
+  }
+  target.status = 'retracted'
+  if (target.retractedAt === undefined || event.at > target.retractedAt) target.retractedAt = event.at
+  if (event.reason !== undefined) target.retractionReason = event.reason
+}
+
+/**
  * Fold events into current state. The log is the truth; this projection is disposable and must be
  * reconstructible from the file alone.
  */
@@ -125,6 +197,7 @@ export function bind(events: BenchEvent[]): ProjectState {
   }
 
   const points = new Map<string, Point>()
+  const fold: PointFold = { points, upTo: Number.POSITIVE_INFINITY, problems: state.problems }
 
   const ensureDataset = (id: string, shape: string): DatasetState => {
     const existing = state.datasets.get(id)
@@ -156,53 +229,18 @@ export function bind(events: BenchEvent[]): ProjectState {
 
       case 'point_recorded': {
         const dataset = ensureDataset(event.dataset, event.shape)
-        const version = event.version ?? 1
-        // A row tagged with a version nobody announced is a structural problem worth naming: it is
-        // either a hand-written event or a bug in a writer, and folding it quietly would hide both.
-        if (dataset.versions.length > 0 && !dataset.versions.some((record) => record.version === version)) {
-          state.problems.push(`point ${event.id} names version ${version}, which was never created`)
-        }
-        const point: Point = {
-          id: event.id,
-          dataset: event.dataset,
-          values: { ...event.values },
-          tObserved: event.t_observed,
-          recordedAt: event.at,
-          version,
-          tags: [...(event.tags ?? [])],
-          status: 'active',
-          corrections: [],
-          ...(event.note === undefined ? {} : { note: event.note }),
-        }
-        points.set(event.id, point)
-        dataset.points.push(point)
+        const point = applyRecorded(fold, event, dataset)
+        if (point) dataset.points.push(point)
         break
       }
 
-      case 'point_corrected': {
-        const target = points.get(event.supersedes)
-        if (!target) {
-          state.problems.push(`correction ${event.id} targets unknown point ${event.supersedes}`)
-          break
-        }
-        target.values = { ...target.values, ...event.values }
-        target.corrections.push(event.id)
-        // The log is append-only, so events can be replayed out of order; keep the latest instant.
-        if (target.correctedAt === undefined || event.at > target.correctedAt) target.correctedAt = event.at
+      case 'point_corrected':
+        applyCorrected(fold, event)
         break
-      }
 
-      case 'point_retracted': {
-        const target = points.get(event.supersedes)
-        if (!target) {
-          state.problems.push(`retraction ${event.id} targets unknown point ${event.supersedes}`)
-          break
-        }
-        target.status = 'retracted'
-        if (target.retractedAt === undefined || event.at > target.retractedAt) target.retractedAt = event.at
-        if (event.reason !== undefined) target.retractionReason = event.reason
+      case 'point_retracted':
+        applyRetracted(fold, event)
         break
-      }
 
       case 'dataset_version_created': {
         const dataset = ensureDataset(event.dataset, state.datasets.get(event.dataset)?.shape ?? 'unknown')
@@ -303,44 +341,26 @@ export function foldVersion(
   upTo: number,
 ): Point[] {
   const points = new Map<string, Point>()
+  // No `problems`: a past version is a question about rows, not an audit of the log. A correction
+  // whose target is not in this horizon simply has nothing to apply to.
+  const fold: PointFold = { points, upTo }
   for (const event of events) {
-    if ((event.type === 'point_recorded' || event.type === 'point_corrected' || event.type === 'point_retracted') && event.dataset !== datasetId) {
+    if (
+      (event.type === 'point_recorded' || event.type === 'point_corrected' || event.type === 'point_retracted') &&
+      event.dataset !== datasetId
+    ) {
       continue
     }
     switch (event.type) {
       case 'point_recorded':
-        if ((event.version ?? 1) > upTo) break
-        points.set(event.id, {
-          id: event.id,
-          dataset: event.dataset,
-          values: { ...event.values },
-          tObserved: event.t_observed,
-          recordedAt: event.at,
-          version: event.version ?? 1,
-          tags: [...(event.tags ?? [])],
-          status: 'active',
-          corrections: [],
-          ...(event.note === undefined ? {} : { note: event.note }),
-        })
+        applyRecorded(fold, event)
         break
-      case 'point_corrected': {
-        if ((event.version ?? 1) > upTo) break
-        const target = points.get(event.supersedes)
-        if (!target) break
-        target.values = { ...target.values, ...event.values }
-        target.corrections.push(event.id)
-        if (target.correctedAt === undefined || event.at > target.correctedAt) target.correctedAt = event.at
+      case 'point_corrected':
+        applyCorrected(fold, event)
         break
-      }
-      case 'point_retracted': {
-        if ((event.version ?? 1) > upTo) break
-        const target = points.get(event.supersedes)
-        if (!target) break
-        target.status = 'retracted'
-        if (target.retractedAt === undefined || event.at > target.retractedAt) target.retractedAt = event.at
-        if (event.reason !== undefined) target.retractionReason = event.reason
+      case 'point_retracted':
+        applyRetracted(fold, event)
         break
-      }
       default:
         break
     }
