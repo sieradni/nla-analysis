@@ -156,7 +156,22 @@ function domain(values: number[]): [number, number] {
   return [min - pad, max + pad]
 }
 
-export function renderChart(spec: ChartSpec): string {
+/** The canvas size a single chart occupies, exported so a view can lay panels out in a grid. */
+export const CHART_WIDTH = WIDTH
+export const CHART_HEIGHT = HEIGHT
+
+/**
+ * One chart's contents, without the `<svg>` wrapper. `parts` already includes the background plate,
+ * so it can be dropped into a group as-is — which is how a view composes panels without duplicating
+ * any of the drawing.
+ */
+interface ChartFrame {
+  accessibleName: string
+  desc: string
+  parts: string[]
+}
+
+function frame(spec: ChartSpec): ChartFrame {
   const xs: number[] = []
   const ys: number[] = []
   for (const p of spec.points ?? []) {
@@ -201,24 +216,11 @@ export function renderChart(spec: ChartSpec): string {
   const sx = (value: number): number => LEFT + ((value - x0) / (x1 - x0)) * plotW
   const sy = (value: number): number => top + plotH - ((value - y0) / (y1 - y0)) * plotH
 
-  const parts: string[] = []
+  const parts: string[] = [`<rect width="${WIDTH}" height="${HEIGHT}" fill="${PAPER}"/>`]
   const xLabel = spec.x.unit ? `${spec.x.label} (${spec.x.unit})` : spec.x.label
   const yLabel = spec.y.unit ? `${spec.y.label} (${spec.y.unit})` : spec.y.label
   const accessibleName = spec.title ?? `${yLabel} against ${xLabel}`
-
-  // Provenance rides on the root element as data attributes: invisible on the canvas, present for
-  // anything that reads the file later and needs to know what it is looking at.
-  const provenance = [
-    spec.provenance?.dataset === undefined ? '' : ` data-dataset="${escapeXml(spec.provenance.dataset)}"`,
-    spec.provenance?.shape === undefined ? '' : ` data-shape="${escapeXml(spec.provenance.shape)}"`,
-  ].join('')
-
-  parts.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" role="img" aria-label="${escapeXml(accessibleName)}"${provenance}>`,
-    `<title>${escapeXml(accessibleName)}</title>`,
-    `<desc>${escapeXml(spec.footer ?? `${(spec.points ?? []).length} points plotted`)}</desc>`,
-    `<rect width="${WIDTH}" height="${HEIGHT}" fill="${PAPER}"/>`,
-  )
+  const desc = spec.footer ?? `${(spec.points ?? []).length} points plotted`
 
   if (spec.title) {
     parts.push(
@@ -329,7 +331,44 @@ export function renderChart(spec: ChartSpec): string {
     )
   })
 
-  parts.push('</svg>')
+  return { accessibleName, desc, parts }
+}
 
-  return parts.join('\n')
+// Provenance rides on the root element as data attributes: invisible on the canvas, present for
+// anything that reads the file later and needs to know what it is looking at.
+function provenanceAttributes(spec: ChartSpec): string {
+  return [
+    spec.provenance?.dataset === undefined ? '' : ` data-dataset="${escapeXml(spec.provenance.dataset)}"`,
+    spec.provenance?.shape === undefined ? '' : ` data-shape="${escapeXml(spec.provenance.shape)}"`,
+  ].join('')
+}
+
+export function renderChart(spec: ChartSpec): string {
+  const { accessibleName, desc, parts } = frame(spec)
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" role="img" aria-label="${escapeXml(accessibleName)}"${provenanceAttributes(spec)}>`,
+    `<title>${escapeXml(accessibleName)}</title>`,
+    `<desc>${escapeXml(desc)}</desc>`,
+    ...parts,
+    '</svg>',
+  ].join('\n')
+}
+
+/**
+ * A chart placed at an offset, for composing several into one canvas. A nested `<g>` keeps every
+ * coordinate inside the panel local, so a panel never has to know where it sits.
+ */
+export function renderChartGroup(
+  spec: ChartSpec,
+  at: { x: number; y: number; panel?: number },
+): string {
+  const { accessibleName, desc, parts } = frame(spec)
+  const identity = at.panel === undefined ? '' : ` data-panel="${at.panel}"`
+  return [
+    `<g transform="translate(${at.x} ${at.y})"${identity}${provenanceAttributes(spec)}>`,
+    `<title>${escapeXml(accessibleName)}</title>`,
+    `<desc>${escapeXml(desc)}</desc>`,
+    ...parts,
+    '</g>',
+  ].join('\n')
 }

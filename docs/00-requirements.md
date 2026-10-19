@@ -122,6 +122,15 @@ hash is what analyses pin.
 A **view** is JSON: a grid of panels, each `{dataset, version|latest, query, chart spec, recipe?,
 params}`. A tab is a view. Views are files, so the agent writes and the UI renders the same artifact.
 
+**Implemented** ([ADR 0004](adr/0004-views-and-projects.md)): one file per tab in `views/<slug>.json`,
+written by `bench view new|add|save` and read by `bench view show|render`. A panel stores the question
+(`dataset`, `version`, `query`, `recipe`, `params`) *and* the answer (`chart`, `verdict`, `n`), plus
+fingerprints of the rows and recipe it consumed — so a saved tab renders without Python, and still says
+when it has gone stale. `query` selects rows (`field`/`op`/`value`, all clauses required) and never
+computes: anything derived belongs in a recipe, where it is hashed and reported. `version` is only
+`latest` until dataset versions exist. Projects are listed by `bench projects` from a machine-level
+registry, so a window has something to switch between.
+
 Charts are a **restricted declarative spec** (select → transform → marks → encodings) rendered on
 canvas — fast at 10k+ points, diffable, agent-authorable, undoable. Escape hatch: a raw component
 for exotic visuals. Keep the renderer swappable; don't marry Vega-Lite and then die on performance.

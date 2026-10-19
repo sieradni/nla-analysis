@@ -15,9 +15,10 @@
  */
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { APP_ROOT, assessRuns, buildRunInput, hashInput, type RunFreshness } from './analysis.ts'
+import { APP_ROOT, assessRuns, buildRunInput, chartSpecFor, hashInput, type RunFreshness } from './analysis.ts'
 import { activePoints, bind, type Point, type ProjectState, type RunRecord } from './binder.ts'
 import { renderChart, type ChartSpec } from './chart.ts'
+import { BenchError } from './errors.ts'
 import { makeEvent } from './events.ts'
 import type { BenchEvent, PointValue, Shape } from './events.ts'
 import {
@@ -31,23 +32,9 @@ import {
 import type { RecipeRunner, RunResult } from './runner.ts'
 import { validateValues } from './shapes.ts'
 
-export type ErrorKind = 'invalid' | 'missing' | 'invariant'
-
-/** A refusal a caller can present. The kind maps onto the CLI's exit codes and nothing else. */
-export class BenchError extends Error {
-  readonly kind: ErrorKind
-  readonly hint?: string
-  /** Per-field or per-row detail, printed under the message when there is any. */
-  readonly problems: string[]
-
-  constructor(kind: ErrorKind, message: string, options: { hint?: string; problems?: string[] } = {}) {
-    super(message)
-    this.name = 'BenchError'
-    this.kind = kind
-    if (options.hint !== undefined) this.hint = options.hint
-    this.problems = options.problems ?? []
-  }
-}
+// Re-exported so existing callers (the CLI, the tests) keep importing the refusal from the seam that
+// raises it; the definition lives in errors.ts so modules that are not the write path can use it too.
+export { BenchError, type ErrorKind } from './errors.ts'
 
 export interface PointDraft {
   dataset?: string
@@ -387,31 +374,13 @@ export class Workspace {
       })
     }
     const result = outcome.result
-
-    // Only mention a band when one was actually drawn. A caption promising a band that is not on the
-    // canvas is the same class of lie as a curve without an interval.
-    const level = Number(result.diagnostics.level)
-    const bandKind = typeof result.diagnostics.band === 'string' ? result.diagnostics.band : 'confidence'
-    const bandNote =
-      result.chart.band !== undefined && Number.isFinite(level)
-        ? `${Math.round(level * 100)}% ${bandKind} band`
-        : ''
-    const footer = [result.chart.footer ?? '', bandNote].filter((part) => part !== '').join(' · ')
-
-    const spec: ChartSpec = {
-      ...result.chart,
+    // One assembly for every caller — `run`, `rerun`, and a view panel. See ADR 0003.
+    const spec: ChartSpec = chartSpecFor(result, {
       title: this.handle.config.name,
-      subtitle: `${datasetId} · ${request.recipe}`,
-      // What the artifact was drawn from, structurally: a client pinning a view to a dataset should
-      // read this rather than parse the subtitle.
-      provenance: { dataset: datasetId, shape: this.current.datasets.get(datasetId)!.shape },
-      ...(footer === '' ? {} : { footer }),
-      // The artifact carries its own conclusion: the terminal scrollback is not durable. Recipes may
-      // supply a shorter form for the canvas; the full argument stays in the log.
-      ...((result.caption ?? result.narrative) === ''
-        ? {}
-        : { caption: result.caption ?? result.narrative }),
-    }
+      dataset: datasetId,
+      shape: this.current.datasets.get(datasetId)!.shape,
+      recipe: request.recipe,
+    })
 
     // The log stores a project-relative path: an absolute one would bake this machine's layout — and
     // its user name — into a file meant to outlive the machine. Forward slashes even on Windows,

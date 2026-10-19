@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { interpreterCandidates } from '../src/core/runner.ts'
@@ -30,13 +30,20 @@ async function bench(args: string[], cwd?: string) {
 }
 
 let project: string
+let benchHome: string
 
 beforeAll(async () => {
   project = await mkdtemp(join(tmpdir(), 'bench-cli-'))
+  // Every spawned command registers the project it opens. Point that at a scratch home, or running
+  // the test suite would rearrange the list a real user switches projects with.
+  benchHome = await mkdtemp(join(tmpdir(), 'bench-home-'))
+  process.env.BENCH_HOME = benchHome
 })
 
 afterAll(async () => {
+  delete process.env.BENCH_HOME
   await rm(project, { recursive: true, force: true })
+  await rm(benchHome, { recursive: true, force: true })
 })
 
 describe('bench CLI, as executed', () => {
@@ -394,5 +401,129 @@ describe.skipIf(!analysisReady)('analysis through the CLI', () => {
     } finally {
       await rm(target, { recursive: true, force: true })
     }
+  })
+})
+
+describe('projects and views, as executed', () => {
+  let dir: string
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bench-tabs-'))
+    const init = await bench(['init', dir, '--name', 'tabs demo'])
+    expect(init.code).toBe(0)
+  })
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it('registers the project, lists it, and opens it by name', async () => {
+    const listed = await bench(['projects', '--json'])
+    expect(listed.code).toBe(0)
+    const payload = JSON.parse(listed.stdout) as {
+      data: { projects: { name: string; dir: string; registered: boolean; exists: boolean }[] }
+    }
+    const entry = payload.data.projects.find((project) => project.name === 'tabs demo')
+    expect(entry).toBeDefined()
+    expect(entry!.registered).toBe(true)
+    expect(entry!.exists).toBe(true)
+    expect(entry!.dir.toLowerCase()).toContain(basename(dir).toLowerCase())
+
+    // Switching projects by name is what a UI will do; here it has to work from the CLI too.
+    const added = await bench(['--project', 'tabs demo', 'add', '--x', '1', '--y', '2'])
+    expect(added.code).toBe(0)
+    expect(added.stdout).toContain('recorded')
+  })
+
+  it('creates a tab, lists it, and draws it from the saved spec', async () => {
+    for (let index = 2; index <= 6; index++) {
+      await bench(['--project', dir, 'add', '--x', String(index), '--y', String(2.4 * index + 0.3)])
+    }
+
+    const created = await bench(['--project', dir, 'view', 'new', 'tab one', '--dataset', 'main'])
+    expect(created.code).toBe(0)
+    expect(created.stdout).toContain('views/tab-one.json')
+
+    const listed = await bench(['--project', dir, 'view', 'list', '--json'])
+    const views = (JSON.parse(listed.stdout) as { data: { views: { name: string; panels: number }[] } }).data.views
+    expect(views).toContainEqual(expect.objectContaining({ name: 'tab one', panels: 1 }))
+
+    const rendered = await bench(['--project', dir, 'view', 'render', 'tab one', '--json'])
+    expect(rendered.code).toBe(0)
+    const out = (JSON.parse(rendered.stdout) as { data: { path: string; panels: number } }).data
+    expect(out.panels).toBe(1)
+
+    const svg = await readFile(out.path, 'utf8')
+    expect(svg).toContain('data-view="tab-one"')
+    expect(svg).toContain('data-panel="1"')
+    // Identity survives the round trip through the file, so a tab can highlight a record.
+    expect([...svg.matchAll(/data-point-id="([^"]+)"/g)]).toHaveLength(6)
+  })
+
+  it('goes stale when the data moves, and only a refresh makes it current again', async () => {
+    await bench(['--project', dir, 'add', '--x', '7', '--y', '17.1'])
+
+    const stale = await bench(['--project', dir, 'view', 'show', 'tab one', '--json'])
+    const before = JSON.parse(stale.stdout) as { data: { status: { state: string }[] } }
+    expect(before.data.status[0]!.state).toBe('stale')
+
+    const rendered = await bench(['--project', dir, 'view', 'render', 'tab one', '--refresh', '--json'])
+    const after = JSON.parse(rendered.stdout) as { data: { status: { state: string }[] } }
+    expect(after.data.status[0]!.state).toBe('current')
+  })
+
+  it('adds a recipe panel, and the artifact carries its verdict and identity', async () => {
+    const added = await bench([
+      '--project', dir, 'view', 'add', 'tab one',
+      '--dataset', 'main', '--recipe', 'fit', '--param', 'degree=1', '--title', 'straight line',
+    ])
+    expect(added.code).toBe(0)
+
+    const shown = await bench(['--project', dir, 'view', 'show', 'tab one', '--json'])
+    const payload = JSON.parse(shown.stdout) as {
+      data: { view: { panels: { recipe?: string; verdict?: string; chart: { band?: unknown[] } }[] } }
+    }
+    expect(payload.data.view.panels).toHaveLength(2)
+    expect(payload.data.view.panels[1]!.recipe).toBe('fit')
+    expect(payload.data.view.panels[1]!.verdict).toBeTruthy()
+    expect(payload.data.view.panels[1]!.chart.band?.length).toBeGreaterThan(1)
+
+    const rendered = await bench(['--project', dir, 'view', 'render', 'tab one', '--json'])
+    const svg = await readFile((JSON.parse(rendered.stdout) as { data: { path: string } }).data.path, 'utf8')
+    expect(svg.match(/data-panel="[12]"/g)).toHaveLength(2)
+    expect(svg).toContain('straight line')
+    expect(svg).toContain('confidence band')
+  })
+
+  it('accepts a hand-written view file, and refuses one with a typo', async () => {
+    const saved = JSON.parse(await readFile(join(dir, 'views', 'tab-one.json'), 'utf8')) as Record<string, unknown>
+    const renamed = { ...saved, name: 'hand tab', layout: { columns: 1 } }
+    const good = join(dir, 'hand.json')
+    await writeFile(good, JSON.stringify(renamed))
+
+    const accepted = await bench(['--project', dir, 'view', 'save', '--file', good])
+    expect(accepted.code).toBe(0)
+    expect(await readFile(join(dir, 'views', 'hand-tab.json'), 'utf8')).toContain('"hand tab"')
+
+    const typo = join(dir, 'typo.json')
+    await writeFile(typo, JSON.stringify({ ...renamed, pane1: [] }))
+    const refused = await bench(['--project', dir, 'view', 'save', '--file', typo])
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain('unknown field "pane1"')
+  })
+
+  it('refuses to replace a view without --force', async () => {
+    const refused = await bench(['--project', dir, 'view', 'new', 'tab one', '--dataset', 'main'])
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain('--force')
+
+    const replaced = await bench(['--project', dir, 'view', 'new', 'tab one', '--dataset', 'main', '--force'])
+    expect(replaced.code).toBe(0)
+  })
+
+  it('refuses a view that does not exist by name, with a way forward', async () => {
+    const missing = await bench(['--project', dir, 'view', 'show', 'no such tab'])
+    expect(missing.code).toBe(2)
+    expect(missing.stderr).toContain('bench view list')
   })
 })

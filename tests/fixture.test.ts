@@ -9,6 +9,8 @@ import { EventLog } from '../src/core/log.ts'
 import type { ProjectConfig } from '../src/core/project.ts'
 import { validateValues } from '../src/core/shapes.ts'
 import { renderState } from '../src/core/state.ts'
+import { loadView, listViews, panelStatuses, renderView } from '../src/core/views.ts'
+import { Workspace } from '../src/core/workspace.ts'
 
 /**
  * The drift-sensor fixture is a real project built entirely through the CLI, and its STATE.md is
@@ -75,6 +77,29 @@ describe('drift-sensor fixture', () => {
     const imported = activePoints(state, 'main').filter((point) => point.tags.includes('import'))
     expect(imported).toHaveLength(imports[0]!.rows)
     expect(imported.map((point) => point.values.x)).toEqual([7, 8])
+  })
+
+  it('ships a view whose panels are still current against the committed log', async () => {
+    const { views } = await listViews(projectDir)
+    expect(views.length).toBeGreaterThan(0)
+
+    const workspace = await Workspace.open(projectDir)
+    const view = await loadView(projectDir, views[0]!.name)
+    expect(view.panels.length).toBeGreaterThan(1)
+
+    // A committed tab that draws stale data is worse than no example at all: it teaches the format
+    // and the wrong answer at once. The fingerprint in each panel is what this checks.
+    const statuses = await panelStatuses(workspace, view)
+    expect(statuses.map((status) => status.state)).toEqual(view.panels.map(() => 'current'))
+
+    // And it renders from the file alone: ids on the marks, provenance on the canvas.
+    const svg = renderView(view)
+    expect(svg).toContain('data-view=')
+    expect(svg).toContain('data-dataset="main"')
+    const ids = new Set(activePoints(workspace.state, 'main').map((point) => point.id))
+    const marked = [...svg.matchAll(/data-point-id="([^"]+)"/g)].map((match) => match[1]!)
+    expect(marked.length).toBeGreaterThan(0)
+    for (const id of marked) expect(ids.has(id)).toBe(true)
   })
 
   it('preserves the original bytes of a corrected point', async () => {

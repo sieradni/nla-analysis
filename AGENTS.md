@@ -89,6 +89,10 @@ src/core/workspace.ts
                     through it, and the CLI is a wrapper over it (ADR 0003). The app will bind
                     this directly; it must never learn about windows or drawing.
 src/cli/            the bench command surface — argument parsing, a call, and printing
+src/core/registry.ts
+                    which projects exist on this machine ($BENCH_HOME/projects.json, outside every
+                    project). App state, disposable: losing it loses recency, not data.
+src/core/views.ts   the tab format (§4): views are files, materialized so a repaint never runs Python
 recipes/            the Python analysis library, pinned by requirements.lock.txt
 recipes/.venv/      the analysis environment, recreated by `pnpm setup:recipes` (ignored)
 tests/              unit tests, plus CLI tests that run the real binary
@@ -102,7 +106,7 @@ A user's project:
 data/events.jsonl   truth (append-only, via bench only)
 data/raw/           untouched imports
 shapes/             point shape registry (declared in the log)
-views/              tab and panel definitions (JSON)
+views/              one JSON file per tab (`<slug>.json`), rendered by `bench view render`
 artifacts/          generated output, all regenerable
 index.sqlite        derived index, disposable (not built yet)
 AGENTS.md           this project's own rules, written by `bench init`

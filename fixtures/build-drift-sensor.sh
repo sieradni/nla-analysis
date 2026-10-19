@@ -11,6 +11,10 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="$root/fixtures/projects/drift-sensor"
+# Registering the fixture in the operator's real ~/.bench would rearrange the list a window shows,
+# and rebuilding a fixture must not touch anything outside the repository.
+export BENCH_HOME="$(mktemp -d)"
+trap 'rm -rf "$BENCH_HOME" ${work:+"$work"}' EXIT
 bench() { node "$root/src/cli/index.ts" --project "$project" "$@"; }
 
 # Read a point id out of `--json` output without needing jq.
@@ -48,7 +52,6 @@ bench correct "$bad" --values '{"y":16.0}' --reason "transcription error" >/dev/
 # and loaded from a file. The CSV is written outside the project and imported; the copy the importer
 # keeps under data/raw/ is the evidence, committed alongside the log that refers to it.
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
 cat > "$work/recalibration.csv" <<'CSV'
 # Comment lines and a ragged tail are deliberate: this is what an instrument export looks like.
 t_observed,temperature,reading
@@ -71,5 +74,12 @@ bench run fit --param degree=1 >/dev/null
 bench run drift --param split=auto >/dev/null
 
 bench chart >/dev/null
+
+# A tab: the saved question, with its materialized specs and the fingerprint of what each panel read.
+# Committed so a fresh clone has an example of the format the window renders, and so the fixture test
+# can prove the saved panels are still current against the committed log.
+bench view new "drift over time" --dataset main --recipe drift --title "slope before and after the split" >/dev/null
+bench view add "drift over time" --dataset main --title "all readings" >/dev/null
+
 bench check
 echo "fixture rebuilt at $project"

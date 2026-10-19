@@ -6,7 +6,6 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { freshnessNote } from '../core/analysis.ts'
-import { numericValue } from '../core/binder.ts'
 import {
   BenchError,
   Workspace,
@@ -19,9 +18,31 @@ import {
 import { makeEvent } from '../core/events.ts'
 import type { BenchEvent, PointValue } from '../core/events.ts'
 import { renderChart } from '../core/chart.ts'
-import type { ChartSpec } from '../core/chart.ts'
 import { validateValues } from '../core/shapes.ts'
-import { initProject } from '../core/project.ts'
+import { findProjectDir, initProject } from '../core/project.ts'
+import {
+  listProjects,
+  rememberProject,
+  resolveProjectName,
+  type KnownProject,
+} from '../core/registry.ts'
+import {
+  listViews,
+  loadView,
+  materializePanel,
+  panelStatuses,
+  plotDataset,
+  renderView,
+  requireFreeName,
+  saveView,
+  slugFor,
+  validateView,
+  validateQuery,
+  viewPath,
+  type PanelRequest,
+  type ViewFile,
+  type ViewPanel,
+} from '../core/views.ts'
 import { RecipeRunner } from '../core/runner.ts'
 import { renderState } from '../core/state.ts'
 import { coerce, parseDelimited, parseJsonl } from '../core/table.ts'
@@ -53,6 +74,13 @@ const OPTIONS = {
   tag: { type: 'string', multiple: true },
   param: { type: 'string', multiple: true },
   chart: { type: 'string' },
+  recipe: { type: 'string' },
+  title: { type: 'string' },
+  query: { type: 'string' },
+  columns: { type: 'string' },
+  file: { type: 'string' },
+  scan: { type: 'string' },
+  refresh: { type: 'boolean' },
   format: { type: 'string' },
   map: { type: 'string', multiple: true },
   time: { type: 'string' },
@@ -81,6 +109,7 @@ function printHelp(): void {
 
 Usage
   bench init [dir] [--name <name>]      create a project folder
+  bench projects [--scan <dir>]         projects on this machine, most recent first
   bench add --x 1 --y 2 [options]       record a point
   bench correct <id> --values '{"y":3}'  supersede a point (never overwrites)
   bench retract <id> [--reason text]    withdraw a point from analysis
@@ -95,6 +124,14 @@ Usage
   bench run <recipe> [--param k=v]      run an analysis, record it, and chart the result
   bench decide "<text>"                 record a decision the next session inherits
 
+Views (a tab is a view file in the project)
+  bench view list                       views in this project
+  bench view show <name>                one view, with the state of every panel
+  bench view new <name> [options]       create a one-panel view from the data or a recipe
+  bench view add <name> [options]       append a panel to an existing view
+  bench view save [name] --file <json>  store a view file (use - for stdin)
+  bench view render <name> [--refresh]  draw the saved specs to artifacts/view-<name>.svg
+
 Options for add
   --values '{"x":1,"y":2}'   explicit field values
   --at <iso time>            when the value was observed; stored as canonical UTC
@@ -105,6 +142,14 @@ Options for add
   --param <name=value>       recipe parameter, repeatable (numbers and booleans inferred)
   --chart <path>             where to write the rendered artifact
 
+Options for view new / add
+  --dataset <id>             which dataset the panel reads
+  --recipe <name>            make the panel an analysis, not just a plot
+  --param <name=value>       recipe parameter, repeatable
+  --query '{"where":[…]}'    select rows: field/op/value clauses, all must hold
+  --title <text>             panel heading
+  --columns <1-4>            grid columns for the tab (view new only)
+
 Options for import
   --map <field=column>       map a shape field to a column with a different name, repeatable
   --time <column>            read the observation time from a column
@@ -113,7 +158,7 @@ Options for import
   --force                    import a file whose exact contents were imported before
 
 Global
-  --project <dir>   operate on a project other than the enclosing one
+  --project <dir|name>  operate on another project: a path, or a registered name
   --json            machine-readable output
   -h, --help        this text
 
@@ -140,13 +185,40 @@ function fail(error: unknown): never {
   die(error instanceof Error ? error.message : String(error), EXIT_INVARIANT)
 }
 
-/** Every command opens the project the same way. */
+/**
+ * `--project` takes a path or the name a project was registered under. A name is only consulted
+ * when nothing exists at that path, so a folder literally called `drift` still wins over a
+ * registered project named drift.
+ */
+async function locateProject(explicit?: string): Promise<string> {
+  if (explicit === undefined) return process.cwd()
+  const asPath = resolve(explicit)
+  if (existsSync(asPath)) return asPath
+  const byName = await resolveProjectName(explicit)
+  return byName ?? asPath
+}
+
+/** Every command opens the project the same way, and every open records a recent. */
 async function openWorkspace(explicit?: string): Promise<Workspace> {
+  let workspace: Workspace
   try {
-    return await Workspace.open(explicit ? resolve(explicit) : process.cwd())
+    workspace = await Workspace.open(await locateProject(explicit))
   } catch (error) {
     fail(error)
   }
+  // Recency is application state, not project state. A read-only home must not fail `bench list`,
+  // and the command already succeeded at the thing the user asked for.
+  try {
+    await rememberProject(workspace.dir, {
+      name: workspace.config.name,
+      created: workspace.config.created,
+    })
+  } catch (error) {
+    // The registry is a convenience — losing it loses recency, not data — but a broken one is worth
+    // saying out loud once, rather than silently losing every project from the list.
+    process.stderr.write(`  warning: could not record this project: ${(error as Error).message}\n`)
+  }
+  return workspace
 }
 
 /** Shared by `add` and `correct`: both accept the same field-selection flags. */
@@ -219,6 +291,82 @@ function guessFormat(path: string): string {
   return 'csv'
 }
 
+interface PanelOptions {
+  dataset?: string
+  recipe?: string
+  param?: string[]
+  query?: string
+  title?: string
+}
+
+/** The flags `view new` and `view add` share: everything that describes one panel. */
+function panelRequestFrom(options: PanelOptions): PanelRequest {
+  let query
+  if (typeof options.query === 'string') {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(options.query)
+    } catch {
+      die('--query is not valid JSON', EXIT_INVALID, `--query '{"where":[{"field":"y","op":">","value":0}]}'`)
+    }
+    try {
+      query = validateQuery(parsed)
+    } catch (error) {
+      fail(error)
+    }
+  }
+
+  return {
+    ...(options.dataset === undefined ? {} : { dataset: options.dataset }),
+    ...(options.recipe === undefined ? {} : { recipe: options.recipe }),
+    ...(options.param === undefined ? {} : { params: parseParams(options.param) }),
+    ...(query === undefined ? {} : { query }),
+    ...(options.title === undefined ? {} : { title: options.title }),
+  }
+}
+
+/** A panel that needs a recipe gets the Python runtime; a plot of the dataset never does. */
+async function materializeOne(workspace: Workspace, request: PanelRequest): Promise<ViewPanel> {
+  try {
+    if (request.recipe === undefined) {
+      return (await materializePanel(workspace, request)).panel
+    }
+    return (await withRunner(APP_ROOT, (runner) => materializePanel(workspace, request, runner))).panel
+  } catch (error) {
+    fail(error)
+  }
+}
+
+function columnCount(raw: string | undefined): number {
+  if (raw === undefined) return 2
+  const columns = Number(raw)
+  if (!Number.isInteger(columns) || columns < 1 || columns > 4) {
+    die(`--columns must be a whole number from 1 to 4, got "${raw}"`, EXIT_INVALID)
+  }
+  return columns
+}
+
+async function readStream(stream: NodeJS.ReadableStream): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk as string | Uint8Array))
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/** One line per panel for a person: what it reads, what produced it, and whether it still holds. */
+function describePanel(panel: ViewPanel, status: { state: string; detail?: string }): string {
+  const source = panel.recipe
+    ? `${panel.recipe} ${JSON.stringify(panel.params ?? {})}`
+    : 'plot'
+  const facts = [
+    panel.dataset,
+    source,
+    panel.verdict ?? '',
+    panel.n === undefined ? '' : `n = ${panel.n}`,
+    status.state,
+  ].filter((fact) => fact !== '')
+  return `${facts.join(' · ')}${status.detail ? ` — ${status.detail}` : ''}`
+}
+
 function parse(argv: string[]) {
   try {
     return parseArgs({ args: argv, allowPositionals: true, options: OPTIONS, strict: true })
@@ -244,6 +392,11 @@ async function main(): Promise<void> {
       const target = resolve(args[0] ?? '.')
       try {
         const handle = await initProject(target, values.name)
+        try {
+          await rememberProject(handle.dir, { name: handle.config.name, created: handle.config.created })
+        } catch (error) {
+          process.stderr.write(`  warning: created, but could not be registered: ${(error as Error).message}\n`)
+        }
         if (asJson) {
           process.stdout.write(
             JSON.stringify({ ok: true, data: { dir: handle.dir, name: handle.config.name } }, null, 2) + '\n',
@@ -255,6 +408,55 @@ async function main(): Promise<void> {
         }
       } catch (error) {
         die((error as Error).message, EXIT_INVARIANT)
+      }
+      return
+    }
+
+    case 'projects': {
+      let listed: Awaited<ReturnType<typeof listProjects>>
+      try {
+        listed = await listProjects(values.scan)
+      } catch (error) {
+        fail(error)
+      }
+      if (listed.problem !== undefined) process.stderr.write(`  warning: ${listed.problem}\n`)
+
+      const here = await findProjectDir(process.cwd())
+      const rows = listed.projects.map((project) => ({
+        ...project,
+        current: here !== null && project.dir === here,
+      }))
+
+      if (asJson) {
+        process.stdout.write(
+          JSON.stringify(
+            {
+              ok: true,
+              data: { projects: rows, current: here },
+              ...(listed.problem === undefined ? {} : { warnings: [listed.problem] }),
+            },
+            null,
+            2,
+          ) + '\n',
+        )
+        return
+      }
+
+      if (rows.length === 0) {
+        process.stdout.write('no projects yet\n  next: bench init <dir>\n')
+        return
+      }
+
+      const width = Math.max(...rows.map((project) => project.name.length))
+      process.stdout.write(`${rows.length} project(s), most recent first\n`)
+      for (const project of rows as (KnownProject & { current: boolean })[]) {
+        const marker = project.current ? '*' : ' '
+        const notes = [
+          project.registered ? `last opened ${project.lastOpened.slice(0, 16).replace('T', ' ')}` : 'not registered',
+          project.exists ? '' : 'missing',
+        ].filter((note) => note !== '')
+        process.stdout.write(`  ${marker} ${project.name.padEnd(width)}  ${notes.join(' · ')}\n`)
+        process.stdout.write(`      ${project.dir}\n`)
       }
       return
     }
@@ -443,46 +645,29 @@ async function main(): Promise<void> {
     case 'chart': {
       const workspace = await openWorkspace(values.project)
       const datasetId = workspace.resolveDataset(values.dataset)
-      const dataset = workspace.dataset(datasetId)
-      const points = dataset.points
-      const plotted = points
-        .map((point) => ({
-          id: point.id,
-          x: numericValue(point, 'x'),
-          y: numericValue(point, 'y'),
-        }))
-        .filter(
-          (pair): pair is { id: string; x: number; y: number } =>
-            pair.x !== undefined && pair.y !== undefined,
-        )
-
-      if (plotted.length === 0) {
-        die(`dataset "${datasetId}" has no points with numeric x and y`, EXIT_MISSING, 'bench add --x 1 --y 2')
+      // The same unmodelled spec a panel without a recipe uses: one implementation of "plot what is
+      // there, and say that nothing was modelled".
+      let plotted: ReturnType<typeof plotDataset>
+      try {
+        plotted = plotDataset(workspace, datasetId)
+      } catch (error) {
+        fail(error)
       }
 
-      const skipped = points.length - plotted.length
-      const footerParts = [`n = ${plotted.length}`]
-      if (skipped > 0) footerParts.push(`${skipped} point(s) without x/y not plotted`)
-      footerParts.push('no fit — unmodelled')
-
-      const spec: ChartSpec = {
-        title: workspace.config.name,
-        subtitle: `${datasetId} · ${dataset.definition?.id ?? 'unknown shape'}`,
-        provenance: { dataset: datasetId, shape: dataset.shape },
-        x: { label: 'x' },
-        y: { label: 'y' },
-        points: plotted,
-        footer: footerParts.join(' · '),
+      if (plotted.plotted === 0) {
+        die(`dataset "${datasetId}" has no points with numeric x and y`, EXIT_MISSING, 'bench add --x 1 --y 2')
       }
 
       const out = values.out ? resolve(values.out) : join(workspace.dir, 'artifacts', `${datasetId}.svg`)
       await mkdir(join(workspace.dir, 'artifacts'), { recursive: true })
-      await writeFile(out, renderChart(spec))
+      await writeFile(out, renderChart(plotted.spec))
 
       if (asJson) {
-        process.stdout.write(JSON.stringify({ ok: true, data: { path: out, points: plotted.length } }, null, 2) + '\n')
+        process.stdout.write(
+          JSON.stringify({ ok: true, data: { path: out, points: plotted.plotted } }, null, 2) + '\n',
+        )
       } else {
-        process.stdout.write(`wrote ${out}  (${plotted.length} points)\n`)
+        process.stdout.write(`wrote ${out}  (${plotted.plotted} points)\n`)
       }
       return
     }
@@ -955,6 +1140,238 @@ async function main(): Promise<void> {
         process.stdout.write(`recorded decision ${event.id}\n`)
       }
       return
+    }
+
+    case 'view': {
+      const [sub, viewName] = args
+      if (!sub) {
+        die('missing a view subcommand', EXIT_INVALID, 'bench view list | show | new | add | save | render')
+      }
+
+      if (sub === 'list') {
+        const workspace = await openWorkspace(values.project)
+        const { views, problems } = await listViews(workspace.dir)
+        for (const problem of problems) process.stderr.write(`  warning: ${problem}\n`)
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify(
+              { ok: true, data: { views, dir: join(workspace.dir, 'views') }, ...(problems.length === 0 ? {} : { warnings: problems }) },
+              null,
+              2,
+            ) + '\n',
+          )
+          return
+        }
+        if (views.length === 0) {
+          process.stdout.write('no views yet\n  next: bench view new drift --dataset main --recipe drift\n')
+          return
+        }
+        process.stdout.write(`${views.length} view(s) in ${join(workspace.dir, 'views')}\n`)
+        for (const view of views) {
+          const recipes = view.recipes.length === 0 ? '' : ` · ${view.recipes.join(', ')}`
+          process.stdout.write(
+            `  ${view.name}  ·  ${view.panels} panel(s) · ${view.columns} column(s)${recipes}\n`,
+          )
+          process.stdout.write(`      ${view.file}\n`)
+        }
+        return
+      }
+
+      if (sub === 'show' || sub === 'render') {
+        if (!viewName) die(`missing a view name`, EXIT_INVALID, `bench view ${sub} <name>`)
+        const workspace = await openWorkspace(values.project)
+
+        let view: ViewFile
+        try {
+          view = await loadView(workspace.dir, viewName)
+        } catch (error) {
+          fail(error)
+        }
+
+        let statuses = await panelStatuses(workspace, view)
+
+        if (sub === 'show') {
+          if (asJson) {
+            process.stdout.write(
+              JSON.stringify(
+                { ok: true, data: { file: viewPath(workspace.dir, view.name), view, status: statuses } },
+                null,
+                2,
+              ) + '\n',
+            )
+            return
+          }
+          process.stdout.write(
+            `${view.name} · ${view.panels.length} panel(s) · ${view.layout.columns} column(s) · views/${slugFor(view.name)}.json\n`,
+          )
+          view.panels.forEach((panel, index) => {
+            const status = statuses[index]!
+            const heading = panel.title ? `${panel.title} — ` : ''
+            process.stdout.write(`  ${index + 1}. ${heading}${describePanel(panel, status)}\n`)
+          })
+          if (statuses.some((status) => status.state !== 'current' && status.state !== 'unchecked')) {
+            process.stdout.write('  next: bench view render --refresh to re-read the data\n')
+          }
+          return
+        }
+
+        // Rendering is the one path that must never need Python: it draws what the file says.
+        if (values.refresh === true && statuses.some((status) => status.state !== 'current')) {
+          for (const status of statuses) {
+            if (status.state === 'current') continue
+            const panel = view.panels[status.index]!
+            view.panels[status.index] = await materializeOne(workspace, {
+              dataset: panel.dataset,
+              ...(panel.recipe === undefined ? {} : { recipe: panel.recipe }),
+              ...(panel.params === undefined ? {} : { params: panel.params }),
+              ...(panel.query === undefined ? {} : { query: panel.query }),
+              ...(panel.title === undefined ? {} : { title: panel.title }),
+            })
+          }
+          try {
+            await saveView(workspace.dir, view)
+          } catch (error) {
+            fail(error)
+          }
+          statuses = await panelStatuses(workspace, view)
+        }
+
+        const out = values.out
+          ? resolve(values.out)
+          : join(workspace.dir, 'artifacts', `view-${slugFor(view.name)}.svg`)
+        await mkdir(dirname(out), { recursive: true })
+        await writeFile(out, renderView(view))
+
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify(
+              { ok: true, data: { path: out, panels: view.panels.length, status: statuses } },
+              null,
+              2,
+            ) + '\n',
+          )
+        } else {
+          process.stdout.write(`wrote ${out}  (${view.panels.length} panel(s))\n`)
+          for (const status of statuses) {
+            if (status.state === 'current') continue
+            process.stdout.write(
+              `  panel ${status.index + 1}: ${status.state}${status.detail ? ` — ${status.detail}` : ''}\n`,
+            )
+          }
+        }
+        return
+      }
+
+      if (sub === 'new' || sub === 'add') {
+        if (!viewName) die('missing a view name', EXIT_INVALID, `bench view ${sub} <name> --dataset main`)
+        const workspace = await openWorkspace(values.project)
+
+        let view: ViewFile
+        if (sub === 'new') {
+          try {
+            await requireFreeName(workspace.dir, viewName, values.force === true)
+          } catch (error) {
+            fail(error)
+          }
+          view = { v: 1, name: viewName, layout: { columns: columnCount(values.columns) }, panels: [] }
+        } else {
+          try {
+            view = await loadView(workspace.dir, viewName)
+          } catch (error) {
+            fail(error)
+          }
+        }
+
+        const panel = await materializeOne(workspace, panelRequestFrom(values))
+        view.panels.push(panel)
+        try {
+          await saveView(workspace.dir, view)
+        } catch (error) {
+          fail(error)
+        }
+
+        const status = describePanel(panel, { state: 'current' })
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify(
+              {
+                ok: true,
+                data: { file: viewPath(workspace.dir, view.name), panels: view.panels.length, panel },
+              },
+              null,
+              2,
+            ) + '\n',
+          )
+        } else {
+          process.stdout.write(
+            `${sub === 'new' ? 'created' : 'added a panel to'} views/${slugFor(view.name)}.json  (${view.panels.length} panel(s))\n`,
+          )
+          process.stdout.write(`  ${status}\n`)
+        }
+        return
+      }
+
+      if (sub === 'save') {
+        const file = values.file
+        if (file === undefined) {
+          die('missing a file to save', EXIT_INVALID, `bench view save --file view.json (or - for stdin)`)
+        }
+
+        let text: string
+        if (file === '-') {
+          text = await readStream(process.stdin)
+        } else {
+          try {
+            text = await readFile(resolve(file), 'utf8')
+          } catch {
+            die(`cannot read ${file}`, EXIT_MISSING)
+          }
+        }
+
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(text)
+        } catch {
+          die(`${file} is not valid JSON`, EXIT_INVALID)
+        }
+
+        let view: ViewFile
+        try {
+          view = validateView(parsed)
+        } catch (error) {
+          fail(error)
+        }
+        if (viewName !== undefined && slugFor(viewName) !== slugFor(view.name)) {
+          die(
+            `the file is named "${view.name}", but the command asked for "${viewName}"`,
+            EXIT_INVALID,
+            'rename the view in the file, or the file on disk',
+          )
+        }
+
+        const workspace = await openWorkspace(values.project)
+        try {
+          await saveView(workspace.dir, view)
+        } catch (error) {
+          fail(error)
+        }
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify(
+              { ok: true, data: { file: viewPath(workspace.dir, view.name), panels: view.panels.length } },
+              null,
+              2,
+            ) + '\n',
+          )
+        } else {
+          process.stdout.write(
+            `saved views/${slugFor(view.name)}.json  (${view.panels.length} panel(s))\n`,
+          )
+        }
+        return
+      }
+
+      die(`unknown view subcommand "${sub}"`, EXIT_INVALID, 'bench view list | show | new | add | save | render')
     }
 
     default:

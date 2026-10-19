@@ -15,7 +15,8 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { activePoints, type ProjectState, type RunRecord } from './binder.ts'
-import type { RunInput } from './runner.ts'
+import type { ChartSpec } from './chart.ts'
+import type { RunInput, RunResult } from './runner.ts'
 
 /**
  * The application's own directory: the one holding `recipes/`. Derived from this module's location
@@ -75,6 +76,46 @@ export function hashInput(input: RunInput): string {
 
 export function recipePath(root: string, recipe: string): string {
   return join(root, 'recipes', `${recipe}.py`)
+}
+
+export interface SpecContext {
+  /** Title line, usually the project name. */
+  title: string
+  dataset: string
+  shape: string
+  /** Shown in the subtitle, so an artifact says which analysis drew it. */
+  recipe: string
+}
+
+/**
+ * Turn a recipe result into the spec a renderer draws — one implementation, because this is the
+ * honesty surface: the band note, the footer and the caption are where an artifact promises what it
+ * actually shows. `bench run`, `bench rerun` and a view panel all pass through here.
+ */
+export function chartSpecFor(result: RunResult, context: SpecContext): ChartSpec {
+  // Only mention a band when one was actually drawn. A caption promising a band that is not on the
+  // canvas is the same class of lie as a curve without an interval.
+  const level = Number(result.diagnostics.level)
+  const bandKind = typeof result.diagnostics.band === 'string' ? result.diagnostics.band : 'confidence'
+  const bandNote =
+    result.chart.band !== undefined && Number.isFinite(level)
+      ? `${Math.round(level * 100)}% ${bandKind} band`
+      : ''
+  const footer = [result.chart.footer ?? '', bandNote].filter((part) => part !== '').join(' · ')
+  const caption = result.caption ?? result.narrative
+
+  return {
+    ...result.chart,
+    title: context.title,
+    subtitle: `${context.dataset} · ${context.recipe}`,
+    // What the artifact was drawn from, structurally: a client pinning a view to a dataset should
+    // read this rather than parse the subtitle.
+    provenance: { dataset: context.dataset, shape: context.shape },
+    ...(footer === '' ? {} : { footer }),
+    // The artifact carries its own conclusion: the terminal scrollback is not durable. Recipes may
+    // supply a shorter form for the canvas; the full argument stays in the log.
+    ...(caption === '' ? {} : { caption }),
+  }
 }
 
 /** Matches what the Python runner reports, so the two can never disagree about a recipe's identity. */

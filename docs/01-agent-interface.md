@@ -7,7 +7,7 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 
 | working | specified, not built |
 |---|---|
-| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide` | `dataset *`, `shape *`, `view *`, `export` |
+| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `view list\|show\|new\|add\|save\|render` | `dataset *`, `shape *`, `export` |
 
 Available recipes: `fit` (curve, band, verdict) and `drift` (does the relationship change over time).
 
@@ -19,6 +19,59 @@ the current binary.
 `bench recipes` deliberately does **not** require a project: recipes belong to the application, not
 to a data set. `bench run` writes the rendered artifact, appends an `analysis_run` event carrying the
 recipe hash, the input hash, the verdict and the narrative, and refreshes `STATE.md`.
+
+## Projects and tabs
+
+`bench projects` lists the projects this machine knows, most recently opened first, marking the one
+that contains the working directory. `--scan <dir>` adds project folders that were never registered
+(shown as `not registered`, depth-limited to three levels). Registration happens on `init` and on any
+command that opens a project; the list lives at `$BENCH_HOME/projects.json` (`~/.bench` by default),
+outside every project, and losing it loses recency, not data. `--project` accepts a registered name as
+well as a path: `bench --project "sensor a" add --x 1 --y 2`.
+
+A **view is the tab format** ([ADR 0004](adr/0004-views-and-projects.md)): one JSON file per tab in
+`views/<slug>.json`.
+
+```json
+{
+  "v": 1,
+  "name": "drift over time",
+  "layout": { "columns": 2 },
+  "panels": [
+    {
+      "title": "slope before and after the split",
+      "dataset": "main",
+      "version": "latest",
+      "query": { "where": [{ "field": "y", "op": ">", "value": 0 }] },
+      "recipe": "drift",
+      "params": { "split": "auto" },
+      "chart": { "x": { "label": "x" }, "y": { "label": "y" }, "points": [{ "x": 1, "y": 2.55, "id": "01J..." }], "provenance": { "dataset": "main", "shape": "xy.v1" } },
+      "verdict": "tentative",
+      "n": 14,
+      "recipe_hash": "…",
+      "input_hash": "…"
+    }
+  ]
+}
+```
+
+| command | purpose |
+|---|---|
+| `bench view list [--json]` | views in this project, with panel counts and recipes |
+| `bench view show <name> [--json]` | the view plus one status per panel: `current`, `stale`, `missing`, `unchecked` |
+| `bench view new <name> [--dataset] [--recipe] [--param] [--query] [--title] [--columns] [--force]` | create a one-panel tab from the data or a recipe |
+| `bench view add <name> [flags]` | append a panel to an existing tab |
+| `bench view save [name] --file <json\|->` | validate and store a hand-written view (stdin allowed) |
+| `bench view render <name> [--refresh] [--out]` | draw the saved specs to `artifacts/view-<name>.svg` |
+
+`render` never computes: it reads the file and draws it. `--refresh` is the explicit act that re-reads
+the data, re-runs any recipe, and rewrites the file. Panels store fingerprint hashes (`input_hash`
+over the selected rows, `recipe_hash` over the recipe file), so `view show` notices moved data and an
+edited recipe without running anything. A view records **no** log events: `bench run` remains the way
+to record an analysis.
+
+The `query` is deliberately tiny — `field`, `op` (`> >= < <= == !=`), `value`, all clauses required.
+It selects rows; it never computes with them.
 
 ## Where the work happens
 
