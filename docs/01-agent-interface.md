@@ -143,10 +143,13 @@ exist, which analyses are stale, what the last decisions were, and what is unres
   content hash, the columns, and the field-to-column mapping.
 - **A duplicate is refused, not silently repeated.** If an `import_completed` event with the same
   hash and dataset exists, the import stops and says so. `--force` is the way to mean it.
-- **The time column is a decision.** `--time <column>` names it; otherwise the first header that
+- **The time column is required.** `--time <column>` names it; otherwise the first header that
   looks like one wins (`t_observed`, `observed_at`, `timestamp`, `time`, `date`, `t`, in that
-  order). With no time column, `t_observed` is the moment of import. A column that cannot be parsed
-  as a time is an error, never a silent fallback to now.
+  order). If neither finds one, the import is refused and the error names the file's columns and the
+  flag: a row is identified by its instant, so stamping every row with the moment of import would
+  make a re-import read as every row leaving and every replacement arriving. The window's sheet has
+  the same decision as a picker and passes the same `time` into the plan. A column that cannot be
+  parsed as a time is an error, never a silent fallback to now.
 - **Metadata preambles are skipped and counted.** Lines starting with `#` or `//` are dropped and
   reported in the output, because a skipped line could just as easily be a broken row.
 - **`--dry-run` writes nothing at all** — no events, no copy under `data/raw/` — and prints the

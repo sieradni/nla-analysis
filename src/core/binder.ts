@@ -357,8 +357,11 @@ export function activeRowsOfVersion(
   const dataset = state.datasets.get(datasetId)
   if (!dataset) return []
   // The newest version is already folded: reading it from the live state keeps the common case off
-  // the re-fold path, and `foldVersion` is checked against it by test.
-  if (version >= dataset.version) return activePoints(state, datasetId)
+  // the re-fold path, and `foldVersion` is checked against it by test. A version past the newest is
+  // not the newest — it holds nothing, and saying otherwise would answer a question nobody asked
+  // with the rows of another version.
+  if (version === dataset.version) return activePoints(state, datasetId)
+  if (version > dataset.version) return []
   return foldVersion(state.events, datasetId, version).filter((point) => point.status === 'active')
 }
 

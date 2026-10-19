@@ -47,9 +47,12 @@ describe('importing a table', () => {
     expect(preview.duplicate).toBe(false)
     expect(preview.fields.map((field) => field.type)).toEqual(['number', 'number'])
 
-    // A file whose columns are named like the fields is suggested without a click.
+    // A file whose columns are named like the fields is suggested without a click — and a file with
+    // no clock suggests none, rather than a made-up one.
     await writeFile(join(dir, 'plain.csv'), 'x,y\n1,2\n3,4\n')
-    expect((await previewImport(workspace, join(dir, 'plain.csv'))).suggested).toEqual({ x: 'x', y: 'y' })
+    const plain = await previewImport(workspace, join(dir, 'plain.csv'))
+    expect(plain.suggested).toEqual({ x: 'x', y: 'y' })
+    expect(plain.suggestedTime).toBeNull()
 
     // The messy file has no x/y columns, so the name match finds nothing: that is a refusal, not a guess.
     const failure = await planImport(workspace, messy).catch((error) => error)
@@ -69,6 +72,29 @@ describe('importing a table', () => {
     })
     expect(plan.warnings).toEqual([])
     expect(plan.preserved).toMatch(/^data\/raw\/[0-9a-f]{12}-lab-export\.csv$/)
+  })
+
+  it('refuses a file with no observation time instead of stamping the moment of import', async () => {
+    const { dir, workspace } = await project()
+    await writeFile(join(dir, 'plain.csv'), 'x,y\n1,2\n2,4\n')
+    expect((await previewImport(workspace, join(dir, 'plain.csv'))).suggestedTime).toBeNull()
+
+    const failure = await planImport(workspace, join(dir, 'plain.csv')).catch((error) => error)
+    expect(failure.message).toMatch(/no column holds the observation time/)
+    // The refusal names the columns it could have meant, so the fix is a choice, not a guess.
+    expect(failure.message).toContain('x, y')
+    expect(failure.hint).toContain('--time <column>')
+    // Nothing was written: no copy, no import record, no version.
+    expect(await readdir(join(dir, 'data', 'raw')).catch(() => [])).toEqual([])
+    expect(workspace.allEvents.filter((event) => event.type === 'import_completed')).toHaveLength(0)
+  })
+
+  it("finds the time column in the file's own spelling, not only the lowercase one", async () => {
+    const { dir, workspace } = await project()
+    await writeFile(join(dir, 'upper.csv'), 'Timestamp,x,y\n2026-03-01T09:00:00Z,1,2\n')
+    const plan = await planImport(workspace, join(dir, 'upper.csv'), { mapping: { x: 'x', y: 'y' } })
+    expect(plan.timeColumn).toBe('Timestamp')
+    expect(plan.sample[0]!.t).toBe('2026-03-01T09:00:00.000Z')
   })
 
   it('writes the points and the import record together, and preserves the original', async () => {

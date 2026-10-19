@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -266,6 +266,53 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
 
     // And the same bytes twice is refused until it is asked for explicitly.
     await expect(api.importFile!(dir, file, { x: 'temp_c', y: 'volts' })).rejects.toThrow(/already imported/)
+  })
+
+  it('refuses an untimed file through the window door, and reads a named time column when given one', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+
+    // The sheet and the CLI share one planner, so the refusal is the core's, not the window's.
+    await writeFile(join(dir, 'untimed.csv'), 'x,y\n1,2.55\n2,4.62\n', 'utf8')
+    const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+    await expect(api.importPlan!(dir, join(dir, 'untimed.csv'), { x: 'x', y: 'y' })).rejects.toThrow(
+      /no column holds the observation time/,
+    )
+    await expect(api.importFile!(dir, join(dir, 'untimed.csv'), { x: 'x', y: 'y' })).rejects.toThrow(
+      /no column holds the observation time/,
+    )
+    expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
+
+    // A column named `taken_at` is not one of the names bench guesses, so the sheet has to say it.
+    // Four rows the fixture already has, plus one new reading: the diff is about that one row.
+    const file = join(dir, 'taken-at.csv')
+    await writeFile(
+      file,
+      'taken_at,x,y\n' +
+        '2026-10-01T09:00:00Z,1,2.55\n' +
+        '2026-10-01T09:04:00Z,2,4.62\n' +
+        '2026-10-02T09:00:00Z,3,6.71\n' +
+        '2026-10-03T09:00:00Z,4,8.85\n' +
+        '2026-10-16T09:00:00Z,7,18.62\n',
+      'utf8',
+    )
+    const preview = (await api.importPreview!(dir, file)) as Window
+    expect(preview.suggestedTime).toBeNull()
+    const planned = (await api.importPlan!(dir, file, { x: 'x', y: 'y' }, { time: 'taken_at' })) as Window
+    expect(planned).toMatchObject({ version: 3, parent: 2, diff: { added: 1, removed: 10, changed: 0 } })
+
+    const imported = (await api.importFile!(dir, file, { x: 'x', y: 'y' }, { time: 'taken_at' })) as Window
+    expect(imported).toMatchObject({ version: 3, parent: 2, diff: { added: 1, removed: 10, changed: 0 } })
+    const appended = (await readFile(join(dir, 'data', 'events.jsonl'), 'utf8'))
+      .slice(before.length)
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    const recorded = appended.filter((event: Window) => event.type === 'point_recorded')
+    expect(recorded).toHaveLength(1)
+    // The instant is the file's, not the moment of the import: that is the whole point.
+    expect(recorded[0].t_observed).toBe('2026-10-16T09:00:00.000Z')
+    expect(recorded[0].version).toBe(3)
   })
 
   it('reloads a tab another writer moved, and reports a tab that is gone', async () => {

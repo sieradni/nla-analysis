@@ -41,6 +41,14 @@ their shape.
    parent and the diff and writes nothing; the sheet shows `version 4 replaces version 3 · +1 −2 ~1`
    before the button is pressed, from the same function the commit runs. One importer, two doors
    (ADR 0011), now with the version as part of what it says.
+5. **A row's time is required, not invented.** If no header matches a known time name and the door
+   was not told which column holds it, `planImport` refuses. It names the file's columns and says
+   how to pick one: `--time <column>` in the CLI, the sheet's time picker in the window. This is
+   deliberately not a warning plus a fallback to "now": rows stamped with one invented instant
+   cannot be told apart, so a re-import would report every parent row leaving and every replacement
+   arriving — a diff about nothing, on the path whose whole purpose is a diff you can trust. The
+   same refusal applies to a dataset's first version, because an untimed version 1 would poison
+   every comparison made against it later.
 
 **Consequences.**
 
@@ -62,8 +70,16 @@ their shape.
   non-linear case and are rare by construction.
 - Typing a point grows the current version rather than creating one. "One more reading" and "here is
   the whole file again" stay different acts.
+- A file whose time column is named something bench does not recognise — `taken_at`, say — is read
+  correctly when the door is told: `--time taken_at` or the sheet's picker. Both doors pass the same
+  `time` option into `planImport`, so the CLI and the window cannot disagree about which instant a
+  row has.
+- The cost is one refusal where there used to be a silent success: importing a table with no clock
+  now fails even as a dataset's first version. That is the intended trade — such a dataset could
+  never be re-imported with a meaningful diff, and the refusal says which columns could have held
+  the time.
 
-**Not decided here.** Shape extension and migrations (a version of a *shape* is a different axis), row
-identity for exports with no time column (they get one synthetic `now` per row, so a re-export of them
-diffs as all-new — a real export has a time), and browsing versions in the window beyond the strip's
-label.
+**Not decided here.** Shape extension and migrations (a version of a *shape* is a different axis), how
+to browse versions in the window beyond the strip's label, and whether a *typed* point with no `--at`
+should keep defaulting to now (it does; a single typed point is an act with a time, not a file
+claiming thousands of rows share one).

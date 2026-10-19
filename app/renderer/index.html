@@ -176,6 +176,13 @@
         <p id="import-summary" class="sheet-note"></p>
         <div id="import-preview" class="import-preview"></div>
         <div id="import-fields" class="import-fields"></div>
+        <!-- A row is identified by its instant, so the file's time column is a decision, not a
+             guess: named here, or the import is refused with the columns it could have meant. -->
+        <label class="import-field import-time">
+          <span class="import-field-name">observed</span>
+          <span class="import-field-type">time · required</span>
+          <select id="import-time" aria-label="column holding the observation time"></select>
+        </label>
         <!-- What the mapping would do, worked out before the button is pressed: which version this
              becomes, and what happens to the rows the file does not have. -->
         <p id="import-plan" class="import-plan" hidden></p>

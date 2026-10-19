@@ -158,7 +158,8 @@ Options for init
 
 Options for import
   --map <field=column>       map a shape field to a column with a different name, repeatable
-  --time <column>            read the observation time from a column
+  --time <column>            read the observation time from a column (required: a row is its
+                             instant, so a file without one is refused rather than stamped now)
   --format csv|tsv|jsonl     override detection from the file extension
   --dry-run                  report what would be imported and change nothing
   --force                    import a file whose exact contents were imported before

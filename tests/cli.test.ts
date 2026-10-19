@@ -423,6 +423,71 @@ describe('bench import, as executed', () => {
       expect(result.stderr).toContain('--map x=<column>')
     })
   })
+
+  it('refuses a file with no observation time instead of inventing one', async () => {
+    await withProject('import-untimed', async (dir) => {
+      await writeFile(join(dir, 'readings.csv'), csv, 'utf8')
+      const map = ['--map', 'x=temp_c', '--map', 'y=volts', '--time', 'timestamp']
+      expect((await bench(['--project', dir, 'import', 'readings.csv', ...map])).code).toBe(0)
+
+      // The same rows, re-exported without their clock. Stamping these with the moment of import
+      // would retract every parent row and add every replacement in the same breath.
+      await writeFile(
+        join(dir, 'untimed.csv'),
+        'temp_c,volts\n21.4,3.301\n21.9,3.355\n22.3,3.402\n',
+        'utf8',
+      )
+      const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+      const refused = await bench([
+        '--project', dir, 'import', 'untimed.csv', '--map', 'x=temp_c', '--map', 'y=volts',
+      ])
+      expect(refused.code).toBe(1)
+      expect(refused.stderr).toContain('no column holds the observation time')
+      // It names the columns that could have been meant, so the refusal is actionable.
+      expect(refused.stderr).toContain('temp_c, volts')
+      // Nothing landed, and no version was created from the refusal.
+      expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
+      const versions = await bench(['--project', dir, 'dataset', 'versions', 'main'])
+      expect(versions.stdout).toContain('1 version(s) · newest v1')
+    })
+  })
+
+  it('reads a time column that is not named like one when told, and diffs the next file against it', async () => {
+    await withProject('import-named-time', async (dir) => {
+      await writeFile(
+        join(dir, 'run.csv'),
+        'taken_at,temp_c,volts\n2026-02-01T09:00:00Z,1,2\n2026-02-01T09:01:00Z,2,4\n',
+        'utf8',
+      )
+      const map = ['--map', 'x=temp_c', '--map', 'y=volts', '--time', 'taken_at']
+      const first = await bench(['--project', dir, 'import', 'run.csv', ...map, '--json'])
+      expect(first.code).toBe(0)
+      const planned = JSON.parse(first.stdout) as { data: { timeColumn: string; version: number } }
+      expect(planned.data).toMatchObject({ timeColumn: 'taken_at', version: 1 })
+
+      // The instant is the file's, not the moment of import: that is what makes the next diff work.
+      const listed = await bench(['--project', dir, 'list', '--json'])
+      const points = (JSON.parse(listed.stdout) as { data: { t_observed: string }[] }).data
+      expect(points[0]!.t_observed).toBe('2026-02-01T09:00:00.000Z')
+
+      await writeFile(
+        join(dir, 'run-v2.csv'),
+        'taken_at,temp_c,volts\n' +
+          '2026-02-01T09:00:00Z,1,2\n' +
+          '2026-02-01T09:01:00Z,2,9\n' +
+          '2026-02-01T09:02:00Z,3,6\n',
+        'utf8',
+      )
+      const second = await bench(['--project', dir, 'import', 'run-v2.csv', ...map])
+      expect(second.code).toBe(0)
+      expect(second.stdout).toContain('as version 2')
+      expect(second.stdout).toContain('replaces version 1 · +1 −0 ~1')
+
+      const diff = await bench(['--project', dir, 'dataset', 'diff', 'main', '1', '2'])
+      expect(diff.stdout).toContain('main: version 1 → 2  +1 −0 ~1')
+      expect(diff.stdout).toContain('x 2  y 4  →  x 2  y 9')
+    })
+  })
 })
 
 // Skipped only when the analysis environment has not been created yet (see tests/run.test.ts for

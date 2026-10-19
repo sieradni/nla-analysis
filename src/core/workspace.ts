@@ -252,10 +252,19 @@ export class Workspace {
     return dataset.versions.map((record) => ({ ...record }))
   }
 
-  /** The rows one version holds now: active, and rebuilt from the log when it is not the newest. */
+  /**
+   * The rows one version holds now: active, and rebuilt from the log when it is not the newest.
+   * A version that was never created is refused: returning the newest rows for it would answer a
+   * question about one version with another version's rows, which is the one thing this API exists
+   * not to do.
+   */
   rowsOfVersion(datasetId: string, version: number): Point[] {
-    if (!this.current.datasets.has(datasetId)) {
-      throw new BenchError('missing', `no dataset "${datasetId}"`)
+    const dataset = this.current.datasets.get(datasetId)
+    if (!dataset) throw new BenchError('missing', `no dataset "${datasetId}"`)
+    if (!dataset.versions.some((record) => record.version === version)) {
+      throw new BenchError('missing', `dataset "${datasetId}" has no version ${version}`, {
+        hint: `versions: ${dataset.versions.map((record) => record.version).join(', ')}`,
+      })
     }
     return activeRowsOfVersion(this.current, datasetId, version)
   }

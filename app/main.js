@@ -1518,6 +1518,134 @@ async function capture() {
       throw new Error(`the refused file appended ${logAfterRefusal.length - eventsAfterCorrection} event(s)`)
     }
     await window.webContents.executeJavaScript("document.getElementById('import-cancel').click()")
+
+    // A file with no clock at all. A row is its instant, so the sheet must not let the core stamp
+    // one invented instant on every row and then call the result a diff.
+    const currentRows = JSON.parse(await readCli(['list', '--json'], importProject)).data
+    const untimedFile = join(dirname(importProject), 'lab-export-untimed.csv')
+    await writeFile(
+      untimedFile,
+      'x,y\n' + currentRows.map((point) => `${point.values.x},${point.values.y}`).join('\n') + '\n',
+    )
+    nextPickedFile = untimedFile
+    await window.webContents.executeJavaScript("document.getElementById('import-open').click()")
+    for (let waited = 0; waited < 60; waited += 1) {
+      const ready = await window.webContents.executeJavaScript(
+        "(() => { const d = document.getElementById('import-dialog'); const times = Array.prototype.map.call(document.getElementById('import-time').options, (option) => option.value); return d.open && /lab-export-untimed\.csv$/.test(document.getElementById('import-path').textContent) && times.join(',') === ',x,y' })()",
+      )
+      if (ready) break
+      await sleep(100)
+    }
+    await sleep(300)
+    const untimedSheet = JSON.parse(await window.webContents.executeJavaScript(`(() => JSON.stringify({
+      time: document.getElementById('import-time').value,
+      columns: Array.prototype.map.call(document.getElementById('import-time').options, (option) => option.value),
+      plan: document.getElementById('import-plan').textContent,
+      planClass: document.getElementById('import-plan').className,
+    }))()`))
+    console.log('[bench] import-untimed ' + JSON.stringify(untimedSheet))
+    if (untimedSheet.time !== '') throw new Error('the sheet selected a time column that is not there')
+    if (!/choose the column that holds the observation time/.test(untimedSheet.plan)) {
+      throw new Error('the sheet did not ask for the time column: ' + untimedSheet.plan)
+    }
+    if (!/is-error/.test(untimedSheet.planClass)) {
+      throw new Error('the missing time column was not shown as a refusal: ' + untimedSheet.planClass)
+    }
+    await writeFile(join(captureDir, 'app-import-untimed.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+    await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
+    for (let waited = 0; waited < 60; waited += 1) {
+      const shown = await window.webContents.executeJavaScript(
+        "(() => { const e = document.getElementById('import-error'); return e.hidden ? null : e.textContent })()",
+      )
+      if (shown) break
+      await sleep(100)
+    }
+    const untimedRefusal = await window.webContents.executeJavaScript(
+      "(() => document.getElementById('import-error').hidden ? null : document.getElementById('import-error').textContent)()",
+    )
+    console.log('[bench] import-untimed-refusal ' + JSON.stringify(untimedRefusal))
+    if (!/no column holds the observation time/.test(untimedRefusal || '')) {
+      throw new Error('the untimed file was not refused by the core: ' + untimedRefusal)
+    }
+    if (!/x, y/.test(untimedRefusal || '')) {
+      throw new Error('the refusal did not name the columns it could have meant: ' + untimedRefusal)
+    }
+    const logAfterUntimed = (await readFile(join(importProject, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n')
+    if (logAfterUntimed.length !== eventsAfterCorrection) {
+      throw new Error(`the untimed file appended ${logAfterUntimed.length - eventsAfterCorrection} event(s)`)
+    }
+    await window.webContents.executeJavaScript("document.getElementById('import-cancel').click()")
+    await sleep(300)
+
+    // The clock under a name bench does not guess. The sheet's picker is the only place that can say
+    // it, and the diff is computed against the version the file actually shares rows with.
+    const namedFile = join(dirname(importProject), 'lab-export-taken-at.csv')
+    await writeFile(
+      namedFile,
+      'taken_at,x,y\n' +
+        currentRows.map((point) => `${point.t_observed},${point.values.x},${point.values.y}`).join('\n') +
+        '\n2026-10-16T09:00:00Z,6,13.4\n',
+    )
+    nextPickedFile = namedFile
+    await window.webContents.executeJavaScript("document.getElementById('import-open').click()")
+    for (let waited = 0; waited < 60; waited += 1) {
+      const ready = await window.webContents.executeJavaScript(
+        "(() => { const d = document.getElementById('import-dialog'); const select = document.getElementById('import-time'); return d.open && /lab-export-taken-at\.csv$/.test(document.getElementById('import-path').textContent) && Array.prototype.some.call(select.options, (option) => option.value === 'taken_at') })()",
+      )
+      if (ready) break
+      await sleep(100)
+    }
+    const namedSheet = JSON.parse(await window.webContents.executeJavaScript(`(() => JSON.stringify({
+      open: document.getElementById('import-dialog').open,
+      path: document.getElementById('import-path').textContent,
+      columns: Array.prototype.map.call(document.getElementById('import-time').options, (option) => option.value),
+    }))()`))
+    if (!namedSheet.open || !/lab-export-taken-at\.csv$/.test(namedSheet.path)) {
+      throw new Error('the named-time file did not reach the sheet: ' + JSON.stringify(namedSheet))
+    }
+    await window.webContents.executeJavaScript(`(() => {
+      const select = document.getElementById('import-time')
+      if (!Array.prototype.some.call(select.options, (option) => option.value === 'taken_at')) {
+        throw new Error('the time picker does not offer taken_at')
+      }
+      select.value = 'taken_at'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(500)
+    const namedPlan = await window.webContents.executeJavaScript(
+      "(() => document.getElementById('import-plan').textContent)()",
+    )
+    console.log('[bench] import-named-time ' + JSON.stringify(namedPlan))
+    if (!/version 5 replaces version 4 · \+1 −0 ~0/.test(namedPlan)) {
+      throw new Error('the named time column was not planned as a correct version: ' + namedPlan)
+    }
+    await writeFile(join(captureDir, 'app-import-time.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+    await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Imported 5 row/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const namedState = JSON.parse(await entryState())
+    console.log(
+      '[bench] import-named-time-result ' +
+        JSON.stringify({ status: namedState.status, readout: namedState.readout }),
+    )
+    if (!/as version 5 \(\+1 −0 ~0, replacing version 4\)/.test(namedState.status || '')) {
+      throw new Error('the named time column was not imported as version 5: ' + namedState.status)
+    }
+    const namedVersions = await readCli(['dataset', 'versions', 'main'], importProject)
+    const namedDiff = await readCli(['dataset', 'diff', 'main', '4', '5'], importProject)
+    console.log('[bench] import-named-time-cli ' + JSON.stringify(namedVersions.trim().split('\n')))
+    if (!/v5  5 row\(s\) now · 5 at creation  \+1 −0 ~0/.test(namedVersions)) {
+      throw new Error('the CLI does not see the window\'s timed import:\n' + namedVersions)
+    }
+    if (!/main: version 4 → 5  \+1 −0 ~0/.test(namedDiff) || !/2026-10-16T09:00:00\.000Z/.test(namedDiff)) {
+      throw new Error('the CLI diff does not name the added instant:\n' + namedDiff)
+    }
   }
 
   if (cspViolations > 0) console.log(`[bench] csp-inline-style-blocked=${cspViolations}`)

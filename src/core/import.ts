@@ -23,6 +23,22 @@ import type { Workspace } from './workspace.ts'
 /** The names a time column is allowed to have without being told. */
 export const TIME_COLUMN_NAMES = ['t_observed', 'observed_at', 'timestamp', 'time', 'date', 't']
 
+/**
+ * The column a header suggests for the observation time, in the file's own spelling.
+ *
+ * A row is identified by its instant, so "which column is the time" is the one decision an import
+ * cannot invent: guessing it from a name is a convenience, and failing to find one is a refusal
+ * (see `planImport`), not a fallback to the moment of import.
+ */
+export function suggestTimeColumn(columns: readonly string[]): string | null {
+  const byLower = new Map(columns.map((column) => [column.toLowerCase(), column]))
+  for (const name of TIME_COLUMN_NAMES) {
+    const column = byLower.get(name)
+    if (column !== undefined) return column
+  }
+  return null
+}
+
 export type ImportFormat = 'csv' | 'tsv' | 'jsonl'
 
 export function formatFor(file: string): ImportFormat {
@@ -52,6 +68,8 @@ export interface ImportPreview extends TablePreview {
   fields: Shape['fields']
   /** Field name to column, for the fields whose name matches a column. A suggestion, not a rule. */
   suggested: Record<string, string>
+  /** The column that looks like the observation time, in the file's spelling, or null. */
+  suggestedTime: string | null
   /** These exact bytes were imported into this dataset before. */
   duplicate: boolean
   /** The version this import would create, and the versions already there. */
@@ -81,7 +99,8 @@ export interface ImportPlan {
   rows: number
   columns: string[]
   mapping: Record<string, string>
-  timeColumn: string | null
+  /** Every column a row's identity comes from; an untimed file never reaches a plan. */
+  timeColumn: string
   sourceHash: string
   raggedRows: number
   comments: number
@@ -181,6 +200,7 @@ export async function previewImport(workspace: Workspace, file: string): Promise
     shape: dataset.shape,
     fields: shape.fields,
     suggested,
+    suggestedTime: suggestTimeColumn(loaded.table.columns),
     duplicate: workspace.allEvents.some(
       (event) => event.type === 'import_completed' && event.hash === hash && event.dataset === datasetId,
     ),
@@ -239,8 +259,19 @@ export async function planImport(
     mapping.set(field.name, column)
   }
 
-  const timeColumn = request.time ?? TIME_COLUMN_NAMES.find((name) => lowered.has(name))
-  if (timeColumn !== undefined && !table.columns.includes(timeColumn)) {
+  // A sheet with no time column chosen sends `''`, which means the same as not saying it.
+  const timeColumn = request.time || suggestTimeColumn(table.columns)
+  if (timeColumn === null) {
+    // Not a warning and not "the moment of import": rows stamped with one invented instant cannot
+    // be told apart, so a re-import would read as every row leaving and every row arriving. The
+    // refusal names the file's columns because the fix is to pick one of them.
+    throw new BenchError(
+      'invalid',
+      `no column holds the observation time, so every row would share one invented instant — the file has ${table.columns.join(', ')}`,
+      { hint: 'name the column that holds it: --time <column> in the CLI, or the time picker in the window' },
+    )
+  }
+  if (!table.columns.includes(timeColumn)) {
     throw new BenchError('invalid', `no column "${timeColumn}" for the observation time`, {
       hint: `the file has ${table.columns.join(', ')}`,
     })
@@ -261,16 +292,13 @@ export async function planImport(
       if (value !== null) values[field.name] = value
     }
 
-    let observed = new Date().toISOString()
-    if (timeColumn !== undefined) {
-      const raw = row[timeColumn] ?? ''
-      const milliseconds = Date.parse(raw)
-      if (raw === '' || Number.isNaN(milliseconds)) {
-        errors.push(`${where}: "${raw}" is not a parseable time`)
-        return
-      }
-      observed = new Date(milliseconds).toISOString()
+    const raw = row[timeColumn] ?? ''
+    const milliseconds = Date.parse(raw)
+    if (raw === '' || Number.isNaN(milliseconds)) {
+      errors.push(`${where}: "${raw}" is not a parseable time`)
+      return
     }
+    const observed = new Date(milliseconds).toISOString()
 
     const validation = validateValues(shape, values)
     if (validation.errors.length > 0) {
@@ -329,7 +357,7 @@ export async function planImport(
     rows: prepared.length,
     columns: table.columns,
     mapping: Object.fromEntries(mapping),
-    timeColumn: timeColumn ?? null,
+    timeColumn,
     sourceHash: hash,
     raggedRows: table.raggedRows,
     comments: table.comments ?? 0,

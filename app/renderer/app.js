@@ -98,6 +98,7 @@
     importSummary: document.getElementById('import-summary'),
     importPreview: document.getElementById('import-preview'),
     importFields: document.getElementById('import-fields'),
+    importTime: document.getElementById('import-time'),
     importPlan: document.getElementById('import-plan'),
     importForce: document.getElementById('import-force'),
     importForceField: document.getElementById('import-force-field'),
@@ -1321,6 +1322,19 @@
       ui.importFields.appendChild(label)
     })
 
+    // The one column that cannot be guessed for the reader: a row is its instant, so the sheet
+    // offers every column and preselects the name that looks like a time, or nothing.
+    ui.importTime.textContent = ''
+    var noTime = node('option', null, '— choose the column')
+    noTime.value = ''
+    ui.importTime.appendChild(noTime)
+    preview.columns.forEach(function (column) {
+      var option = node('option', null, column)
+      option.value = column
+      ui.importTime.appendChild(option)
+    })
+    ui.importTime.value = preview.suggestedTime || ''
+
     // A plan for the *previous* file must not land on this one: the token retires it.
     state.importPlanToken = (state.importPlanToken || 0) + 1
     renderImportPlan(null)
@@ -1397,10 +1411,19 @@
       renderImportPlan(null)
       return
     }
+    // Said before the core is asked, because there is nothing to plan without it — and the point
+    // is not to let the core invent instants quietly.
+    if (ui.importTime.value === '') {
+      renderImportPlan(null, 'choose the column that holds the observation time')
+      return
+    }
     var token = ++state.importPlanToken
     try {
       var planned = await call(
-        bridge.importPlan(state.project.dir, state.importFile, mapping, { force: ui.importForce.checked }),
+        bridge.importPlan(state.project.dir, state.importFile, mapping, {
+          force: ui.importForce.checked,
+          time: ui.importTime.value,
+        }),
       )
       if (token !== state.importPlanToken) return
       renderImportPlan(planned)
@@ -1469,6 +1492,7 @@
       var imported = await call(
         bridge.importFile(state.project.dir, state.importFile, mapping, {
           force: ui.importForce.checked,
+          time: ui.importTime.value,
           viewName: state.view ? state.view.name : undefined,
         }),
       )
@@ -1744,6 +1768,10 @@
     // leaving an error about a mapping the user has already changed. Either way the planned version
     // is recomputed, because it is a fact about the mapping and not about the click.
     ui.importFields.addEventListener('change', function () {
+      ui.importError.hidden = true
+      syncImportPlan()
+    })
+    ui.importTime.addEventListener('change', function () {
       ui.importError.hidden = true
       syncImportPlan()
     })

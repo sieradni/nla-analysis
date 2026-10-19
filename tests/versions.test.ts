@@ -222,6 +222,28 @@ describe('dataset versions', () => {
     })
   })
 
+  it('refuses a re-export with no observation time rather than diffing invented instants', async () => {
+    const { dir, workspace } = await project()
+    await importRows(dir, workspace, 'v1.csv', '2026-01-05T09:00:00Z,1,2\n2026-01-05T09:01:00Z,3,4\n')
+    // The same rows, re-exported without their clock. Stamping them "now" would retract both
+    // parent rows and add both replacements, which is a diff about nothing.
+    const untimed = join(dir, 'untimed.csv')
+    await writeFile(untimed, 'x,y\n1,2\n3,4\n', 'utf8')
+    const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+
+    await expect(planImport(workspace, untimed)).rejects.toThrow(/no column holds the observation time/)
+    expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
+    expect(workspace.versions('main')).toHaveLength(1)
+  })
+
+  it('refuses to answer for a version that was never created', async () => {
+    const { workspace } = await project()
+    await workspace.recordPoint({ values: { x: 1, y: 2 } })
+    // The newest rows are not an answer to a question about version 99.
+    expect(() => workspace.rowsOfVersion('main', 99)).toThrow(/has no version 99/)
+    expect(workspace.rowsOfVersion('main', 1)).toHaveLength(1)
+  })
+
   it('tells an importer what it would replace before a row is read out of the file', async () => {
     const { dir, workspace } = await project()
     await importRows(dir, workspace, 'v1.csv', '2026-01-05T09:00:00Z,1,2\n')
