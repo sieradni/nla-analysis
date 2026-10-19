@@ -82,6 +82,7 @@ const frames = [
   'app-tab-replaced.png',
   'app-tab-gone.png',
   'app-import.png',
+  'app-version-diff.png',
 ]
 let missing = 0
 for (const frame of frames) {

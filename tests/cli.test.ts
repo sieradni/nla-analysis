@@ -213,10 +213,20 @@ describe('bench import, as executed', () => {
       ])
       expect(result.code).toBe(0)
       const payload = JSON.parse(result.stdout) as {
-        data: { rows: number; preserved: string; timeColumn: string | null; sourceHash: string }
+        data: {
+          rows: number
+          preserved: string
+          timeColumn: string | null
+          sourceHash: string
+          version: number
+          parent: number | null
+        }
       }
       expect(payload.data.rows).toBe(3)
       expect(payload.data.timeColumn).toBe('timestamp')
+      // An empty dataset's first import is version 1: nothing was replaced, so nothing is diffed.
+      expect(payload.data.version).toBe(1)
+      expect(payload.data.parent).toBeNull()
       // The observation time came from the file, so it is the one that was imported.
       expect(payload.data.preserved).toMatch(/^data\/raw\/.+-readings\.csv$/)
       expect(existsSync(join(dir, payload.data.preserved))).toBe(true)
@@ -234,6 +244,23 @@ describe('bench import, as executed', () => {
       expect(points.data[0]!.tags).toContain('import')
 
       expect((await bench(['--project', dir, 'check'])).stdout).toContain('0 error(s)')
+
+      // `dataset list` and `dataset versions` answer where the data stands and where it came from.
+      const datasets = await bench(['--project', dir, 'dataset', 'list', '--json'])
+      const listedDatasets = (JSON.parse(datasets.stdout) as {
+        data: { id: string; version: number; active: number; versions: number[] }[]
+      }).data
+      expect(listedDatasets).toHaveLength(1)
+      expect(listedDatasets[0]).toMatchObject({ id: 'main', version: 1, active: 3, versions: [1] })
+
+      const versions = await bench(['--project', dir, 'dataset', 'versions', 'main'])
+      expect(versions.stdout).toContain('main · 1 version(s) · newest v1')
+      expect(versions.stdout).toContain('v1  3 row(s) now · 3 at creation  first version')
+      expect(versions.stdout).toContain(payload.data.preserved)
+      // One version has nothing to compare against, and that is a refusal, not an empty diff.
+      const noDiff = await bench(['--project', dir, 'dataset', 'diff', 'main', '1', '2'])
+      expect(noDiff.code).toBe(2)
+      expect(noDiff.stderr).toContain('has no version 2')
     })
   })
 
@@ -270,9 +297,19 @@ describe('bench import, as executed', () => {
       expect(again.code).toBe(1)
       expect(again.stderr).toContain('already imported')
 
-      expect((await bench([...args, '--force'])).code).toBe(0)
+      // Forced, it is still a replace: the same rows land in a new version, and no row is appended
+      // a second time. Re-importing by hand must not be able to double a dataset by accident.
+      const forced = await bench([...args, '--force'])
+      expect(forced.code).toBe(0)
+      expect(forced.stdout).toContain('as version 2')
+      expect(forced.stdout).toContain('+0 −0 ~0')
       const listed = await bench(['--project', dir, 'list', '--json'])
-      expect((JSON.parse(listed.stdout) as { data: unknown[] }).data).toHaveLength(6)
+      expect((JSON.parse(listed.stdout) as { data: unknown[] }).data).toHaveLength(3)
+      // The parent is still there, and still has its rows.
+      const versions = await bench(['--project', dir, 'dataset', 'versions', 'main', '--json'])
+      const data = (JSON.parse(versions.stdout) as { data: { versions: { version: number; rowsNow: number }[] } }).data
+      expect(data.versions.map((record) => record.version)).toEqual([1, 2])
+      expect(data.versions[0]!.rowsNow).toBe(3)
     })
   })
 
@@ -291,22 +328,88 @@ describe('bench import, as executed', () => {
     })
   })
 
-  it('reads tsv and jsonl as well as csv', async () => {
+  it('reads tsv and jsonl as well as csv, and diffs the second file against the first', async () => {
     await withProject('import-formats', async (dir) => {
-      await writeFile(join(dir, 't.tsv'), 'temp_c\tvolts\n1\t2\n3\t4\n', 'utf8')
+      // Both files carry the observation time, which is what makes a row comparable across them.
+      await writeFile(
+        join(dir, 't.tsv'),
+        't\ttemp_c\tvolts\n2026-01-01T00:00:00Z\t1\t2\n2026-01-01T00:01:00Z\t3\t4\n',
+        'utf8',
+      )
       expect((await bench(['--project', dir, 'import', 't.tsv', '--map', 'x=temp_c', '--map', 'y=volts'])).code).toBe(0)
 
       await writeFile(
         join(dir, 'j.jsonl'),
-        '{"temp_c": 5, "volts": 6}\n{"temp_c": 7, "volts": 8}\n',
+        '{"t": "2026-01-01T00:01:00Z", "temp_c": 3, "volts": 9}\n' +
+          '{"t": "2026-01-01T00:02:00Z", "temp_c": 5, "volts": 6}\n',
         'utf8',
       )
       const jsonl = await bench(['--project', dir, 'import', 'j.jsonl', '--map', 'x=temp_c', '--map', 'y=volts', '--json'])
       expect(jsonl.code).toBe(0)
-      expect((JSON.parse(jsonl.stdout) as { data: { rows: number } }).data.rows).toBe(2)
+      const imported = (JSON.parse(jsonl.stdout) as { data: { rows: number; version: number; parent: number; diff: unknown } }).data
+      expect(imported.rows).toBe(2)
+      expect(imported.version).toBe(2)
+      expect(imported.parent).toBe(1)
+      // One row changed value, one arrived, one left: the file is the dataset now, not an addition.
+      expect(imported.diff).toEqual({ added: 1, removed: 1, changed: 1 })
 
       const listed = await bench(['--project', dir, 'list', '--json'])
-      expect((JSON.parse(listed.stdout) as { data: unknown[] }).data).toHaveLength(4)
+      expect((JSON.parse(listed.stdout) as { data: unknown[] }).data).toHaveLength(2)
+      expect((await bench(['--project', dir, 'check'])).stdout).toContain('0 error(s)')
+    })
+  })
+
+  it('re-imports a corrected export as a new version, leaving the parent readable', async () => {
+    await withProject('import-version', async (dir) => {
+      await writeFile(join(dir, 'readings.csv'), csv, 'utf8')
+      const map = ['--map', 'x=temp_c', '--map', 'y=volts', '--time', 'timestamp']
+      expect((await bench(['--project', dir, 'import', 'readings.csv', ...map])).code).toBe(0)
+
+      // The instrument re-exported: one reading corrected, one row added, one row gone.
+      await writeFile(
+        join(dir, 'readings-v2.csv'),
+        'timestamp,temp_c,volts\n' +
+          '2026-01-05T09:00:00Z,21.4,3.301\n' +
+          '2026-01-05T09:01:00Z,21.9,3.9\n' +
+          '2026-01-05T09:03:00Z,22.9,3.44\n',
+        'utf8',
+      )
+      const second = await bench(['--project', dir, 'import', 'readings-v2.csv', ...map])
+      expect(second.code).toBe(0)
+      expect(second.stdout).toContain('imported 3 row(s) into main as version 2')
+      expect(second.stdout).toContain('replaces version 1 · +1 −1 ~1')
+      expect(second.stdout).toContain('changed 1:')
+      expect(second.stdout).toContain('y 3.355  →  x 21.9  y 3.9')
+      expect(second.stdout).toContain('removed 1:')
+      expect(second.stdout).toContain('version 1 is untouched: still 3 row(s)')
+
+      // The dataset now holds the file's three rows, not five.
+      const listed = await bench(['--project', dir, 'list', '--json'])
+      const points = (JSON.parse(listed.stdout) as { data: { values: { x: number; y: number } }[] }).data
+      expect(points).toHaveLength(3)
+      expect(points.map((point) => point.values.y)).toEqual([3.301, 3.9, 3.44])
+
+      const versions = await bench(['--project', dir, 'dataset', 'versions', 'main'])
+      expect(versions.stdout).toContain('main · 2 version(s) · newest v2')
+      expect(versions.stdout).toContain('v1  3 row(s) now · 3 at creation  first version')
+      expect(versions.stdout).toContain('v2  3 row(s) now · 3 at creation  +1 −1 ~1')
+
+      const diff = await bench(['--project', dir, 'dataset', 'diff', 'main', '1', '2'])
+      expect(diff.code).toBe(0)
+      expect(diff.stdout).toContain('main: version 1 → 2  +1 −1 ~1  (3 row(s) in v2)')
+      // The parent's value is named as it was, which is only possible if version 1 kept it.
+      expect(diff.stdout).toContain('y 3.355  →  x 21.9  y 3.9')
+      expect(diff.stdout).toContain('added 1:')
+      expect(diff.stdout).toContain('removed 1:')
+      // The default comparison is the newest version against the one before it.
+      const implicit = await bench(['--project', dir, 'dataset', 'diff', 'main'])
+      expect(implicit.stdout).toContain('version 1 → 2')
+
+      // A file whose rows are already there changes nothing, and saying so beats a silent no-op.
+      const third = await bench(['--project', dir, 'import', 'readings-v2.csv', ...map, '--force'])
+      expect(third.code).toBe(0)
+      expect(third.stdout).toContain('as version 3')
+      expect(third.stdout).toContain('+0 −0 ~0')
       expect((await bench(['--project', dir, 'check'])).stdout).toContain('0 error(s)')
     })
   })

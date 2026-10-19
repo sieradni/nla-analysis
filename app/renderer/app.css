@@ -418,6 +418,26 @@ button {
   margin: 0 0 var(--s1);
 }
 
+/* The planned version: a statement about what the button will do, in the shape of the diff a person
+   reads in the terminal. It appears once a mapping can be planned, and the dialog is a dialog — a
+   line that arrives while the mapping is being filled in costs nothing that matters. */
+.import-plan {
+  min-height: 18px;
+  margin: var(--s3) 0 0;
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.import-plan.is-error {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .rail-foot {
   padding: var(--s2) var(--s4) var(--s3);
   border-top: 1px solid var(--line);

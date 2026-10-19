@@ -16,7 +16,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { APP_ROOT, assessRuns, buildRunInput, chartSpecFor, hashInput, type RunFreshness } from './analysis.ts'
-import { activePoints, bind, type Point, type ProjectState, type RunRecord } from './binder.ts'
+import { activePoints, activeRowsOfVersion, bind, type DatasetVersion, type Point, type ProjectState, type RunRecord } from './binder.ts'
 import { renderChart, type ChartSpec } from './chart.ts'
 import { BenchError } from './errors.ts'
 import { sameStamp, type LogStamp } from './log.ts'
@@ -234,6 +234,32 @@ export class Workspace {
     return shape
   }
 
+  /**
+   * The version a new row lands in: the dataset's newest. Adding a point grows the current version
+   * rather than making a new one, which is the difference between "one more reading" and "here is
+   * the whole file again". An unknown dataset is a refusal, not version 1.
+   */
+  currentVersion(datasetId: string): number {
+    const dataset = this.current.datasets.get(datasetId)
+    if (!dataset) throw new BenchError('missing', `no dataset "${datasetId}"`)
+    return dataset.version
+  }
+
+  /** Every version of a dataset, oldest first. The records themselves, as they were written. */
+  versions(datasetId: string): DatasetVersion[] {
+    const dataset = this.current.datasets.get(datasetId)
+    if (!dataset) throw new BenchError('missing', `no dataset "${datasetId}"`)
+    return dataset.versions.map((record) => ({ ...record }))
+  }
+
+  /** The rows one version holds now: active, and rebuilt from the log when it is not the newest. */
+  rowsOfVersion(datasetId: string, version: number): Point[] {
+    if (!this.current.datasets.has(datasetId)) {
+      throw new BenchError('missing', `no dataset "${datasetId}"`)
+    }
+    return activeRowsOfVersion(this.current, datasetId, version)
+  }
+
   findPoint(id: string): { dataset: string; point: Point } | undefined {
     for (const dataset of this.current.datasets.values()) {
       const point = dataset.points.find((candidate) => candidate.id === id)
@@ -348,6 +374,9 @@ export class Workspace {
       shape: shape.id,
       values: draft.values,
       t_observed: tObserved,
+      // The version this row joins: the newest one, which is the version a panel or a run pinned
+      // unless it named an older one.
+      version: this.currentVersion(datasetId),
       ...(draft.note === undefined ? {} : { note: draft.note }),
       ...(draft.tags === undefined ? {} : { tags: draft.tags }),
     })
@@ -392,6 +421,9 @@ export class Workspace {
       supersedes: id,
       values: patch,
       ...(reason === undefined ? {} : { reason }),
+      // A correction made now belongs to the version that is current now: an older version keeps
+      // reading as it did, which is the point of keeping the old one at all.
+      version: this.currentVersion(found.dataset),
     })
     await this.append([event])
     return {
@@ -419,6 +451,7 @@ export class Workspace {
       dataset: found.dataset,
       supersedes: id,
       ...(reason === undefined ? {} : { reason }),
+      version: this.currentVersion(found.dataset),
     })
     await this.append([event])
     return { event, dataset: found.dataset, active: activePoints(this.current, found.dataset).length }
@@ -477,6 +510,9 @@ export class Workspace {
       recipe_hash: result.recipeHash,
       params: request.params,
       dataset: datasetId,
+      // Which version this conclusion rested on, in the log where it belongs. A reader a month from
+      // now gets `main v2`, not just a hash that can only say "different".
+      version: this.currentVersion(datasetId),
       input_hash: hashInput(input),
       verdict: result.verdict,
       narrative: result.narrative,

@@ -98,6 +98,7 @@
     importSummary: document.getElementById('import-summary'),
     importPreview: document.getElementById('import-preview'),
     importFields: document.getElementById('import-fields'),
+    importPlan: document.getElementById('import-plan'),
     importForce: document.getElementById('import-force'),
     importForceField: document.getElementById('import-force-field'),
     importApply: document.getElementById('import-apply'),
@@ -298,8 +299,18 @@
     }, 0)
     var provenance = (view.panels[0] && view.panels[0].chart.provenance) || {}
     var active = entry ? entry.active : total
+    // Which version the drawing came from is part of what the panel is claiming, so it sits beside
+    // the dataset name rather than in a tooltip: `main \u00b7 v2` or `main \u00b7 v1 (now v2)`.
+    var pinned = view.panels[0] ? view.panels[0].version : undefined
+    var now = entry && typeof entry.version === 'number' ? entry.version : undefined
+    var versionLabel = null
+    if (provenance.dataset && typeof pinned === 'number') {
+      versionLabel = 'v' + pinned + (typeof now === 'number' && now !== pinned ? ' (now v' + now + ')' : '')
+    }
     var meta = [
-      provenance.dataset ? provenance.dataset + ' \u00b7 ' + (provenance.shape || '') : null,
+      provenance.dataset
+        ? provenance.dataset + ' \u00b7 ' + (versionLabel ? versionLabel + ' \u00b7 ' : '') + (provenance.shape || '')
+        : null,
       view.panels.length + ' panel' + (view.panels.length === 1 ? '' : 's'),
       active + ' point' + (active === 1 ? '' : 's'),
     ].filter(Boolean)
@@ -1252,6 +1263,13 @@
     if (preview.comments > 0) notes.push(preview.comments + ' comment line(s) skipped')
     if (preview.raggedRows > 0) notes.push(preview.raggedRows + ' row(s) with a different field count')
     if (preview.duplicate) notes.push('these exact contents are already in this dataset')
+    // The version this becomes, said before the mapping is chosen: an import into a dataset that
+    // already holds rows replaces them, and that is not something to discover afterwards.
+    notes.push(
+      preview.parent === null
+        ? 'creates version 1'
+        : 'replaces version ' + preview.parent + ' (' + preview.parentRows + ' row(s)) as version ' + preview.version,
+    )
     var unmapped = preview.fields
       .filter(function (field) {
         return !field.optional && !preview.suggested[field.name]
@@ -1303,9 +1321,96 @@
       ui.importFields.appendChild(label)
     })
 
+    // A plan for the *previous* file must not land on this one: the token retires it.
+    state.importPlanToken = (state.importPlanToken || 0) + 1
+    renderImportPlan(null)
+
     // Only a file whose exact bytes are already in the log gets the second door.
     ui.importForceField.hidden = !preview.duplicate
     ui.importForce.checked = false
+  }
+
+  /** The mapping the sheet is showing, as the core wants it: field name to column. */
+  function importMapping() {
+    var mapping = {}
+    ;(ui.importFields.querySelectorAll('select') || []).forEach(function (select) {
+      if (select.value === '') return
+      mapping[select.dataset.field] = select.value
+    })
+    return mapping
+  }
+
+  /** The planned version and diff, or the word a refusal deserves, in one line. */
+  function renderImportPlan(planned, refusal) {
+    if (refusal) {
+      ui.importPlan.hidden = false
+      ui.importPlan.className = 'import-plan is-error'
+      ui.importPlan.textContent = refusal
+      return
+    }
+    if (!planned) {
+      ui.importPlan.hidden = true
+      ui.importPlan.className = 'import-plan'
+      ui.importPlan.textContent = ''
+      return
+    }
+    ui.importPlan.className = 'import-plan'
+    ui.importPlan.hidden = false
+    var counts =
+      '+' + planned.diff.added + ' \u2212' + planned.diff.removed + ' ~' + planned.diff.changed
+    var parts = [
+      planned.parent === null
+        ? 'version 1 · ' + planned.rows + ' row(s)'
+        : 'version ' + planned.version + ' replaces version ' + planned.parent + ' · ' + counts,
+    ]
+    if (planned.removedRows.length > 0) {
+      var leaving = planned.removedRows.slice(0, 3).map(function (row) {
+        return shortTime(row.t)
+      })
+      parts.push(
+        planned.removedRows.length +
+          ' row(s) not in this file are withdrawn (' +
+          leaving.join(', ') +
+          (planned.removedRows.length > leaving.length ? ', \u2026' : '') +
+          '), not deleted',
+      )
+    }
+    if (planned.warnings.length > 0) parts.push(planned.warnings[0])
+    ui.importPlan.textContent = parts.join(' \u00b7 ')
+  }
+
+  /** `2026-01-05T09:04:00.000Z` → `2026-01-05 09:04`, because a row is named by its instant. */
+  function shortTime(value) {
+    if (typeof value !== 'string' || value.length < 16) return String(value)
+    return value.slice(0, 10) + ' ' + value.slice(11, 16)
+  }
+
+  /**
+   * Ask the core what the current mapping would do, without writing anything. The token drops a
+   * slower answer that arrives after a newer one, so the line never shows a stale plan.
+   */
+  async function syncImportPlan() {
+    var preview = state.importPreview
+    if (!preview || !state.importFile || state.importBusy) return
+    var mapping = importMapping()
+    if (Object.keys(mapping).length === 0) {
+      renderImportPlan(null)
+      return
+    }
+    var token = ++state.importPlanToken
+    try {
+      var planned = await call(
+        bridge.importPlan(state.project.dir, state.importFile, mapping, { force: ui.importForce.checked }),
+      )
+      if (token !== state.importPlanToken) return
+      renderImportPlan(planned)
+    } catch (error) {
+      if (token !== state.importPlanToken) return
+      var message = (error && error.message) || String(error)
+      // Still mapping: a field with no column is not a refusal yet, it is the next click.
+      if (/no column for the required field/.test(message)) renderImportPlan(null)
+      else renderImportPlan(null, message)
+    }
   }
 
   async function openImportDialog() {
@@ -1339,6 +1444,8 @@
       state.importPreview = preview
       renderImportPreview(preview)
       ui.importApply.disabled = false
+      // A file whose columns already match the shape has a plan from the first paint.
+      syncImportPlan()
       var first = ui.importFields.querySelector('select')
       if (first) first.focus()
     } catch (error) {
@@ -1352,11 +1459,7 @@
     var preview = state.importPreview
     if (!preview || !state.importFile || state.importBusy) return
 
-    var mapping = {}
-    ;(ui.importFields.querySelectorAll('select') || []).forEach(function (select) {
-      if (select.value === '') return
-      mapping[select.dataset.field] = select.value
-    })
+    var mapping = importMapping()
 
     state.importBusy = true
     state.busy = true
@@ -1383,16 +1486,32 @@
       state.datasets.forEach(function (dataset) {
         if (dataset.id === imported.dataset) dataset.active = imported.active
       })
+      var counts =
+        '+' + imported.diff.added + ' \u2212' + imported.diff.removed + ' ~' + imported.diff.changed
       var note =
         'Imported ' +
         imported.rows +
         ' row(s) into ' +
         imported.dataset +
-        ' from ' +
+        ' as version ' +
+        imported.version +
+        ' (' +
+        (imported.parent === null ? 'first version' : counts + ', replacing version ' + imported.parent) +
+        ') from ' +
         fileBase(state.importFile) +
         '. The original is preserved at ' +
         imported.preserved +
         '.'
+      if (imported.parent !== null && imported.removedRows.length > 0) {
+        note +=
+          ' ' +
+          imported.removedRows.length +
+          ' row(s) not in the file were withdrawn from version ' +
+          imported.version +
+          '; version ' +
+          imported.parent +
+          ' still holds them.'
+      }
       if (imported.warnings.length > 0) note += ' warning: ' + imported.warnings[0]
       setStatus('ok', note)
       focusFirstField()
@@ -1622,10 +1741,13 @@
     ui.importPick.addEventListener('click', openImportDialog)
     ui.importForm.addEventListener('submit', submitImport)
     // A refusal belongs to the mapping that produced it; choosing a column clears it rather than
-    // leaving an error about a mapping the user has already changed.
+    // leaving an error about a mapping the user has already changed. Either way the planned version
+    // is recomputed, because it is a fact about the mapping and not about the click.
     ui.importFields.addEventListener('change', function () {
       ui.importError.hidden = true
+      syncImportPlan()
     })
+    ui.importForce.addEventListener('change', syncImportPlan)
     ui.importCancel.addEventListener('click', function () {
       ui.importDialog.close()
     })

@@ -52,6 +52,9 @@ export interface RunFreshness {
   addedSince?: number
   retractedSince?: number
   correctedSince?: number
+  /** The version the run read, and the version the dataset is at now. Both absent without a pin. */
+  ranOn?: number
+  currentVersion?: number
 }
 
 export function buildRunInput(state: ProjectState, datasetId: string): RunInput | null {
@@ -101,6 +104,8 @@ export interface SpecContext {
   title: string
   dataset: string
   shape: string
+  /** The dataset version the drawing was made from, so an artifact can say which one. */
+  version?: number
   /** Shown in the subtitle, so an artifact says which analysis drew it. */
   recipe: string
 }
@@ -128,7 +133,11 @@ export function chartSpecFor(result: RunResult, context: SpecContext): ChartSpec
     subtitle: `${context.dataset} · ${context.recipe}`,
     // What the artifact was drawn from, structurally: a client pinning a view to a dataset should
     // read this rather than parse the subtitle.
-    provenance: { dataset: context.dataset, shape: context.shape },
+    provenance: {
+      dataset: context.dataset,
+      shape: context.shape,
+      ...(context.version === undefined ? {} : { version: context.version }),
+    },
     ...(footer === '' ? {} : { footer }),
     // The artifact carries its own conclusion: the terminal scrollback is not durable. Recipes may
     // supply a shorter form for the canvas; the full argument stays in the log.
@@ -218,29 +227,56 @@ async function assessRun(
   if (!isTime(run.inputHash) || !isTime(run.recipeHash)) {
     return { status: 'unverifiable', reason: 'this run recorded no fingerprint' }
   }
+  // Every answer carries the pin, so `bench runs` can say which version a conclusion rests on even
+  // when nothing is wrong with it. Which version it was is half of "what did this rest on".
+  const current = state.datasets.get(datasetId)!.version
+  const pin: Pick<RunFreshness, 'ranOn' | 'currentVersion'> =
+    run.version === undefined ? {} : { ranOn: run.version, currentVersion: current }
+
+  // The version pin first: it is the coarse, named answer. A run that read version 1 is out of date
+  // the moment version 2 exists, whatever the rows say.
+  if (run.version !== undefined && current > run.version) {
+    return {
+      status: 'stale',
+      reason: `the dataset moved on to version ${current}; this ran on version ${run.version}`,
+      ...pin,
+    }
+  }
 
   const counted = changesSince(state, datasetId, run.at)
   const described = describe(counted)
-  if (described !== '') return { ...counted, reason: `${described} since this run` }
+  if (described !== '') return { ...counted, reason: `${described} since this run`, ...pin }
 
   if (!cache.has(run.recipe)) cache.set(run.recipe, await hashRecipeFile(root, run.recipe))
   const currentRecipeHash = cache.get(run.recipe) ?? null
   if (currentRecipeHash === null) {
-    return { status: 'unverifiable', reason: `recipes/${run.recipe}.py is missing` }
+    return { status: 'unverifiable', reason: `recipes/${run.recipe}.py is missing`, ...pin }
   }
   if (currentRecipeHash !== run.recipeHash) {
-    return { status: 'stale', reason: 'the recipe has changed since this run' }
+    return { status: 'stale', reason: 'the recipe has changed since this run', ...pin }
   }
 
   const input = buildRunInput(state, datasetId)
-  if (!input) return { status: 'unverifiable', reason: `dataset "${datasetId}" is gone` }
+  if (!input) return { status: 'unverifiable', reason: `dataset "${datasetId}" is gone`, ...pin }
   if (hashInput(input) !== run.inputHash) {
     // Nothing above found a dated change, so the difference is not one of the three counted kinds:
     // values must have changed without the timestamps moving. Say what is known, not what is guessed.
-    return { status: 'stale', reason: 'the inputs no longer match what this run consumed' }
+    return { status: 'stale', reason: 'the inputs no longer match what this run consumed', ...pin }
   }
 
-  return { status: 'fresh' }
+  return { status: 'fresh', ...pin }
+}
+
+/**
+ * Which version a run rested on, said even when nothing is wrong: "what did that conclusion rest
+ * on" should not need a stale badge to become answerable.
+ */
+export function versionNote(freshness: RunFreshness | undefined): string {
+  if (!freshness || freshness.ranOn === undefined) return ''
+  if (freshness.currentVersion === undefined || freshness.currentVersion === freshness.ranOn) {
+    return `version ${freshness.ranOn}`
+  }
+  return `version ${freshness.ranOn} (now ${freshness.currentVersion})`
 }
 
 /** One clause for STATE.md and `bench runs`, or an empty string for a fresh run. */

@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: Phases 0-3 complete (2026-10-19); the in-process seam ([ADR 0003](adr/0003-in-process-core.md)), the tab/project layer ([ADR 0004](adr/0004-views-and-projects.md)), a first desktop window ([ADR 0005](adr/0005-desktop-shell.md)) and its write path ([ADR 0006](adr/0006-window-write-path.md)) landed; the shape registry and dataset versions are next, and the window's entry bar is waiting on a visual verdict.
+Status: Phases 0-3 complete (2026-10-19); the in-process seam ([ADR 0003](adr/0003-in-process-core.md)), the tab/project layer ([ADR 0004](adr/0004-views-and-projects.md)), a first desktop window ([ADR 0005](adr/0005-desktop-shell.md)), its write path ([ADR 0006](adr/0006-window-write-path.md)) and dataset versions ([ADR 0012](adr/0012-dataset-versions.md)) landed; the shape registry is next, and the window's frames are waiting on a visual verdict.
 Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 
 ## Progress
@@ -34,10 +34,10 @@ Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 | 5.5 installer / signing | not done | no packaging, no code signing; `pnpm app` is how it runs |
 | 4.x Tauri shell / views UI | superseded | the shell landed as Electron instead ([ADR 0005](adr/0005-desktop-shell.md)) |
 | windowed / rolling fit | not done | the third item on the time-variation menu |
-| dataset versions / replace / diff | not done | next; `dataset_version_created` is already a log type |
+| 2.4 dataset versions / replace / diff | done | [ADR 0012](adr/0012-dataset-versions.md): an import into a populated dataset writes `dataset_version_created` with a parent and a `+n −n ~n` diff, the parent's rows are retracted/corrected rather than rewritten, and `foldVersion` rebuilds any older version from the log. Runs and panels pin `(dataset, version)`; `bench dataset versions\|diff` and the window's sheet read the same plan |
 | `shape extend` + migrations | not done | next; shape 2.2 is read-only today |
 
-Verification so far: 169 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
+Verification so far: 205 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
 (`pnpm app:build`) before the suite, because the desktop shell loads that bundle rather than `src/core`,
 and a bundle that is only exercised by launching an app breaks silently — it did, once. The entry path is measured, not
 assumed: 15.7 ms keystroke→paint in process at 10k points against a 100 ms budget (ADR 0003), and

@@ -41,8 +41,13 @@ export interface ViewPanel {
   /** Optional heading; falls back to the chart's own title. */
   title?: string
   dataset: string
-  /** Only `latest` exists today. Versions are a later feature, and this will not pretend otherwise. */
-  version: 'latest'
+  /**
+   * The dataset version this panel was drawn from. Materializing a panel pins the version that was
+   * current at that moment, so a panel is a statement about specific rows — not about whatever the
+   * dataset happens to hold when someone opens the tab. `latest` is accepted for a hand-written view
+   * and means "draw from the newest version".
+   */
+  version: number | 'latest'
   query?: ViewQuery
   recipe?: string
   params?: Record<string, unknown>
@@ -233,8 +238,8 @@ function checkPanel(value: unknown, index: number): string[] {
   )
 
   if (!str(value.dataset)) problems.push(`${where}.dataset is required`)
-  if (value.version !== 'latest') {
-    problems.push(`${where}.version must be "latest" (dataset versions do not exist yet)`)
+  if (value.version !== 'latest' && !(num(value.version) && Number.isInteger(value.version) && value.version >= 1)) {
+    problems.push(`${where}.version must be "latest" or a version number (1, 2, …)`)
   }
   if (value.title !== undefined && typeof value.title !== 'string') problems.push(`${where}.title must be a string`)
   if (value.recipe !== undefined && !str(value.recipe)) problems.push(`${where}.recipe must be a non-empty string`)
@@ -469,6 +474,8 @@ export function plotDataset(
   input?: RunInput,
   /** Heading for the canvas; defaults to the project's name, as `bench chart` has always done. */
   title?: string,
+  /** The version those rows came from. Names it on the artifact rather than only in the tab. */
+  version?: number,
 ): PlottedDataset {
   const dataset = workspace.dataset(datasetId)
   const rows = input === undefined ? dataset.points : input.points
@@ -485,7 +492,11 @@ export function plotDataset(
     spec: {
       title: title ?? workspace.config.name,
       subtitle: `${datasetId} · ${dataset.definition?.id ?? 'unknown shape'}`,
-      provenance: { dataset: datasetId, shape: dataset.shape },
+      provenance: {
+        dataset: datasetId,
+        shape: dataset.shape,
+        ...(version === undefined ? {} : { version }),
+      },
       x: { label: 'x' },
       y: { label: 'y' },
       points: plotted,
@@ -525,13 +536,15 @@ export async function materializePanel(
   }
 
   const title = request.title ?? workspace.config.name
+  // Pinned here, once: every panel records the version it actually read.
+  const version = workspace.currentVersion(datasetId)
 
   if (request.recipe === undefined) {
-    const { spec, plotted } = plotDataset(workspace, datasetId, input, title)
+    const { spec, plotted } = plotDataset(workspace, datasetId, input, title, version)
     return {
       panel: {
         dataset: datasetId,
-        version: 'latest',
+        version,
         ...(request.title === undefined ? {} : { title: request.title }),
         ...(request.query === undefined ? {} : { query: request.query }),
         chart: spec,
@@ -555,12 +568,18 @@ export async function materializePanel(
   return {
     panel: {
       dataset: datasetId,
-      version: 'latest',
+      version,
       ...(request.title === undefined ? {} : { title: request.title }),
       ...(request.query === undefined ? {} : { query: request.query }),
       recipe: result.recipe,
       params,
-      chart: chartSpecFor(result, { title, dataset: datasetId, shape: shape.id, recipe: result.recipe }),
+      chart: chartSpecFor(result, {
+        title,
+        dataset: datasetId,
+        shape: shape.id,
+        version,
+        recipe: result.recipe,
+      }),
       verdict: result.verdict,
       n: Number(result.diagnostics.n),
       recipe_hash: result.recipeHash,
@@ -583,6 +602,17 @@ export async function panelStatus(
 ): Promise<PanelStatus> {
   const dataset = workspace.state.datasets.get(panel.dataset)
   if (!dataset) return { index, state: 'missing', detail: `dataset "${panel.dataset}" is gone` }
+
+  // The version pin: a panel drawn from version 1 is stale the moment version 2 exists, even when a
+  // row happens to read the same. This is the answer to "what did this rest on", and it is checked
+  // before the fingerprint because it is the coarser, more certain fact.
+  if (panel.version !== 'latest' && dataset.version > panel.version) {
+    return {
+      index,
+      state: 'stale',
+      detail: `the dataset is at version ${dataset.version}; this panel was drawn from version ${panel.version}`,
+    }
+  }
 
   // A recipe can change without the data moving, and a panel drawn by the old one would still look
   // authoritative. Same check recorded runs get, for the same reason.

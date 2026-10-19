@@ -14,7 +14,8 @@
       "y"
     ],
     "readout": "n = 14",
-    "title": "drift over time"
+    "title": "drift over time",
+    "meta": "main · v2 · xy.v1   ·   2 panels   ·   14 points"
   },
   "tabDialog": {
     "open": true,
@@ -27,6 +28,6 @@
     "offered": [],
     "problem": "no Python interpreter at \"python\" and none on PATH — recipes need the analysis environment"
   },
-  "elapsedMs": 2274,
-  "artifactBytes": 386614062
+  "elapsedMs": 2168,
+  "artifactBytes": 386643857
 }

@@ -39,6 +39,8 @@ export interface ChartPoint {
 export interface ChartProvenance {
   dataset?: string
   shape?: string
+  /** The dataset version this drawing was made from, when it was made from one in particular. */
+  version?: number
 }
 
 export interface ChartSpec {
@@ -426,6 +428,7 @@ function provenanceAttributes(spec: ChartSpec): string {
   return [
     spec.provenance?.dataset === undefined ? '' : ` data-dataset="${escapeXml(spec.provenance.dataset)}"`,
     spec.provenance?.shape === undefined ? '' : ` data-shape="${escapeXml(spec.provenance.shape)}"`,
+    spec.provenance?.version === undefined ? '' : ` data-dataset-version="${spec.provenance.version}"`,
   ].join('')
 }
 

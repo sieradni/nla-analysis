@@ -44,6 +44,7 @@ import {
 import { RecipeRunner } from '../core/runner.ts'
 import { renderState } from '../core/state.ts'
 import { commitImport, planImport } from '../core/import.ts'
+import { diffCounts, diffRows, type RowDiff } from '../core/versions.ts'
 
 /**
  * Recipes belong to the application, not to the user's project: they are the analysis library that
@@ -116,6 +117,9 @@ Usage
   bench state [--json]                  regenerate and print STATE.md
   bench check [--json]                  validate the log and shapes
   bench chart [--out file.svg]          render the dataset to an SVG artifact
+  bench dataset list                    datasets, with the version each is at
+  bench dataset versions <id>           every version of a dataset, and what it replaced
+  bench dataset diff <id> [v1] [v2]     row-level diff between two versions
   bench import <file> [options]         bring rows in from csv, tsv, or jsonl
   bench recipes [--json]                list analysis recipes and their parameters
   bench runs [--json]                   recorded analyses, and whether they still hold
@@ -284,6 +288,42 @@ function shortNumber(value: unknown): string {
   return String(Number(value.toPrecision(6)))
 }
 
+/** One row of a table, on one line: the fields it carries, in a stable order. */
+function formatValues(values: Record<string, PointValue>): string {
+  return Object.keys(values)
+    .sort()
+    .map((field) => `${field} ${typeof values[field] === 'number' ? shortNumber(values[field]) : JSON.stringify(values[field])}`)
+    .join('  ')
+}
+
+/** What an import does to the rows that are already there, in one sentence. */
+function versionSentence(plan: {
+  dataset: string
+  version: number
+  parent: number | null
+  diff: { added: number; removed: number; changed: number }
+  rows: number
+}): string {
+  if (plan.parent === null) return `first version of ${plan.dataset} · ${plan.rows} row(s)`
+  return `replaces version ${plan.parent} · ${diffCounts(plan.diff)}`
+}
+
+/** The rows behind a diff, so a bare `+1 −1 ~1` is never the whole story. */
+function printDiffDetails(diff: RowDiff, limit: number): void {
+  const show = (label: string, lines: string[]): void => {
+    if (lines.length === 0) return
+    process.stdout.write(`  ${label}:\n`)
+    for (const line of lines.slice(0, limit)) process.stdout.write(`    ${line}\n`)
+    if (lines.length > limit) process.stdout.write(`    … and ${lines.length - limit} more\n`)
+  }
+  show(`added ${diff.added}`, diff.addedRows.map((row) => `${row.t}  ${formatValues(row.values)}`))
+  show(
+    `changed ${diff.changed}`,
+    diff.changedRows.map((row) => `${row.t}  ${formatValues(row.before)}  →  ${formatValues(row.after)}`),
+  )
+  show(`removed ${diff.removed}`, diff.removedRows.map((row) => `${row.t}  ${formatValues(row.values)}`))
+}
+
 
 interface PanelOptions {
   dataset?: string
@@ -352,7 +392,7 @@ function describePanel(panel: ViewPanel, status: { state: string; detail?: strin
     ? `${panel.recipe} ${JSON.stringify(panel.params ?? {})}`
     : 'plot'
   const facts = [
-    panel.dataset,
+    panel.version === 'latest' ? `${panel.dataset} @latest` : `${panel.dataset} v${panel.version}`,
     source,
     panel.verdict ?? '',
     panel.n === undefined ? '' : `n = ${panel.n}`,
@@ -657,6 +697,176 @@ async function main(): Promise<void> {
       process.exit(errors.length === 0 ? EXIT_OK : EXIT_INVARIANT)
     }
 
+    case 'dataset': {
+      const sub = args[0] ?? 'list'
+      const workspace = await openWorkspace(values.project)
+      const datasets = [...workspace.state.datasets.values()]
+
+      const rowsNow = (datasetId: string, version: number): number =>
+        workspace.rowsOfVersion(datasetId, version).length
+
+      if (sub === 'list') {
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify(
+              {
+                ok: true,
+                data: datasets.map((dataset) => ({
+                  id: dataset.id,
+                  shape: dataset.shape,
+                  version: dataset.version,
+                  active: dataset.points.filter((point) => point.status === 'active').length,
+                  recorded: dataset.points.length,
+                  versions: dataset.versions.map((record) => record.version),
+                })),
+              },
+              null,
+              2,
+            ) + '\n',
+          )
+          return
+        }
+        if (datasets.length === 0) {
+          process.stdout.write('no datasets yet\n')
+          return
+        }
+        for (const dataset of datasets) {
+          const active = dataset.points.filter((point) => point.status === 'active').length
+          const first = dataset.points[0]?.tObserved.slice(0, 10) ?? '—'
+          const last = dataset.points.at(-1)?.tObserved.slice(0, 10) ?? '—'
+          process.stdout.write(
+            `${dataset.id}  v${dataset.version}  ${dataset.shape}  ${active} active / ${dataset.points.length} recorded  ${first} … ${last}\n`,
+          )
+        }
+        return
+      }
+
+      if (sub === 'versions') {
+        let datasetId: string
+        try {
+          datasetId = workspace.resolveDataset(args[1] ?? values.dataset)
+        } catch (error) {
+          fail(error)
+        }
+        const records = workspace.versions(datasetId)
+        if (records.length === 0) {
+          process.stdout.write(`dataset "${datasetId}" has no versions yet\n`)
+          process.stdout.write('  the first `bench import` creates version 1\n')
+          return
+        }
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify(
+              {
+                ok: true,
+                data: {
+                  dataset: datasetId,
+                  current: workspace.currentVersion(datasetId),
+                  versions: records.map((record) => ({ ...record, rowsNow: rowsNow(datasetId, record.version) })),
+                },
+              },
+              null,
+              2,
+            ) + '\n',
+          )
+          return
+        }
+        process.stdout.write(
+          `${datasetId} · ${records.length} version(s) · newest v${workspace.currentVersion(datasetId)}\n`,
+        )
+        for (const record of records) {
+          const how = record.recorded ? record.source : 'inferred: rows recorded before versions were'
+          const diff = record.diff ? `  ${diffCounts(record.diff)}` : '  first version'
+          process.stdout.write(
+            `  v${record.version}  ${rowsNow(datasetId, record.version)} row(s) now · ${record.rows} at creation${diff}  ${record.at.slice(0, 10)}  ${how}\n`,
+          )
+        }
+        return
+      }
+
+      if (sub === 'diff') {
+        let datasetId: string
+        try {
+          datasetId = workspace.resolveDataset(args[1] ?? values.dataset)
+        } catch (error) {
+          fail(error)
+        }
+        const records = workspace.versions(datasetId)
+        if (records.length === 0) {
+          die(`dataset "${datasetId}" has no versions to compare`, EXIT_MISSING, 'bench import creates version 1')
+        }
+        const newest = workspace.currentVersion(datasetId)
+        const known = records.map((record) => record.version)
+        const readVersion = (raw: string | undefined, fallback: number, what: string): number => {
+          if (raw === undefined) return fallback
+          const value = Number(raw)
+          if (!Number.isInteger(value) || value < 1) die(`${what} must be a version number, got "${raw}"`)
+          if (!known.includes(value)) {
+            die(`dataset "${datasetId}" has no version ${value}`, EXIT_MISSING, `versions: ${known.join(', ')}`)
+          }
+          return value
+        }
+        const right = readVersion(args[3], newest, 'the second version')
+        const left = readVersion(args[2], right - 1, 'the first version')
+        if (left >= right) die(`version ${left} is not older than ${right}`, EXIT_INVALID, 'give the older version first')
+        if (!known.includes(left) || !known.includes(right)) {
+          die(`both versions must exist in "${datasetId}"`, EXIT_MISSING, `versions: ${known.join(', ')}`)
+        }
+
+        // Recomputed from the two versions' rows rather than read out of the log: the recorded
+        // counts are what a writer claimed, and a diff command that only repeats them cannot catch a
+        // writer that claimed wrong. Any disagreement is reported instead of hidden.
+        const shape = workspace.shapeOf(datasetId)
+        const parentRows = workspace.rowsOfVersion(datasetId, left).map((point) => ({
+          id: point.id,
+          t: point.tObserved,
+          values: point.values,
+        }))
+        const childRows = workspace
+          .rowsOfVersion(datasetId, right)
+          .map((point) => ({ t: point.tObserved, values: point.values }))
+        const diff = diffRows(parentRows, childRows, shape.fields.map((field) => field.name))
+        const record = records.find((candidate) => candidate.version === right)
+        const claimed = record?.diff
+
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify(
+              {
+                ok: true,
+                data: {
+                  dataset: datasetId,
+                  from: left,
+                  to: right,
+                  counts: { added: diff.added, removed: diff.removed, changed: diff.changed },
+                  recorded: claimed ?? null,
+                  added: diff.addedRows,
+                  changed: diff.changedRows,
+                  removed: diff.removedRows.map((row) => ({ id: row.id, t: row.t, values: row.values })),
+                },
+              },
+              null,
+              2,
+            ) + '\n',
+          )
+          return
+        }
+
+        process.stdout.write(
+          `${datasetId}: version ${left} → ${right}  ${diffCounts(diff)}  (${childRows.length} row(s) in v${right})\n`,
+        )
+        if (claimed && (claimed.added !== diff.added || claimed.removed !== diff.removed || claimed.changed !== diff.changed)) {
+          process.stdout.write(
+            `  warning: version ${right} recorded ${diffCounts(claimed)} when it was written\n`,
+          )
+        }
+        printDiffDetails(diff, 10)
+        return
+      }
+
+      die(`unknown dataset subcommand "${sub}"`, EXIT_INVALID, 'use list, versions, or diff')
+    }
+
     case 'chart': {
       const workspace = await openWorkspace(values.project)
       const datasetId = workspace.resolveDataset(values.dataset)
@@ -664,7 +874,8 @@ async function main(): Promise<void> {
       // there, and say that nothing was modelled".
       let plotted: ReturnType<typeof plotDataset>
       try {
-        plotted = plotDataset(workspace, datasetId)
+        // The artifact names the version it drew, so a file on someone's desk answers "which rows".
+        plotted = plotDataset(workspace, datasetId, undefined, undefined, workspace.currentVersion(datasetId))
       } catch (error) {
         fail(error)
       }
@@ -738,6 +949,9 @@ async function main(): Promise<void> {
         sourceHash: plan.sourceHash,
         raggedRows: plan.raggedRows,
         comments: plan.comments,
+        version: plan.version,
+        parent: plan.parent,
+        diff: { added: plan.diff.added, removed: plan.diff.removed, changed: plan.diff.changed },
       }
 
       if (values['dry-run'] === true) {
@@ -747,10 +961,12 @@ async function main(): Promise<void> {
           )
         } else {
           process.stdout.write(`would import ${plan.rows} row(s) into ${plan.dataset} (${plan.shape})\n`)
+          process.stdout.write(`  ${versionSentence(plan)}\n`)
           for (const [field, column] of Object.entries(plan.mapping)) {
             process.stdout.write(`  ${field} <= ${column}\n`)
           }
           if (plan.timeColumn) process.stdout.write(`  t_observed <= ${plan.timeColumn}\n`)
+          printDiffDetails(plan.diff, 5)
           process.stdout.write(`  nothing was written\n`)
         }
         return
@@ -771,12 +987,20 @@ async function main(): Promise<void> {
             '\n',
         )
       } else {
-        process.stdout.write(`imported ${plan.rows} row(s) into ${plan.dataset} from ${basename(source)}\n`)
+        process.stdout.write(
+          `imported ${plan.rows} row(s) into ${plan.dataset} as version ${plan.version} from ${basename(source)}\n`,
+        )
+        process.stdout.write(`  ${versionSentence(plan)}\n`)
         process.stdout.write(`  preserved as ${plan.preserved}\n`)
         for (const [field, column] of Object.entries(plan.mapping)) {
           process.stdout.write(`  ${field} <= ${column}\n`)
         }
         if (plan.timeColumn) process.stdout.write(`  t_observed <= ${plan.timeColumn}\n`)
+        printDiffDetails(plan.diff, 5)
+        if (plan.parent !== null) {
+          const rows = workspace.rowsOfVersion(plan.dataset, plan.parent).length
+          process.stdout.write(`  version ${plan.parent} is untouched: still ${rows} row(s)\n`)
+        }
         if (plan.raggedRows > 0) {
           process.stdout.write(`  ${plan.raggedRows} row(s) had a different number of fields than the header\n`)
         }
@@ -803,6 +1027,7 @@ async function main(): Promise<void> {
                 recipe: run.recipe,
                 params: run.params ?? {},
                 dataset: run.dataset ?? null,
+                version: run.version ?? null,
                 verdict: run.verdict,
                 narrative: run.narrative ?? null,
                 artifact: run.artifact ?? null,
@@ -822,11 +1047,15 @@ async function main(): Promise<void> {
         return
       }
       for (const run of runs) {
-        const note = freshnessNote(freshness.get(run.id))
+        const judged = freshness.get(run.id)
+        const note = freshnessNote(judged)
         process.stdout.write(
           `${run.at}  ${run.recipe}  ${run.verdict}  ${note}\n`,
         )
-        process.stdout.write(`  ${run.dataset ?? 'unknown dataset'} · ${JSON.stringify(run.params ?? {})}\n`)
+        const pinned = run.version === undefined ? '' : ` v${run.version}`
+        process.stdout.write(
+          `  ${run.dataset ?? 'unknown dataset'}${pinned} · ${JSON.stringify(run.params ?? {})}\n`,
+        )
       }
       return
     }

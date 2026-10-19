@@ -52,9 +52,14 @@ export interface DatasetVersionCreated extends EventBase {
   type: 'dataset_version_created'
   dataset: string
   version: number
+  /** What produced this version: the preserved file it came from, or how it was made. */
   source: string
+  /** Content hash of the source, so a version names exactly what it was read from. */
   hash: string
+  /** Rows in the version when it was created. Hand-added rows grow the current version later. */
   rows: number
+  /** The version this one replaced. Absent for the first version. */
+  parent?: number
   /** Row-level diff against the parent version, when there is one. */
   diff?: { added: number; removed: number; changed: number }
 }
@@ -66,6 +71,11 @@ export interface PointRecorded extends EventBase {
   values: Record<string, PointValue>
   /** The time the value refers to. Distinct from `at`, when the point was recorded. */
   t_observed: IsoTime
+  /**
+   * The dataset version this row belongs to. Absent means version 1: projects written before
+   * versions existed have exactly one, and reading them back as anything else would invent history.
+   */
+  version?: number
   note?: string
   tags?: string[]
 }
@@ -77,6 +87,8 @@ export interface PointCorrected extends EventBase {
   supersedes: string
   values: Record<string, PointValue>
   reason?: string
+  /** The version this change belongs to, so an older version still reads as it did. */
+  version?: number
 }
 
 export interface PointRetracted extends EventBase {
@@ -84,6 +96,8 @@ export interface PointRetracted extends EventBase {
   dataset: string
   supersedes: string
   reason?: string
+  /** The version this withdrawal happened in; see `PointCorrected.version`. */
+  version?: number
 }
 
 export interface ImportCompleted extends EventBase {
@@ -106,6 +120,9 @@ export interface AnalysisRun extends EventBase {
   /** The dataset the run read. Optional because runs recorded before this field existed lack it;
    *  `assessRuns` reports those as unverifiable rather than assuming an answer. */
   dataset?: string
+  /** The dataset version the run read, so "what did that conclusion rest on" is a version, not a
+   *  Rorschach of a content hash. Absent for runs recorded before versions existed. */
+  version?: number
   input_hash: string
   verdict: Verdict
   narrative?: string

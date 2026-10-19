@@ -1,4 +1,4 @@
-import { freshnessNote, type RunFreshness } from './analysis.ts'
+import { freshnessNote, versionNote, type RunFreshness } from './analysis.ts'
 import type { IsoTime, Shape } from './events.ts'
 import type { ProjectState } from './binder.ts'
 
@@ -55,20 +55,35 @@ export function renderState(config: StateConfig, state: ProjectState, options?: 
   if (datasets.length === 0) {
     lines.push('_none yet_', '')
   } else {
-    lines.push('| dataset | shape | active | recorded | first | last |')
-    lines.push('|---|---|---|---|---|---|')
+    lines.push('| dataset | shape | version | active | recorded | first | last |')
+    lines.push('|---|---|---|---|---|---|---|')
     for (const dataset of datasets) {
       const shape = state.shapes.get(dataset.shape)
       const first = dataset.points[0]?.tObserved.slice(0, 10) ?? '—'
       const last = dataset.points.at(-1)?.tObserved.slice(0, 10) ?? '—'
       const activeCount = dataset.points.filter((point) => point.status === 'active').length
       lines.push(
-        `| ${dataset.id} | ${shape?.id ?? dataset.shape} | ${activeCount} | ${dataset.points.length} | ${first} | ${last} |`,
+        `| ${dataset.id} | ${shape?.id ?? dataset.shape} | v${dataset.version} | ${activeCount} | ${dataset.points.length} | ${first} | ${last} |`,
       )
     }
     lines.push('')
     for (const dataset of datasets) {
       lines.push(`- \`${dataset.id}\` — ${shapeSummary(state.shapes.get(dataset.shape))}`)
+    }
+    lines.push('')
+    // What each version was, in one line per version: the question "what did we have last week" is
+    // asked far more often than it is answered by re-reading the log.
+    lines.push('## Versions', '')
+    for (const dataset of datasets) {
+      for (const record of dataset.versions) {
+        const diff = record.diff
+          ? ` · +${record.diff.added} −${record.diff.removed} ~${record.diff.changed}`
+          : ''
+        const how = record.recorded ? record.source : 'inferred (rows recorded before versions were)'
+        lines.push(
+          `- \`${dataset.id}\` v${record.version} · ${record.rows} row(s) at creation${diff} · ${shortDate(record.at)} · ${how}`,
+        )
+      }
     }
     lines.push('')
   }
@@ -79,9 +94,12 @@ export function renderState(config: StateConfig, state: ProjectState, options?: 
       const narrative = run.narrative ? ` — ${clip(run.narrative)}` : ''
       // Whether the result still holds is the first thing a reader needs, before the verdict: a
       // confident sentence about data that has since changed is the most expensive kind of stale.
-      const note = freshnessNote(options?.freshness?.get(run.id))
-      const status = note === '' ? '' : ` · ${note}`
-      lines.push(`- \`${run.recipe}\` · **${run.verdict}** · ${shortDate(run.at)}${status}${narrative}`)
+      const freshness = options?.freshness?.get(run.id)
+      const note = freshnessNote(freshness)
+      const pinned = versionNote(freshness)
+      const status = [pinned, note].filter((part) => part !== '').join(' · ')
+      const suffix = status === '' ? '' : ` · ${status}`
+      lines.push(`- \`${run.recipe}\` · **${run.verdict}** · ${shortDate(run.at)}${suffix}${narrative}`)
     }
     lines.push('')
   }

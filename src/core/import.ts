@@ -10,12 +10,14 @@
 import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
+import { activeRowsOfVersion } from './binder.ts'
 import { BenchError } from './errors.ts'
 import { makeEvent } from './events.ts'
 import type { BenchEvent, PointValue, Shape } from './events.ts'
 import { validateValues } from './shapes.ts'
 import { coerce, parseDelimited, parseJsonl } from './table.ts'
 import type { Table } from './table.ts'
+import { diffRows, type RowDiff } from './versions.ts'
 import type { Workspace } from './workspace.ts'
 
 /** The names a time column is allowed to have without being told. */
@@ -52,6 +54,11 @@ export interface ImportPreview extends TablePreview {
   suggested: Record<string, string>
   /** These exact bytes were imported into this dataset before. */
   duplicate: boolean
+  /** The version this import would create, and the versions already there. */
+  version: number
+  parent: number | null
+  /** Rows in the parent version now, so a sheet can say what is being replaced before it is. */
+  parentRows: number
 }
 
 export interface ImportRequest {
@@ -85,6 +92,21 @@ export interface ImportPlan {
   preserved: string
   /** Every row that will become a point. Not exported by the window, but commit needs it. */
   prepared: { values: Record<string, PointValue>; t: string }[]
+  /**
+   * The version this import writes. An import into a dataset that holds rows replaces them: it is a
+   * new version with a diff, never an append onto whatever happened to be there (requirements §3.4).
+   */
+  version: number
+  /** The version it replaces. Null for the first version of a dataset — there is nothing to diff. */
+  parent: number | null
+  /**
+   * The parent has no record of its own (a dataset of hand-typed rows, or a project that predates
+   * versions). The commit writes one down before the new version, so the chain has a first link that
+   * anyone can read — and `bench dataset diff` can compare against it.
+   */
+  parentUnrecorded: boolean
+  /** Row-level `+n −n ~n` against the parent, with the rows themselves so a report can name them. */
+  diff: RowDiff
 }
 
 interface Loaded {
@@ -152,6 +174,7 @@ export async function previewImport(workspace: Workspace, file: string): Promise
   }
 
   const hash = hashOf(loaded.text)
+  const target = targetVersion(workspace, datasetId)
   return {
     ...previewOf(file, loaded),
     dataset: datasetId,
@@ -161,7 +184,25 @@ export async function previewImport(workspace: Workspace, file: string): Promise
     duplicate: workspace.allEvents.some(
       (event) => event.type === 'import_completed' && event.hash === hash && event.dataset === datasetId,
     ),
+    version: target.version,
+    parent: target.parent,
+    parentRows: target.parent === null ? 0 : activeRowsOfVersion(workspace.state, datasetId, target.parent).length,
   }
+}
+
+/**
+ * The version an import into this dataset would create, and what it would replace.
+ *
+ * A dataset that holds rows is at some version — recorded, or inferred as version 1 when the project
+ * predates version records — and the import that follows it is one version newer. A dataset with
+ * nothing in it gets version 1: there is nothing to replace and nothing to diff.
+ */
+function targetVersion(workspace: Workspace, datasetId: string): { version: number; parent: number | null } {
+  const dataset = workspace.state.datasets.get(datasetId)
+  const holdsRows = (dataset?.points.length ?? 0) > 0 || (dataset?.versions.length ?? 0) > 0
+  if (!holdsRows) return { version: 1, parent: null }
+  const parent = workspace.currentVersion(datasetId)
+  return { version: parent + 1, parent }
 }
 
 /**
@@ -257,6 +298,29 @@ export async function planImport(
     })
   }
 
+  // What this import does to the rows that are already there. The diff is against the parent
+  // version's rows, not against the current state's: a row a later version added is not the parent's
+  // to remove, and a row the parent had is still the parent's even if it was corrected afterwards.
+  const target = targetVersion(workspace, datasetId)
+  const fields = Object.keys(Object.fromEntries(mapping))
+  const parentRows =
+    target.parent === null
+      ? []
+      : activeRowsOfVersion(workspace.state, datasetId, target.parent).map((point) => ({
+          id: point.id,
+          t: point.tObserved,
+          values: point.values,
+        }))
+  const incoming = prepared.map((row) => ({ t: row.t, values: row.values }))
+  const diff = diffRows(parentRows, incoming, fields)
+  if (target.parent !== null && diff.added === 0 && diff.removed === 0 && diff.changed === 0 && request.force !== true) {
+    throw new BenchError(
+      'invalid',
+      `version ${target.parent} already holds exactly these ${prepared.length} row(s)`,
+      { hint: 'nothing would change; pass --force to record a version that replaces nothing' },
+    )
+  }
+
   return {
     file,
     dataset: datasetId,
@@ -273,29 +337,100 @@ export async function planImport(
     sample: prepared.slice(0, 3),
     preserved: `data/raw/${hash.slice(0, 12)}-${basename(file)}`,
     prepared,
+    version: target.version,
+    parent: target.parent,
+    // `recorded` matters: the binder infers version 1 for a dataset that has rows and no version
+    // event, and an inference is exactly what this flag exists to notice.
+    parentUnrecorded:
+      target.parent !== null &&
+      !(workspace.state.datasets.get(datasetId)?.versions ?? []).some(
+        (record) => record.version === target.parent && record.recorded,
+      ),
+    diff,
   }
 }
 
 /**
- * Write the plan: the original into `data/raw/` as evidence, the points and the import record in one
- * append. The copy happens first, so a log that names a preserved file always has that file.
+ * Write the plan: the original into `data/raw/` as evidence, then the version and everything it
+ * changed in one append. The copy happens first, so a log that names a preserved file always has
+ * that file.
+ *
+ * The order inside the append is the order a reader needs: the version record first, so every row
+ * that follows names a version that exists, then the rows it brings, corrects and withdraws, then the
+ * import record that names the file. Nothing is deleted: a withdrawn row is a `point_retracted`,
+ * which is what keeps the parent version readable exactly as it was.
  */
 export async function commitImport(
   workspace: Workspace,
   plan: ImportPlan,
-): Promise<{ preserved: string; rows: number }> {
+): Promise<{ preserved: string; rows: number; version: number; parent: number | null; diff: RowDiff }> {
   await mkdir(join(workspace.dir, 'data', 'raw'), { recursive: true })
   await copyFile(plan.file, join(workspace.dir, plan.preserved))
 
-  const events: BenchEvent[] = plan.prepared.map((point) =>
-    makeEvent('point_recorded', workspace.session, {
+  const source = basename(plan.file)
+  const events: BenchEvent[] = []
+  // The parent existed but was never written down. Record it first, with the row count the diff was
+  // computed against, so the version chain has a readable first link instead of starting mid-story.
+  if (plan.parent !== null && plan.parentUnrecorded) {
+    // The parent's own rows: the file's rows, minus what it adds, plus what it withdraws. That is
+    // what the diff was computed against, so the count and the diff cannot disagree.
+    const parentRows = plan.rows - plan.diff.added + plan.diff.removed
+    events.push(
+      makeEvent('dataset_version_created', workspace.session, {
+        dataset: plan.dataset,
+        version: plan.parent,
+        source: 'rows recorded before versions existed',
+        hash: '',
+        rows: parentRows,
+      }),
+    )
+  }
+  events.push(
+    makeEvent('dataset_version_created', workspace.session, {
       dataset: plan.dataset,
-      shape: plan.shape,
-      values: point.values,
-      t_observed: point.t,
-      tags: ['import'],
+      version: plan.version,
+      source: plan.preserved,
+      hash: plan.sourceHash,
+      rows: plan.rows,
+      ...(plan.parent === null ? {} : { parent: plan.parent }),
+      ...(plan.parent === null
+        ? {}
+        : { diff: { added: plan.diff.added, removed: plan.diff.removed, changed: plan.diff.changed } }),
     }),
   )
+  events.push(
+    ...plan.diff.addedRows.map((row) =>
+      makeEvent('point_recorded', workspace.session, {
+        dataset: plan.dataset,
+        shape: plan.shape,
+        values: row.values,
+        t_observed: row.t,
+        version: plan.version,
+        tags: ['import'],
+      }),
+    ),
+  )
+  for (const row of plan.diff.changedRows) {
+    events.push(
+      makeEvent('point_corrected', workspace.session, {
+        dataset: plan.dataset,
+        supersedes: row.id,
+        values: row.after,
+        reason: `re-read from ${source} (version ${plan.version})`,
+        version: plan.version,
+      }),
+    )
+  }
+  for (const row of plan.diff.removedRows) {
+    events.push(
+      makeEvent('point_retracted', workspace.session, {
+        dataset: plan.dataset,
+        supersedes: row.id,
+        reason: `not in ${source}; replaced by version ${plan.version}`,
+        version: plan.version,
+      }),
+    )
+  }
   events.push(
     makeEvent('import_completed', workspace.session, {
       dataset: plan.dataset,
@@ -308,5 +443,11 @@ export async function commitImport(
   )
   await workspace.appendAll(events)
   await workspace.writeStateBrief()
-  return { preserved: plan.preserved, rows: plan.rows }
+  return {
+    preserved: plan.preserved,
+    rows: plan.rows,
+    version: plan.version,
+    parent: plan.parent,
+    diff: plan.diff,
+  }
 }

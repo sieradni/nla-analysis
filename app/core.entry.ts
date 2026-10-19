@@ -207,6 +207,8 @@ async function workspaceFor(dir: string): Promise<Workspace> {
 export interface EntryTarget {
   dataset: string
   shape: string
+  /** The version a typed point joins: the newest, which is what a repaint should say it reads. */
+  version: number
   /** Active points in that dataset, so the stage can state a count instead of summing panels. */
   active: number
   /** The fields the entry bar offers. Empty means the shape definition is missing; do not guess. */
@@ -218,7 +220,7 @@ export interface OpenedProject {
   name: string
   views: ViewSummary[]
   viewProblems: string[]
-  datasets: { id: string; shape: string; active: number }[]
+  datasets: { id: string; shape: string; version: number; active: number }[]
   /**
    * Where a typed point would land before any tab exists. A project with no tabs still has a dataset
    * and a shape, and the entry bar is the door a new project needs most — without this, creating a
@@ -240,6 +242,7 @@ async function describeProject(workspace: Workspace): Promise<OpenedProject> {
   const datasets = [...workspace.state.datasets.values()].map((dataset) => ({
     id: dataset.id,
     shape: dataset.shape,
+    version: dataset.version,
     active: workspace.dataset(dataset.id).points.length,
   }))
   return {
@@ -338,6 +341,7 @@ function targetForDataset(workspace: Workspace, datasetId: string): EntryTarget 
     return {
       dataset: dataset.id,
       shape: dataset.shape,
+      version: workspace.currentVersion(datasetId),
       active: dataset.points.length,
       fields: dataset.definition?.fields ?? [],
     }
@@ -685,12 +689,57 @@ export async function importPreview(dir: string, file: string): Promise<ImportPr
 export interface ImportedTable {
   dataset: string
   rows: number
+  /** The version this import wrote, and the one it replaced. */
+  version: number
+  parent: number | null
+  diff: { added: number; removed: number; changed: number }
+  /** The rows the parent had that the file does not: withdrawn, never deleted. */
+  removedRows: { t: string; values: Record<string, PointValue> }[]
   /** The original, preserved under data/raw/ before any point was written. */
   preserved: string
   warnings: string[]
   active: number
   /** The open tab, rebuilt and redrawn; null when the project has no tab on screen. */
   view: RefreshedView | null
+}
+
+/**
+ * What an import would do, worked out from the mapping alone and written nowhere.
+ *
+ * The sheet shows this before the button is pressed, because "replace version 1, +5 −14" is a
+ * decision and "import 5 rows" is not. It is the same `planImport` the commit runs, so the preview
+ * cannot promise one thing and the write do another.
+ */
+export interface PlannedImport {
+  dataset: string
+  rows: number
+  version: number
+  parent: number | null
+  diff: { added: number; removed: number; changed: number }
+  removedRows: { t: string; values: Record<string, PointValue> }[]
+  warnings: string[]
+}
+
+export async function importPlan(
+  dir: string,
+  file: string,
+  mapping: Record<string, string>,
+  options: { time?: string; force?: boolean } = {},
+): Promise<PlannedImport> {
+  const plan = await planImport(await workspaceFor(dir), file, {
+    mapping,
+    ...(options.time === undefined ? {} : { time: options.time }),
+    ...(options.force === true ? { force: true } : {}),
+  })
+  return {
+    dataset: plan.dataset,
+    rows: plan.rows,
+    version: plan.version,
+    parent: plan.parent,
+    diff: { added: plan.diff.added, removed: plan.diff.removed, changed: plan.diff.changed },
+    removedRows: plan.diff.removedRows.map((row) => ({ t: row.t, values: row.values })),
+    warnings: plan.warnings,
+  }
 }
 
 /**
@@ -710,10 +759,14 @@ export async function importFile(
     ...(options.force === true ? { force: true } : {}),
     ...(options.time === undefined ? {} : { time: options.time }),
   })
-  await commitImport(workspace, plan)
+  const committed = await commitImport(workspace, plan)
   return {
     dataset: plan.dataset,
     rows: plan.rows,
+    version: committed.version,
+    parent: committed.parent,
+    diff: { added: committed.diff.added, removed: committed.diff.removed, changed: committed.diff.changed },
+    removedRows: committed.diff.removedRows.map((row) => ({ t: row.t, values: row.values })),
     preserved: plan.preserved,
     warnings: plan.warnings,
     active: workspace.dataset(plan.dataset).points.length,

@@ -7,6 +7,11 @@ export interface Point {
   /** The time the value refers to. */
   tObserved: IsoTime
   recordedAt: IsoTime
+  /**
+   * The dataset version this row belongs to. Every point has one: rows written before versions were
+   * recorded read as version 1, which is what a project with one version always was.
+   */
+  version: number
   note?: string
   tags: string[]
   status: 'active' | 'retracted'
@@ -19,10 +24,34 @@ export interface Point {
   retractionReason?: string
 }
 
+/**
+ * One immutable version of a dataset. Records are never rewritten, so an old conclusion can always
+ * be read against the rows it actually rested on. `version` 1 is inferred when a project predates
+ * version records: those rows were one version, and calling that fact anything else would invent
+ * history.
+ */
+export interface DatasetVersion {
+  version: number
+  at: IsoTime
+  /** The preserved file it came from, or why it was made. */
+  source: string
+  hash: string
+  /** Rows when the version was created. The current version grows as rows are added to it. */
+  rows: number
+  parent?: number
+  diff?: { added: number; removed: number; changed: number }
+  /** False only for the inferred version 1 of a project that predates version records. */
+  recorded: boolean
+}
+
 export interface DatasetState {
   id: string
   shape: string
   points: Point[]
+  /** Oldest first. Immutable, except that the current version grows with new rows. */
+  versions: DatasetVersion[]
+  /** The version a new row lands in: the newest one, or 1 when none has been recorded yet. */
+  version: number
 }
 
 export interface Decision {
@@ -43,6 +72,8 @@ export interface RunRecord {
   inputHash?: string
   params?: Record<string, unknown>
   dataset?: string
+  /** The version of that dataset the run read. Absent for runs recorded before versions existed. */
+  version?: number
   artifact?: string
 }
 
@@ -55,6 +86,12 @@ export interface ProjectState {
   runs: RunRecord[]
   /** Structural problems found while folding: unknown ids, duplicates, orphaned corrections. */
   problems: string[]
+  /**
+   * The events this state was folded from. Kept so a *past* version can be rebuilt on demand
+   * (`foldVersion`) instead of snapshotting every version on every read — most projects read only
+   * the current one, and a version is asked about rarely.
+   */
+  events: readonly BenchEvent[]
 }
 
 /**
@@ -84,6 +121,7 @@ export function bind(events: BenchEvent[]): ProjectState {
     decisions: [],
     runs: [],
     problems: [],
+    events,
   }
 
   const points = new Map<string, Point>()
@@ -91,7 +129,7 @@ export function bind(events: BenchEvent[]): ProjectState {
   const ensureDataset = (id: string, shape: string): DatasetState => {
     const existing = state.datasets.get(id)
     if (existing) return existing
-    const created: DatasetState = { id, shape, points: [] }
+    const created: DatasetState = { id, shape, points: [], versions: [], version: 1 }
     state.datasets.set(id, created)
     return created
   }
@@ -118,12 +156,19 @@ export function bind(events: BenchEvent[]): ProjectState {
 
       case 'point_recorded': {
         const dataset = ensureDataset(event.dataset, event.shape)
+        const version = event.version ?? 1
+        // A row tagged with a version nobody announced is a structural problem worth naming: it is
+        // either a hand-written event or a bug in a writer, and folding it quietly would hide both.
+        if (dataset.versions.length > 0 && !dataset.versions.some((record) => record.version === version)) {
+          state.problems.push(`point ${event.id} names version ${version}, which was never created`)
+        }
         const point: Point = {
           id: event.id,
           dataset: event.dataset,
           values: { ...event.values },
           tObserved: event.t_observed,
           recordedAt: event.at,
+          version,
           tags: [...(event.tags ?? [])],
           status: 'active',
           corrections: [],
@@ -159,6 +204,26 @@ export function bind(events: BenchEvent[]): ProjectState {
         break
       }
 
+      case 'dataset_version_created': {
+        const dataset = ensureDataset(event.dataset, state.datasets.get(event.dataset)?.shape ?? 'unknown')
+        if (dataset.versions.some((record) => record.version === event.version)) {
+          state.problems.push(`dataset "${event.dataset}" records version ${event.version} twice`)
+          break
+        }
+        dataset.versions.push({
+          version: event.version,
+          at: event.at,
+          source: event.source,
+          hash: event.hash,
+          rows: event.rows,
+          ...(event.parent === undefined ? {} : { parent: event.parent }),
+          ...(event.diff === undefined ? {} : { diff: { ...event.diff } }),
+          recorded: true,
+        })
+        dataset.version = Math.max(dataset.version, event.version)
+        break
+      }
+
       case 'analysis_run':
         state.runs.push({
           id: event.id,
@@ -169,6 +234,7 @@ export function bind(events: BenchEvent[]): ProjectState {
           inputHash: event.input_hash,
           params: { ...(event.params ?? {}) },
           ...(event.dataset === undefined ? {} : { dataset: event.dataset }),
+          ...(event.version === undefined ? {} : { version: event.version }),
           ...(event.narrative === undefined ? {} : { narrative: event.narrative }),
           ...(event.artifact === undefined ? {} : { artifact: event.artifact }),
         })
@@ -183,13 +249,31 @@ export function bind(events: BenchEvent[]): ProjectState {
         })
         break
 
-      case 'dataset_version_created':
       case 'import_completed':
         break
     }
   }
 
   for (const dataset of state.datasets.values()) {
+    // A project that predates version records has one version, and it is the rows it already had.
+    // Saying so explicitly is what lets every other reader ask for "version N" without a special case.
+    if (dataset.versions.length === 0 && dataset.points.length > 0) {
+      dataset.versions.push({
+        version: 1,
+        at: dataset.points.reduce((earliest, point) => (point.recordedAt < earliest ? point.recordedAt : earliest), dataset.points[0]!.recordedAt),
+        source: 'unrecorded',
+        hash: '',
+        rows: dataset.points.length,
+        recorded: false,
+      })
+    }
+    dataset.versions.sort((left, right) => left.version - right.version)
+    dataset.version = Math.max(dataset.version, ...dataset.versions.map((record) => record.version), 1)
+    for (const point of dataset.points) {
+      if (point.version > dataset.version) {
+        state.problems.push(`point ${point.id} names version ${point.version}, past the newest (${dataset.version})`)
+      }
+    }
     dataset.points.sort(byTime)
     // Checked once per dataset, not once per point: inside the loop this reported the same broken
     // reference as many times as the dataset had points, and skipped an empty one entirely.
@@ -203,6 +287,88 @@ export function bind(events: BenchEvent[]): ProjectState {
 
 export function getDataset(state: ProjectState, id: string): DatasetState | undefined {
   return state.datasets.get(id)
+}
+
+/**
+ * The rows of one version of a dataset, rebuilt from the log.
+ *
+ * A row belongs to the version it was recorded in, and a correction or retraction belongs to the
+ * version it *happened* in — so version 1 keeps reading as it did after a later version replaces,
+ * corrects or withdraws a row. That is the whole promise of an immutable version, and it is why this
+ * fold takes a cut instead of a snapshot being written beside the log.
+ */
+export function foldVersion(
+  events: readonly BenchEvent[],
+  datasetId: string,
+  upTo: number,
+): Point[] {
+  const points = new Map<string, Point>()
+  for (const event of events) {
+    if ((event.type === 'point_recorded' || event.type === 'point_corrected' || event.type === 'point_retracted') && event.dataset !== datasetId) {
+      continue
+    }
+    switch (event.type) {
+      case 'point_recorded':
+        if ((event.version ?? 1) > upTo) break
+        points.set(event.id, {
+          id: event.id,
+          dataset: event.dataset,
+          values: { ...event.values },
+          tObserved: event.t_observed,
+          recordedAt: event.at,
+          version: event.version ?? 1,
+          tags: [...(event.tags ?? [])],
+          status: 'active',
+          corrections: [],
+          ...(event.note === undefined ? {} : { note: event.note }),
+        })
+        break
+      case 'point_corrected': {
+        if ((event.version ?? 1) > upTo) break
+        const target = points.get(event.supersedes)
+        if (!target) break
+        target.values = { ...target.values, ...event.values }
+        target.corrections.push(event.id)
+        if (target.correctedAt === undefined || event.at > target.correctedAt) target.correctedAt = event.at
+        break
+      }
+      case 'point_retracted': {
+        if ((event.version ?? 1) > upTo) break
+        const target = points.get(event.supersedes)
+        if (!target) break
+        target.status = 'retracted'
+        if (target.retractedAt === undefined || event.at > target.retractedAt) target.retractedAt = event.at
+        if (event.reason !== undefined) target.retractionReason = event.reason
+        break
+      }
+      default:
+        break
+    }
+  }
+  return [...points.values()].sort(byTime)
+}
+
+/** The active rows of one version: what an analysis or a panel pinned to it actually read. */
+export function activeRowsOfVersion(
+  state: ProjectState,
+  datasetId: string,
+  version: number,
+): Point[] {
+  const dataset = state.datasets.get(datasetId)
+  if (!dataset) return []
+  // The newest version is already folded: reading it from the live state keeps the common case off
+  // the re-fold path, and `foldVersion` is checked against it by test.
+  if (version >= dataset.version) return activePoints(state, datasetId)
+  return foldVersion(state.events, datasetId, version).filter((point) => point.status === 'active')
+}
+
+/** The version record for one version, or undefined when the dataset has no such version. */
+export function versionRecord(
+  state: ProjectState,
+  datasetId: string,
+  version: number,
+): DatasetVersion | undefined {
+  return state.datasets.get(datasetId)?.versions.find((record) => record.version === version)
 }
 
 export function activePoints(state: ProjectState, datasetId: string): Point[] {

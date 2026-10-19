@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('bench', {
   // imports: the picker, the read-only preview, and the one call that writes points and the record
   pickImportFile: () => ipcRenderer.invoke('bench:pickImportFile'),
   importPreview: (dir, file) => ipcRenderer.invoke('bench:importPreview', dir, file),
+  // What the mapping would do — the version and its diff — without writing anything.
+  importPlan: (dir, file, mapping, options) => ipcRenderer.invoke('bench:importPlan', dir, file, mapping, options),
   importFile: (dir, file, mapping, options) => ipcRenderer.invoke('bench:importFile', dir, file, mapping, options),
   point: (dir, id, viewName) => ipcRenderer.invoke('bench:point', dir, id, viewName),
   recipes: () => ipcRenderer.invoke('bench:recipes'),

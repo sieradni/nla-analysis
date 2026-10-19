@@ -74,6 +74,7 @@ console.log(
   `  packaged=${report.packaged} electron=${report.electron} panels=${report.facts.panels} marks=${report.facts.marks}`,
 )
 console.log(`  title="${report.facts.title}" readout="${report.facts.readout}" fields=${report.facts.fields.join(',')}`)
+console.log(`  meta="${report.facts.meta}"`)
 console.log(`  recipes offered=${report.recipes.offered.length} problem=${report.recipes.problem ?? '(none)'}`)
 console.log(`  tab dialog options=${report.tabDialog.options.join(',')} note="${report.tabDialog.note}"`)
 console.log(`  ${elapsed} ms from spawn to report, then exit ${code}`)
@@ -86,6 +87,11 @@ if (!/resources[\\/]app[\\/]renderer[\\/]index\.html$/i.test(report.url)) {
 }
 if (!report.facts.panels || !report.facts.marks) fail('the build painted no chart')
 if (!report.facts.fields.length) fail('the entry bar offered no fields')
+// The strip names the dataset *and the version it was drawn from*: a panel drawn before the last
+// import has to be able to say which rows it is about, not only which dataset.
+if (!/main · v\d+/.test(report.facts.meta ?? '')) {
+  fail(`the strip does not name a dataset version: "${report.facts.meta}"`)
+}
 if (report.recipes.offered.length !== 0) fail('a recipe was offered without the analysis runtime')
 if (!report.recipes.problem) fail('no recipe was offered and no reason was given')
 if (!/python|runtime/i.test(report.recipes.problem)) {

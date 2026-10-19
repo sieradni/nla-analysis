@@ -107,10 +107,16 @@ describe('view validation', () => {
     }
   })
 
-  it('refuses a version other than latest, because versions do not exist yet', () => {
+  it('accepts a pinned version, and refuses anything that is not one', () => {
+    // A panel drawn from a version says so; `latest` stays legal for a hand-written view.
+    expect(() => validateView({ v: 1, name: 'v', panels: [{ ...panel(), version: 3 }] })).not.toThrow()
+    expect(() => validateView({ v: 1, name: 'v', panels: [{ ...panel(), version: 'latest' }] })).not.toThrow()
     expect(
-      problemsOf(() => validateView({ v: 1, name: 'v', panels: [{ ...panel(), version: 3 }] })),
-    ).toContain('panel 1.version must be "latest" (dataset versions do not exist yet)')
+      problemsOf(() => validateView({ v: 1, name: 'v', panels: [{ ...panel(), version: 0 }] })),
+    ).toContain('panel 1.version must be "latest" or a version number (1, 2, …)')
+    expect(
+      problemsOf(() => validateView({ v: 1, name: 'v', panels: [{ ...panel(), version: 'newest' }] })),
+    ).toContain('panel 1.version must be "latest" or a version number (1, 2, …)')
   })
 
   it('refuses a panel whose claimed n disagrees with the marks it draws', () => {
@@ -154,12 +160,14 @@ describe('query selection', () => {
 describe('materializing a panel', () => {
   it('plots the dataset with identity, provenance, and a fingerprint of what it read', async () => {
     const { panel } = await materializePanel(workspace, { dataset: 'main' })
-    expect(panel.chart.provenance).toEqual({ dataset: 'main', shape: 'xy.v1' })
+    // The version is part of the provenance: a drawing names the rows it came from, not just the
+    // dataset they were in.
+    expect(panel.version).toBe(1)
+    expect(panel.chart.provenance).toEqual({ dataset: 'main', shape: 'xy.v1', version: 1 })
     expect(panel.chart.points).toHaveLength(6)
     expect(panel.chart.points?.every((point) => typeof point.id === 'string')).toBe(true)
     expect(panel.input_hash).toMatch(/^[0-9a-f]{64}$/)
     expect(panel.n).toBe(6)
-    expect(panel.version).toBe('latest')
     expect(panel.recipe).toBeUndefined()
     expect(panel.chart.footer).toContain('no fit — unmodelled')
   })
@@ -179,7 +187,7 @@ describe('materializing a panel', () => {
     expect(panel.recipe).toBe('fit')
     expect(panel.params).toEqual({ degree: 1 })
     expect(panel.verdict).toBe('supported')
-    expect(panel.chart.provenance).toEqual({ dataset: 'main', shape: 'xy.v1' })
+    expect(panel.chart.provenance).toEqual({ dataset: 'main', shape: 'xy.v1', version: 1 })
     expect(panel.chart.points).toHaveLength(6)
     expect(panel.chart.band?.length).toBeGreaterThan(1)
   })

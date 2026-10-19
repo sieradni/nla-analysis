@@ -7,7 +7,7 @@
   "panels": [
     {
       "dataset": "main",
-      "version": "latest",
+      "version": 2,
       "title": "slope before and after the split",
       "recipe": "drift",
       "params": {},
@@ -20,72 +20,72 @@
         },
         "points": [
           {
-            "id": "01M58Y40JFF8BB00TKFKFZ4HA8",
+            "id": "01M59G96XNSC20QM4A53JFVPEK",
             "x": 1,
             "y": 2.55
           },
           {
-            "id": "01M58Y40RHH4D5XR4F4ZMCW3W8",
+            "id": "01M59G9734YMJ38Y9VGYB1GTP8",
             "x": 2,
             "y": 4.62
           },
           {
-            "id": "01M58Y40YA32FBY9AW6GEC5WP7",
+            "id": "01M59G978EHB41C92QCD7DSJAX",
             "x": 3,
             "y": 6.71
           },
           {
-            "id": "01M58Y413NM4AZEZ3N0ZHNAS83",
+            "id": "01M59G97DT7Y7NEZR6D78BT2VM",
             "x": 4,
             "y": 8.85
           },
           {
-            "id": "01M58Y41A4ZRGTAQBCGJYM4KA5",
+            "id": "01M59G97MC0BAFT16VYNAWW1QP",
             "x": 5,
             "y": 10.94
           },
           {
-            "id": "01M58Y41FJAP5ZXNWV8BA5NR2M",
+            "id": "01M59G97T0RN5NNSWY6TNM9PE7",
             "x": 1,
             "y": 2.92
           },
           {
-            "id": "01M58Y41N29H3DGVE5RCT26NSE",
+            "id": "01M59G97ZJRWJ62AWCKKSFH5Q0",
             "x": 2,
             "y": 5.51
           },
           {
-            "id": "01M58Y41VF83K6TQ8XWWK9VN0S",
+            "id": "01M59G985E71V3K81WZJR30CKS",
             "x": 3,
             "y": 8.09
           },
           {
-            "id": "01M58Y421AM3VK2ZTDS3B7F3SH",
+            "id": "01M59G98AVMQ7C0TNJF9XMH91W",
             "x": 4,
             "y": 10.66
           },
           {
-            "id": "01M58Y426P6GJC39082WAS5S47",
+            "id": "01M59G98GR325A2QF595B7NNC1",
             "x": 5,
             "y": 13.21
           },
           {
-            "id": "01M58Y42SZ4FCWY1BNTRQT4QSX",
+            "id": "01M59G993YSMZVFJDJH9YFFA03",
             "x": 9,
             "y": 21.5
           },
           {
-            "id": "01M58Y4327FNWW36PH6AH2F9KF",
+            "id": "01M59G99BFF5S15V0V2X591VNG",
             "x": 6,
             "y": 16
           },
           {
-            "id": "01M58Y43RWRXMMC8A98Q5V4M1Z",
+            "id": "01M59G9A67AQZASKC2FEGT5TB2",
             "x": 7,
             "y": 18.62
           },
           {
-            "id": "01M58Y43RWRXMMC8A98Q5V4M20",
+            "id": "01M59G9A67AQZASKC2FEGT5TB3",
             "x": 8,
             "y": 21.05
           }
@@ -588,25 +588,27 @@
         "subtitle": "main · drift",
         "provenance": {
           "dataset": "main",
-          "shape": "xy.v1"
+          "shape": "xy.v1",
+          "version": 2
         },
         "caption": "Slope 2.053 [1.935, 2.17] before 2026-10-10, 2.421 [2.156, 2.686] after; one slope rejected at p = 0.024."
       },
       "verdict": "tentative",
       "n": 14,
       "recipe_hash": "2dc3c3ed59be3a1b3cb9182ac9089cef3613504adfe5aea46a53044727498c63",
-      "input_hash": "fbd3ff33ca96ec2ac9ac3fc6f9042e5754932b70ec9dc273909dab5aa6cfbf2d"
+      "input_hash": "87cf58ee3a22b57947f6568c0c3d2d99827183ae67757298e3c3ed8bd0e9def1"
     },
     {
       "dataset": "main",
-      "version": "latest",
+      "version": 2,
       "title": "all readings",
       "chart": {
         "title": "all readings",
         "subtitle": "main · xy.v1",
         "provenance": {
           "dataset": "main",
-          "shape": "xy.v1"
+          "shape": "xy.v1",
+          "version": 2
         },
         "x": {
           "label": "x"
@@ -616,72 +618,72 @@
         },
         "points": [
           {
-            "id": "01M58Y40JFF8BB00TKFKFZ4HA8",
+            "id": "01M59G96XNSC20QM4A53JFVPEK",
             "x": 1,
             "y": 2.55
           },
           {
-            "id": "01M58Y40RHH4D5XR4F4ZMCW3W8",
+            "id": "01M59G9734YMJ38Y9VGYB1GTP8",
             "x": 2,
             "y": 4.62
           },
           {
-            "id": "01M58Y40YA32FBY9AW6GEC5WP7",
+            "id": "01M59G978EHB41C92QCD7DSJAX",
             "x": 3,
             "y": 6.71
           },
           {
-            "id": "01M58Y413NM4AZEZ3N0ZHNAS83",
+            "id": "01M59G97DT7Y7NEZR6D78BT2VM",
             "x": 4,
             "y": 8.85
           },
           {
-            "id": "01M58Y41A4ZRGTAQBCGJYM4KA5",
+            "id": "01M59G97MC0BAFT16VYNAWW1QP",
             "x": 5,
             "y": 10.94
           },
           {
-            "id": "01M58Y41FJAP5ZXNWV8BA5NR2M",
+            "id": "01M59G97T0RN5NNSWY6TNM9PE7",
             "x": 1,
             "y": 2.92
           },
           {
-            "id": "01M58Y41N29H3DGVE5RCT26NSE",
+            "id": "01M59G97ZJRWJ62AWCKKSFH5Q0",
             "x": 2,
             "y": 5.51
           },
           {
-            "id": "01M58Y41VF83K6TQ8XWWK9VN0S",
+            "id": "01M59G985E71V3K81WZJR30CKS",
             "x": 3,
             "y": 8.09
           },
           {
-            "id": "01M58Y421AM3VK2ZTDS3B7F3SH",
+            "id": "01M59G98AVMQ7C0TNJF9XMH91W",
             "x": 4,
             "y": 10.66
           },
           {
-            "id": "01M58Y426P6GJC39082WAS5S47",
+            "id": "01M59G98GR325A2QF595B7NNC1",
             "x": 5,
             "y": 13.21
           },
           {
-            "id": "01M58Y42SZ4FCWY1BNTRQT4QSX",
+            "id": "01M59G993YSMZVFJDJH9YFFA03",
             "x": 9,
             "y": 21.5
           },
           {
-            "id": "01M58Y4327FNWW36PH6AH2F9KF",
+            "id": "01M59G99BFF5S15V0V2X591VNG",
             "x": 6,
             "y": 16
           },
           {
-            "id": "01M58Y43RWRXMMC8A98Q5V4M1Z",
+            "id": "01M59G9A67AQZASKC2FEGT5TB2",
             "x": 7,
             "y": 18.62
           },
           {
-            "id": "01M58Y43RWRXMMC8A98Q5V4M20",
+            "id": "01M59G9A67AQZASKC2FEGT5TB3",
             "x": 8,
             "y": 21.05
           }
@@ -689,7 +691,7 @@
         "footer": "n = 14 · no fit — unmodelled"
       },
       "n": 14,
-      "input_hash": "fbd3ff33ca96ec2ac9ac3fc6f9042e5754932b70ec9dc273909dab5aa6cfbf2d"
+      "input_hash": "87cf58ee3a22b57947f6568c0c3d2d99827183ae67757298e3c3ed8bd0e9def1"
     }
   ]
 }

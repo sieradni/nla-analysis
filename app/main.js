@@ -265,6 +265,9 @@ ipcMain.handle('bench:retractPoint', (_event, dir, id, reason) =>
 ipcMain.handle('bench:writeView', (_event, dir, draft) => guarded(() => bench.writeView(dir, draft)))
 // An import is one plan and one append: a refusal returns before anything is preserved or written.
 ipcMain.handle('bench:importPreview', (_event, dir, file) => guarded(() => bench.importPreview(dir, file)))
+ipcMain.handle('bench:importPlan', (_event, dir, file, mapping, options) =>
+  guarded(() => bench.importPlan(dir, file, mapping, options)),
+)
 ipcMain.handle('bench:importFile', (_event, dir, file, mapping, options) =>
   guarded(() => bench.importFile(dir, file, mapping, options)),
 )
@@ -456,6 +459,29 @@ async function runCli(args, dir = writableDir) {
   })
 }
 
+/**
+ * Like `runCli`, but hands back what it printed. The capture uses this to read the *window's* own
+ * import back through the CLI: one log, two doors, and the second door is what proves the first one
+ * wrote what it said it did.
+ */
+async function readCli(args, dir = writableDir) {
+  const cli = join(here, '..', 'src', 'cli', 'index.ts')
+  return await new Promise((done, fail) => {
+    const child = spawn(process.execPath, [cli, '--project', dir, ...args], {
+      cwd: join(here, '..'),
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk) => (out += chunk))
+    child.stderr.on('data', (chunk) => (err += chunk))
+    child.on('error', fail)
+    child.on('exit', (code) =>
+      code === 0 ? done(out) : fail(new Error(`bench ${args.join(' ')} exited ${code}: ${err.trim()}`)),
+    )
+  })
+}
+
 /** The capture run's entry: real keystrokes, and loudly wrong if they do not land. */
 async function enterPoint(x, y) {
   // A previous step may have handed the foreground away (a spawned CLI, the shell itself). Ask for
@@ -484,6 +510,7 @@ async function smoke() {
     fields: Array.prototype.map.call(document.querySelectorAll('#entry-fields input'), (i) => i.dataset.field),
     readout: document.getElementById('entry-readout').textContent,
     title: document.getElementById('view-title').textContent,
+    meta: document.getElementById('view-meta').textContent,
   }))()`))
 
   // The degradation the build has to show honestly: a recipe panel needs the analysis runtime, which
@@ -1124,7 +1151,9 @@ async function capture() {
 
     // Importing from the window. The file is the deliberately messy fixture: two comment lines, extra
     // columns, a blank row, and quoted commas. It is copied first, because the capture proves the
-    // preserved original is byte-identical to what was chosen.
+    // preserved original is byte-identical to what was chosen. The project already holds rows, so
+    // this is a *replace*: the file becomes a new version, the rows it does not have are withdrawn,
+    // and the version it replaced keeps them.
     const importProject = join(dirname(writableDir), 'import-fixture')
     await cp(startupDir, importProject, { recursive: true })
     const messySource = join(here, '..', 'fixtures', 'imports', 'lab-export.csv')
@@ -1214,6 +1243,19 @@ async function capture() {
       throw new Error('the refusal stayed on screen after the mapping changed: ' + mapped)
     }
 
+    // What the sheet says the button will do, worked out from the mapping and written nowhere. This
+    // is the line the frame is about: which version this becomes, and which rows leave the dataset.
+    const sheetPlan = await window.webContents.executeJavaScript(
+      "(() => document.getElementById('import-plan').textContent)()",
+    )
+    console.log('[bench] import-plan ' + JSON.stringify(sheetPlan))
+    if (!/version 3 replaces version 2 · \+5 −14 ~0/.test(sheetPlan)) {
+      throw new Error('the sheet did not name the version it would create: ' + sheetPlan)
+    }
+    if (!/14 row\(s\) not in this file are withdrawn/.test(sheetPlan)) {
+      throw new Error('the sheet did not say which rows leave: ' + sheetPlan)
+    }
+
     // The frame the verdict is about: the sheet with a real mapping on it, before anything is
     // written. Captured after the import the dialog is gone, which is a screenshot of the wrong state.
     // `capturePage` reads the window's compositor, which can hand back its previous surface when a
@@ -1241,6 +1283,8 @@ async function capture() {
     const appended = importLog.slice(importBefore.events)
     const recorded = appended.filter((event) => event.type === 'import_completed')
     const importedPoints = appended.filter((event) => event.type === 'point_recorded')
+    const withdrawn = appended.filter((event) => event.type === 'point_retracted')
+    const versionRecord = appended.find((event) => event.type === 'dataset_version_created')
     const preserved = recorded[0] ? recorded[0].file : null
     const preservedText = preserved ? await readFile(join(importProject, preserved), 'utf8') : ''
     const chosenText = await readFile(messyFile, 'utf8')
@@ -1252,7 +1296,18 @@ async function capture() {
           marks: importedState.marks,
           before: importBefore.marks,
           closed: importedState.importClosed,
+          meta: importedState.meta,
           points: importedPoints.length,
+          withdrawn: withdrawn.length,
+          version: versionRecord
+            ? {
+                version: versionRecord.version,
+                parent: versionRecord.parent,
+                rows: versionRecord.rows,
+                diff: versionRecord.diff,
+                source: versionRecord.source,
+              }
+            : null,
           record: recorded[0]
             ? { rows: recorded[0].rows, file: recorded[0].file, mapping: recorded[0].mapping }
             : null,
@@ -1260,18 +1315,31 @@ async function capture() {
           identical: preservedText === chosenText,
         }),
     )
-    if (!/^Imported 5 row\(s\) into main from lab-export\.csv/.test(importedState.status || '')) {
-      throw new Error('the bar did not report the import: ' + importedState.status)
+    if (!/^Imported 5 row\(s\) into main as version 3 \(\+5 −14 ~0, replacing version 2\)/.test(importedState.status || '')) {
+      throw new Error('the bar did not report the version the import created: ' + importedState.status)
+    }
+    if (!/14 row\(s\) not in the file were withdrawn from version 3; version 2 still holds them/.test(importedState.status || '')) {
+      throw new Error('the bar did not account for the rows that left: ' + importedState.status)
     }
     if (!importedState.importClosed) throw new Error('the import sheet stayed open after a successful import')
-    if (!/n = 19/.test(importedState.readout || '')) {
-      throw new Error(`the bar should read n = 19, it reads "${importedState.readout}"`)
+    if (!/n = 5/.test(importedState.readout || '')) {
+      throw new Error(`the bar should read n = 5, it reads "${importedState.readout}"`)
     }
-    if (importedState.marks !== importBefore.marks + 5) {
-      throw new Error(`the drawing should gain 5 marks: ${importBefore.marks} -> ${importedState.marks}`)
+    if (importedPoints.length !== 5 || recorded.length !== 1 || withdrawn.length !== 14) {
+      throw new Error(
+        `the log holds ${importedPoints.length} new points, ${withdrawn.length} withdrawals and ${recorded.length} records`,
+      )
     }
-    if (importedPoints.length !== 5 || recorded.length !== 1) {
-      throw new Error(`the log holds ${importedPoints.length} imported points and ${recorded.length} records`)
+    if (!versionRecord || versionRecord.version !== 3 || versionRecord.parent !== 2) {
+      throw new Error('the log does not record version 3 replacing version 2: ' + JSON.stringify(versionRecord))
+    }
+    if (JSON.stringify(versionRecord.diff) !== JSON.stringify({ added: 5, removed: 14, changed: 0 })) {
+      throw new Error('the recorded diff is not what the sheet promised: ' + JSON.stringify(versionRecord.diff))
+    }
+    // Every row of this version is tagged with it, and every withdrawal says where it happened: that
+    // is what keeps version 2 readable exactly as it was.
+    if (importedPoints.some((event) => event.version !== 3) || withdrawn.some((event) => event.version !== 3)) {
+      throw new Error('a row or withdrawal does not name its version')
     }
     if (!preserved || preservedText !== chosenText) {
       throw new Error('the preserved original is not the file that was chosen')
@@ -1288,6 +1356,110 @@ async function capture() {
     const firstImported = importedPoints[0]
     if (!firstImported || firstImported.t_observed !== '2026-01-05T09:00:00.000Z') {
       throw new Error('the first point did not take its time from the timestamp column: ' + JSON.stringify(firstImported))
+    }
+
+    // The workflow this whole feature exists for: the instrument re-exported a corrected file, and it
+    // goes through the same sheet. One reading corrected, one added, two dropped.
+    const correctedFile = join(dirname(importProject), 'lab-export-v2.csv')
+    await cp(join(here, '..', 'fixtures', 'imports', 'lab-export-v2.csv'), correctedFile)
+    const eventsBeforeCorrection = importLog.length
+    nextPickedFile = correctedFile
+    await window.webContents.executeJavaScript("document.getElementById('import-open').click()")
+    for (let waited = 0; waited < 60; waited += 1) {
+      const ready = await window.webContents.executeJavaScript(
+        "(() => document.getElementById('import-dialog').open && /lab-export-v2\\.csv$/.test(document.getElementById('import-path').textContent) && document.querySelectorAll('#import-fields select').length === 2)()",
+      )
+      if (ready) break
+      await sleep(100)
+    }
+    await window.webContents.executeJavaScript(`(() => {
+      const set = (field, column) => {
+        const select = document.querySelector('#import-fields select[data-field="' + field + '"]')
+        select.value = column
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      set('x', 'temp_c')
+      set('y', 'volts')
+      return true
+    })()`)
+    await sleep(400)
+    const correctionPlan = await window.webContents.executeJavaScript(
+      "(() => document.getElementById('import-plan').textContent)()",
+    )
+    console.log('[bench] import-plan-v2 ' + JSON.stringify(correctionPlan))
+    if (!/version 4 replaces version 3 · \+1 −2 ~1/.test(correctionPlan)) {
+      throw new Error('the corrected re-export was not planned as version 4: ' + correctionPlan)
+    }
+    await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Imported 4 row/.test(state.status || '')) break
+      const failed = await window.webContents.executeJavaScript(
+        "(() => { const e = document.getElementById('import-error'); return e.hidden ? null : e.textContent })()",
+      )
+      if (failed) throw new Error('the corrected re-export was refused: ' + failed)
+      await sleep(100)
+    }
+    await sleep(500)
+    const reExportedState = JSON.parse(await entryState())
+    const stripAfterReExport = await window.webContents.executeJavaScript(
+      "(() => document.getElementById('view-meta').textContent)()",
+    )
+    console.log('[bench] re-exported ' + JSON.stringify({
+      status: reExportedState.status,
+      readout: reExportedState.readout,
+      strip: stripAfterReExport,
+    }))
+    if (!/as version 4 \(\+1 −2 ~1, replacing version 3\)/.test(reExportedState.status || '')) {
+      throw new Error('the corrected re-export was not reported as version 4: ' + reExportedState.status)
+    }
+    if (!/2 row\(s\) not in the file were withdrawn from version 4; version 3 still holds them/.test(reExportedState.status || '')) {
+      throw new Error('the corrected re-export did not account for what left: ' + reExportedState.status)
+    }
+    if (!/n = 4/.test(reExportedState.readout || '')) {
+      throw new Error(`the corrected re-export should leave n = 4, it reads "${reExportedState.readout}"`)
+    }
+    // The strip says which version the drawing came from, and that the dataset has moved past it.
+    if (!/main · v2 \(now v4\)/.test(stripAfterReExport)) {
+      throw new Error(
+        'the strip does not name the version the panel was drawn from: ' + stripAfterReExport,
+      )
+    }
+    await writeFile(join(captureDir, 'app-version-diff.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // The same log read back through the other door: if the CLI and the window disagreed about what
+    // version 3 holds, one of them would be inventing an answer.
+    const cliVersions = await readCli(['dataset', 'versions', 'main'], importProject)
+    const cliDiff = await readCli(['dataset', 'diff', 'main', '3', '4'], importProject)
+    console.log('[bench] cli-versions ' + JSON.stringify(cliVersions.trim().split('\n')))
+    console.log('[bench] cli-diff ' + JSON.stringify(cliDiff.trim().split('\n')))
+    if (!/v2  14 row\(s\) now · 14 at creation/.test(cliVersions)) {
+      throw new Error('the CLI does not see the version the window imported:\n' + cliVersions)
+    }
+    if (!/v3  5 row\(s\) now · 5 at creation  \+5 −14 ~0/.test(cliVersions)) {
+      throw new Error('the version the window wrote does not match what the CLI reads:\n' + cliVersions)
+    }
+    if (!/v4  4 row\(s\) now · 4 at creation  \+1 −2 ~1/.test(cliVersions)) {
+      throw new Error('the corrected re-export is not in the chain the CLI reads:\n' + cliVersions)
+    }
+    if (!/main: version 3 → 4  \+1 −2 ~1  \(4 row\(s\) in v4\)/.test(cliDiff)) {
+      throw new Error('the CLI diff of the window\'s own versions is wrong:\n' + cliDiff)
+    }
+    // The parent is untouched: version 2's rows are still there, and the CLI can still read them.
+    const cliParent = await readCli(['dataset', 'diff', 'main', '2', '3'], importProject)
+    if (!/\+5 −14 ~0/.test(cliParent) || !/x 1  y 2\.92/.test(cliParent)) {
+      throw new Error('the parent version no longer describes what it held:\n' + cliParent)
+    }
+    // One version record, one row added, one corrected, two withdrawn, one import record.
+    const eventsAfterCorrection = (await readFile(join(importProject, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .length
+    if (eventsAfterCorrection - eventsBeforeCorrection !== 6) {
+      throw new Error(
+        `the corrected re-export appended ${eventsAfterCorrection - eventsBeforeCorrection} events, not 6`,
+      )
     }
 
     // The other refusal, through the same sheet: one cell mistyped, so the whole file is refused and
@@ -1337,11 +1509,13 @@ async function capture() {
     if (!badRowState.open) throw new Error('the sheet closed on a refusal, taking the mapping with it')
     const afterRefusal = JSON.parse(await entryState())
     const logAfterRefusal = (await readFile(join(importProject, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n')
-    if (afterRefusal.marks !== importedState.marks) {
-      throw new Error(`the refused file changed the drawing: ${importedState.marks} -> ${afterRefusal.marks}`)
+    // Against the drawing the corrected re-export left, not the first import's: the frame this
+    // refusal has to leave alone is the one on screen now.
+    if (afterRefusal.marks !== reExportedState.marks) {
+      throw new Error(`the refused file changed the drawing: ${reExportedState.marks} -> ${afterRefusal.marks}`)
     }
-    if (logAfterRefusal.length !== importLog.length) {
-      throw new Error(`the refused file appended ${logAfterRefusal.length - importLog.length} event(s)`)
+    if (logAfterRefusal.length !== eventsAfterCorrection) {
+      throw new Error(`the refused file appended ${logAfterRefusal.length - eventsAfterCorrection} event(s)`)
     }
     await window.webContents.executeJavaScript("document.getElementById('import-cancel').click()")
   }

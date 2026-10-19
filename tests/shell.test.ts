@@ -218,32 +218,49 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     // A mapping that leaves a required field out is a refusal that names the field.
     await expect(api.importFile!(dir, file, { x: 'temp_c' })).rejects.toThrow(/no column for the required field "y"/)
 
+    // What the sheet shows before the button is pressed is the same computation the write performs:
+    // the version, the rows that leave, and the parent they stay in. Nothing is written here.
+    const beforePlan = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+    const planned = (await api.importPlan!(dir, file, { x: 'temp_c', y: 'volts' })) as Window
+    expect(planned).toMatchObject({
+      version: 3,
+      parent: 2,
+      rows: 5,
+      diff: { added: 5, removed: 14, changed: 0 },
+    })
+    expect(planned.removedRows).toHaveLength(14)
+    expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(beforePlan)
+
     const logBefore = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
     const imported = (await api.importFile!(dir, file, { x: 'temp_c', y: 'volts' }, { viewName: 'drift over time' })) as Window
     expect(imported.rows).toBe(5)
     expect(imported.preserved).toMatch(/^data\/raw\/[0-9a-f]{12}-lab-export\.csv$/)
-    expect(imported.active).toBe(19)
+    // The fixture is at version 2, and none of its rows are in this file: the export is now the
+    // dataset, as version 3, and the fourteen rows it does not have are withdrawn rather than lost.
+    expect(imported).toMatchObject({ version: 3, parent: 2, diff: { added: 5, removed: 14, changed: 0 } })
+    expect(imported.active).toBe(5)
+    expect(imported.removedRows).toHaveLength(14)
     // The open tab comes back redrawn, with the plot panel rebuilt and the fitted one honestly stale.
-    expect(imported.view.view.panels[1].n).toBe(19)
+    expect(imported.view.view.panels[1].n).toBe(5)
     expect(imported.view.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
 
-    // What the log holds: one point per row, then the record that names the preserved original.
+    // What the log holds: the version, then one point per new row, the withdrawals, and the record
+    // that names the preserved original.
     const appended = (await readFile(join(dir, 'data', 'events.jsonl'), 'utf8'))
       .slice(logBefore.length)
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))
-    expect(appended.map((event: Window) => event.type)).toEqual([
-      'point_recorded',
-      'point_recorded',
-      'point_recorded',
-      'point_recorded',
-      'point_recorded',
-      'import_completed',
-    ])
-    expect(appended[0].values).toEqual({ x: 21.4, y: 3.301 })
-    expect(appended[0].t_observed).toBe('2026-01-05T09:00:00.000Z')
-    expect(appended[5]).toMatchObject({ dataset: 'main', rows: 5, file: imported.preserved })
+    expect(appended[0]).toMatchObject({ type: 'dataset_version_created', version: 3, parent: 2, rows: 5 })
+    expect(appended.filter((event: Window) => event.type === 'point_recorded')).toHaveLength(5)
+    expect(appended.filter((event: Window) => event.type === 'point_retracted')).toHaveLength(14)
+    expect(appended.at(-1)).toMatchObject({ type: 'import_completed', dataset: 'main', rows: 5, file: imported.preserved })
+    const firstRow = appended.find((event: Window) => event.type === 'point_recorded')
+    expect(firstRow.values).toEqual({ x: 21.4, y: 3.301 })
+    expect(firstRow.t_observed).toBe('2026-01-05T09:00:00.000Z')
+    expect(firstRow.version).toBe(3)
+    // Every withdrawal names the version it happened in, so version 2 still reads as it did.
+    expect(appended.filter((event: Window) => event.type === 'point_retracted').every((event: Window) => event.version === 3)).toBe(true)
     // Evidence, byte for byte.
     expect(await readFile(join(dir, imported.preserved), 'utf8')).toBe(await readFile(file, 'utf8'))
 

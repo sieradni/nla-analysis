@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { assessRuns } from '../src/core/analysis.ts'
-import { activePoints, bind } from '../src/core/binder.ts'
+import { activePoints, bind, foldVersion } from '../src/core/binder.ts'
 import { EventLog } from '../src/core/log.ts'
 import type { ProjectConfig } from '../src/core/project.ts'
 import { validateValues } from '../src/core/shapes.ts'
@@ -73,10 +73,29 @@ describe('drift-sensor fixture', () => {
       expect(existsSync(join(projectDir, event.file))).toBe(true)
     }
 
-    // And the rows it recorded are in the active set, tagged as having come from a file.
+    // The import was a re-export, so it replaced the dataset as a new version: everything the file
+    // held is in the active set, but only the rows it *added* are new events tagged `import`.
     const imported = activePoints(state, 'main').filter((point) => point.tags.includes('import'))
-    expect(imported).toHaveLength(imports[0]!.rows)
     expect(imported.map((point) => point.values.x)).toEqual([7, 8])
+    const dataset = state.datasets.get('main')!
+    expect(dataset.version).toBe(2)
+    expect(dataset.points.filter((point) => point.status === 'active')).toHaveLength(imports[0]!.rows)
+  })
+
+  it('ships a version chain: the typed rows as version 1, the re-export as version 2', async () => {
+    const { state } = await loadFixture()
+    const dataset = state.datasets.get('main')!
+    expect(dataset.versions.map((record) => record.version)).toEqual([1, 2])
+    expect(dataset.versions[0]!.rows).toBe(12)
+    expect(dataset.versions[1]).toMatchObject({ rows: 14, parent: 1, diff: { added: 2, removed: 0, changed: 0 } })
+
+    // Version 1 still reads as it did: the twelve typed rows, before the export replaced them.
+    const first = foldVersion(state.events, 'main', 1).filter((point) => point.status === 'active')
+    expect(first).toHaveLength(12)
+    expect(first.map((point) => point.values.x)).toEqual([1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 9, 6])
+
+    // Every analysis in the fixture names the version it read, and it is the current one.
+    for (const run of state.runs) expect(run.version).toBe(2)
   })
 
   it('ships a view whose panels are still current against the committed log', async () => {

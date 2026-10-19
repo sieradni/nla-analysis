@@ -51,14 +51,28 @@ bench correct "$bad" --values '{"y":16.0}' --reason "transcription error" >/dev/
 # A real file import, so the fixture covers all three ways data arrives: typed by hand, corrected,
 # and loaded from a file. The CSV is written outside the project and imported; the copy the importer
 # keeps under data/raw/ is the evidence, committed alongside the log that refers to it.
+#
+# This is a *re-export*: the instrument sent back everything it had, plus two readings taken after the
+# recalibration. Importing into a dataset that already holds rows replaces them as a new version, so
+# the export is the whole run -- the rows already in the log, in the instrument's own column names,
+# and the two new ones. The dataset comes out of it at version 2 with a `+2 -0 ~0` diff, and version
+# 1 (everything typed and corrected above) is still readable exactly as it was.
 work="$(mktemp -d)"
-cat > "$work/recalibration.csv" <<'CSV'
-# Comment lines and a ragged tail are deliberate: this is what an instrument export looks like.
-t_observed,temperature,reading
-2026-10-15T09:00:00Z,18.62,7.0
-2026-10-15T09:12:00Z,21.05,8.0
-CSV
-# The dry run is part of the record: it proves the mapping is right before anything is written.
+{
+  echo "# Comment lines are deliberate: this is what an instrument export looks like."
+  echo "t_observed,reading,temperature"
+  bench list --json | node -e '
+    let text = ""
+    process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => {
+      for (const point of JSON.parse(text).data) {
+        console.log(`${point.t_observed},${point.values.x},${point.values.y}`)
+      }
+    })
+  '
+  echo "2026-10-15T09:00:00Z,7.0,18.62"
+  echo "2026-10-15T09:12:00Z,8.0,21.05"
+} > "$work/recalibration.csv"
+# The dry run is part of the record: it proves the mapping and the diff before anything is written.
 bench import "$work/recalibration.csv" --map x=reading --map y=temperature --dry-run >/dev/null
 bench import "$work/recalibration.csv" --map x=reading --map y=temperature >/dev/null
 
