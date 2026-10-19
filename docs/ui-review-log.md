@@ -61,7 +61,7 @@ tab serves only the HTML file it is handed, so the images there come from openin
   because typing a number is the thing this window is for; `Tab` still reaches the panel for
   keyboard zoom and pan.
 - **Refusals**: a corrupt view file, a missing project and an empty registry each have their own
-  state — reachable with `BENCH_PROJECT=<dir> pnpm app`. Typing nonsense into a field is the fourth,
+  state — reachable with `BENCH_APP_PROJECT=<dir> pnpm app`. Typing nonsense into a field is the fourth,
   and the frame below shows it: both fields marked, the text still there.
 
 ## How to reproduce a review

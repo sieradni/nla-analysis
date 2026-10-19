@@ -33,7 +33,7 @@ already put there, renames `electron.exe` to `bench.exe`, and drops the applicat
 Double-click `bench.exe`. No installer, no terminal, no repository. The window opens the most recent
 project from `%USERPROFILE%\.bench\projects.json`, or the empty state if there is none. `Open…` takes
 an existing project folder; `New…` creates one and its shape. A specific project can be opened on
-launch with `set BENCH_PROJECT=C:\path\to\project` — useful for shortcuts.
+launch with `set BENCH_APP_PROJECT=C:\path\to\project` — useful for shortcuts.
 
 `LAUNCH.txt` in the artifact root says the same thing, because the folder is what gets handed to
 someone.

@@ -27,7 +27,8 @@ user's behalf, so a fresh session must be able to pick up the project without re
 - **Desktop window**: `pnpm app` — builds the core bundle with esbuild, then launches Electron.
   `pnpm app:capture` does the same and writes review frames to `docs/ui-review/`.
   `pnpm app:measure` builds a 10k-point project and reports keystroke→paint in the real window.
-  `BENCH_PROJECT=<dir> pnpm app` opens a specific project on launch.
+  `BENCH_APP_PROJECT=<dir> pnpm app` opens a specific project on launch (`BENCH_PROJECT` is the
+  capture harness's input, which it forwards).
 - **Standalone build**: `pnpm app:package` writes `artifacts/bench-win32-x64/bench.exe` from the
   installed Electron runtime — no download, no installer ([docs/packaging.md](docs/packaging.md)).
   `pnpm app:package:check` launches that artifact with Python removed from `PATH` and fails unless it
