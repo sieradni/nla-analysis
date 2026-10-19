@@ -22,6 +22,7 @@
           <div class="rail-head">
             <h2 id="projects-heading">Projects</h2>
             <button id="toggle-missing" class="ghost" type="button" hidden></button>
+            <button id="new-project" class="ghost" type="button">New…</button>
             <button id="open-project" class="ghost" type="button">Open…</button>
           </div>
           <ul id="projects" class="list" aria-labelledby="projects-heading"></ul>
@@ -31,6 +32,7 @@
           <div class="rail-head">
             <h2 id="tabs-heading">Tabs</h2>
             <span id="tab-count" class="count"></span>
+            <button id="new-tab" class="ghost" type="button">New tab…</button>
           </div>
           <ul id="tabs" class="list" aria-labelledby="tabs-heading"></ul>
         </section>
@@ -57,6 +59,12 @@
         <!-- The entry path: one row of fields for the open tab's shape, and the two facts that make
              a write trustworthy — what it recorded, and how long the repaint took. -->
         <form id="entry" class="entry" hidden autocomplete="off" novalidate>
+          <!-- The correction row only exists when a mark is selected: same fields, same refusal path,
+               one extra line saying which record is being superseded. -->
+          <div id="entry-correct" class="entry-correct" hidden>
+            <span id="entry-correct-label"></span>
+            <button id="entry-cancel" class="ghost" type="button">Cancel</button>
+          </div>
           <div id="entry-fields" class="entry-fields"></div>
           <button id="entry-add" class="entry-add" type="submit">
             <span>Add point</span>
@@ -70,6 +78,83 @@
         </form>
       </main>
     </div>
+
+    <!-- A tab is a saved question: this says which dataset it reads and, if it was drawn by one,
+         which recipe answers it. Everything the dialog writes goes through the core. -->
+    <dialog id="tab-dialog" class="sheet" aria-labelledby="tab-dialog-title">
+      <form id="tab-form" autocomplete="off">
+        <h2 id="tab-dialog-title">New tab</h2>
+        <p id="tab-note" class="sheet-note"></p>
+        <label class="sheet-field">
+          <span>Name</span>
+          <input id="tab-name" type="text" required />
+        </label>
+        <label class="sheet-field">
+          <span>Dataset</span>
+          <select id="tab-dataset"></select>
+        </label>
+        <label class="sheet-field">
+          <span>Panel</span>
+          <select id="tab-panel">
+            <option value="plot">Plot the dataset</option>
+          </select>
+        </label>
+        <label id="tab-replace-field" class="sheet-check" hidden>
+          <input id="tab-replace" type="checkbox" />
+          <span>Replace the tab with this name</span>
+        </label>
+        <div class="sheet-actions">
+          <button id="tab-cancel" class="ghost" type="button">Cancel</button>
+          <button id="tab-create" class="entry-add" type="submit"><span>Create tab</span></button>
+        </div>
+        <div id="tab-error" class="sheet-error" role="status" hidden></div>
+      </form>
+    </dialog>
+
+    <!-- Creating a project is choosing a log and the shape of the points it will hold. The shape is
+         declared once, at init, and every later point inherits it, so this is the only moment the
+         fields can be picked. -->
+    <dialog id="project-dialog" class="sheet" aria-labelledby="project-dialog-title">
+      <form id="project-form" autocomplete="off">
+        <h2 id="project-dialog-title">New project</h2>
+        <p class="sheet-note">
+          A project is a folder: an append-only log, its shape, and its tabs. The folder name comes
+          from the project name.
+        </p>
+        <label class="sheet-field">
+          <span>Name</span>
+          <input id="project-name" type="text" required />
+        </label>
+        <label class="sheet-field">
+          <span>Folder</span>
+          <span class="sheet-row">
+            <input id="project-folder" type="text" spellcheck="false" placeholder="Choose a folder…" />
+            <button id="project-pick" class="ghost" type="button">Choose…</button>
+          </span>
+        </label>
+        <p id="project-preview" class="sheet-note"></p>
+        <label class="sheet-field">
+          <span>Shape</span>
+          <select id="project-shape">
+            <option value="default">default</option>
+            <option value="custom">Custom fields…</option>
+          </select>
+        </label>
+        <div id="project-custom" hidden>
+          <label class="sheet-field">
+            <span>Shape name</span>
+            <input id="project-shape-name" type="text" value="reading" />
+          </label>
+          <div id="project-fields" class="sheet-fields"></div>
+          <button id="project-add-field" class="ghost" type="button">Add field</button>
+        </div>
+        <div class="sheet-actions">
+          <button id="project-cancel" class="ghost" type="button">Cancel</button>
+          <button id="project-create" class="entry-add" type="submit"><span>Create project</span></button>
+        </div>
+        <div id="project-error" class="sheet-error" role="status" hidden></div>
+      </form>
+    </dialog>
 
     <div id="tooltip" class="tooltip" role="status" hidden></div>
 

@@ -6,6 +6,7 @@ import { makeEvent } from './events.ts'
 import type { IsoTime, Shape } from './events.ts'
 import { APP_ROOT, assessRuns } from './analysis.ts'
 import { bind } from './binder.ts'
+import { validateShapeDefinition } from './shapes.ts'
 import type { ProjectState } from './binder.ts'
 import { renderState } from './state.ts'
 
@@ -108,11 +109,16 @@ export async function initProject(
   dir: string,
   name?: string,
   session = newSession(),
+  shape: unknown = DEFAULT_SHAPE,
 ): Promise<ProjectHandle> {
   const target = resolve(dir)
   if (await exists(join(target, PROJECT_FILE))) {
     throw new Error(`a project already exists at ${target}`)
   }
+  // Validated before anything is written: a shape is declared once and every later point inherits
+  // it, so a typo here would be a permanent one (non-negotiable 7 is about extension; this is the
+  // same argument one step earlier).
+  const declared = validateShapeDefinition(shape)
 
   for (const sub of ['data/raw', 'shapes', 'views', 'artifacts']) {
     await mkdir(join(target, sub), { recursive: true })
@@ -134,9 +140,9 @@ export async function initProject(
   }
 
   await handle.log.append(makeEvent('project_created', session, { name: config.name }))
-  await handle.log.append(makeEvent('shape_defined', session, { shape: DEFAULT_SHAPE }))
+  await handle.log.append(makeEvent('shape_defined', session, { shape: declared }))
   await handle.log.append(
-    makeEvent('dataset_created', session, { dataset: DEFAULT_DATASET, shape: DEFAULT_SHAPE.id }),
+    makeEvent('dataset_created', session, { dataset: DEFAULT_DATASET, shape: declared.id }),
   )
 
   await refreshState(handle)

@@ -27,6 +27,17 @@
     entryKey: null,
     timing: null,
     status: null,
+    // A selected record, which the entry bar edits instead of adding: `correction` is what the
+    // core said about it, `selection` is where its ring is, so switching panels can clear it.
+    correction: null,
+    selection: null,
+    // The datasets this project has, and the recipe catalog (fetched the first time a tab is built).
+    datasets: [],
+    recipes: null,
+    // Where a point lands when the project has no tab open yet, which is every project right after
+    // it is created.
+    projectEntry: null,
+    shapeChoice: null,
   }
   var settled = false
 
@@ -54,8 +65,39 @@
     entryFields: document.getElementById('entry-fields'),
     entryAdd: document.getElementById('entry-add'),
     entryUndo: document.getElementById('entry-undo'),
+    entryCorrect: document.getElementById('entry-correct'),
+    entryCorrectLabel: document.getElementById('entry-correct-label'),
+    entryCancel: document.getElementById('entry-cancel'),
     entryReadout: document.getElementById('entry-readout'),
     entryStatus: document.getElementById('entry-status'),
+    newTab: document.getElementById('new-tab'),
+    tabDialog: document.getElementById('tab-dialog'),
+    tabForm: document.getElementById('tab-form'),
+    tabName: document.getElementById('tab-name'),
+    tabDataset: document.getElementById('tab-dataset'),
+    tabPanel: document.getElementById('tab-panel'),
+
+    tabReplace: document.getElementById('tab-replace'),
+    tabReplaceField: document.getElementById('tab-replace-field'),
+    tabNote: document.getElementById('tab-note'),
+    tabError: document.getElementById('tab-error'),
+    tabCreate: document.getElementById('tab-create'),
+    tabCancel: document.getElementById('tab-cancel'),
+    newProject: document.getElementById('new-project'),
+    projectDialog: document.getElementById('project-dialog'),
+    projectForm: document.getElementById('project-form'),
+    projectName: document.getElementById('project-name'),
+    projectFolder: document.getElementById('project-folder'),
+    projectPick: document.getElementById('project-pick'),
+    projectPreview: document.getElementById('project-preview'),
+    projectShape: document.getElementById('project-shape'),
+    projectCustom: document.getElementById('project-custom'),
+    projectShapeName: document.getElementById('project-shape-name'),
+    projectFields: document.getElementById('project-fields'),
+    projectAddField: document.getElementById('project-add-field'),
+    projectCreate: document.getElementById('project-create'),
+    projectCancel: document.getElementById('project-cancel'),
+    projectError: document.getElementById('project-error'),
   }
 
   /** Unwrap a guarded IPC result, keeping the refusal's hint and problems for display. */
@@ -97,7 +139,7 @@
     }
   }
 
-  function showEmpty(title, message, command) {
+  function showEmpty(title, message, command, action) {
     ui.empty.hidden = false
     ui.grid.hidden = true
     ui.entry.hidden = true
@@ -109,6 +151,16 @@
       var line = node('p')
       line.appendChild(node('code', null, command))
       ui.empty.appendChild(line)
+    }
+    // An empty state that prints a CLI command is a door that opens the wrong way: offer the act
+    // itself, and let the command stay as the second way to do it.
+    if (action) {
+      var row = node('p')
+      var button = node('button', 'ghost', action.label)
+      button.type = 'button'
+      button.addEventListener('click', action.run)
+      row.appendChild(button)
+      ui.empty.appendChild(row)
     }
   }
 
@@ -290,6 +342,9 @@
     var scrollTop = restore ? restore.scrollTop : 0
     ui.grid.textContent = ''
     ui.grid.style.setProperty('--columns', String(view.layout.columns || 2))
+    // A repaint replaces every panel handle, so a ring drawn on the previous drawing is gone with
+    // it: forget the pointer rather than calling into a handle that no longer exists.
+    state.selection = null
 
     renderMeta()
     renderNotice()
@@ -334,6 +389,9 @@
         zoomLabel: zoom,
         tooltip: ui.tooltip,
         viewBox: restore && restore.viewBoxes ? restore.viewBoxes[index] : null,
+        onSelect: function (id) {
+          selectPoint(id, index)
+        },
       })
       state.handles[index] = handle
       reset.addEventListener('click', function () {
@@ -382,8 +440,10 @@
     return values
   }
 
-  function buildEntryFields(entry) {
+  function buildEntryFields(entry, prefill, mode) {
     var key =
+      (mode || 'add') +
+      '|' +
       entry.dataset +
       '|' +
       entry.shape +
@@ -407,6 +467,10 @@
       input.dataset.type = field.type
       input.setAttribute('aria-label', field.name + ' · ' + field.type)
       if (field.type === 'number' || field.type === 'integer') input.setAttribute('inputmode', 'decimal')
+      // A correction starts from the point's own values, so the common edit is one number changed.
+      if (prefill && prefill[field.name] !== undefined && prefill[field.name] !== null) {
+        input.value = String(prefill[field.name])
+      }
       label.appendChild(input)
       ui.entryFields.appendChild(label)
     })
@@ -438,10 +502,19 @@
 
   function renderStatus() {
     var status = state.status
-    ui.entryStatus.hidden = !status
+    // With nothing to report the reserved row is not empty: it says how to correct a record, which is
+    // the one action in this bar that has no button of its own.
+    ui.entryStatus.hidden = !status && !state.view
     ui.entryStatus.className = 'entry-status' + (status && status.kind === 'error' ? ' is-error' : '')
     ui.entryStatus.textContent = ''
-    if (!status) return
+    if (!status) {
+      if (state.view && state.correction === null) {
+        ui.entryStatus.appendChild(
+          node('span', 'idle', 'Click a point to correct it, or Shift+Arrow in a chart to step through them.'),
+        )
+      }
+      return
+    }
     ui.entryStatus.appendChild(node('span', null, status.text))
     if (status.problems && status.problems.length > 0) {
       var list = document.createElement('ul')
@@ -458,8 +531,10 @@
   }
 
   function renderEntry() {
-    var entry = state.opened && state.opened.entry
-    var visible = Boolean(state.view && entry && entry.fields.length > 0)
+    // A tab's first panel says where points land; a project with no tab yet says the same thing for
+    // its first dataset. That is what makes a freshly created project usable rather than empty.
+    var entry = (state.opened && state.opened.entry) || state.projectEntry
+    var visible = Boolean(entry && entry.fields.length > 0)
     ui.entry.hidden = !visible
     ui.entryReadout.textContent = ''
     if (!visible) {
@@ -467,7 +542,39 @@
       return
     }
 
-    buildEntryFields(entry)
+    var correction = state.correction
+    ui.entry.classList.toggle('correcting', correction !== null)
+    ui.entryCorrect.hidden = correction === null
+    ui.entryAdd.querySelector('span').textContent = correction === null ? 'Add point' : 'Save correction'
+    ui.entryUndo.hidden = correction !== null
+    if (correction !== null) {
+      ui.entryCorrectLabel.textContent = ''
+      ui.entryCorrectLabel.appendChild(node('span', null, 'Correcting '))
+      ui.entryCorrectLabel.appendChild(node('span', 'id', correction.id))
+      ui.entryCorrectLabel.appendChild(
+        node(
+          'span',
+          'note',
+          ' · recorded ' +
+            shortDate(correction.tObserved) +
+            ' · ' +
+            (correction.corrections === 0
+              ? 'no corrections yet'
+              : correction.corrections + ' corrections already') +
+            (correction.recipePanels.length > 0
+              ? ' · panel ' +
+                (correction.recipePanels[0] + 1) +
+                ' was drawn by a recipe and will go stale'
+              : ''),
+        ),
+      )
+    }
+
+    buildEntryFields(
+      entry,
+      correction === null ? null : correction.values,
+      correction === null ? 'add' : 'correct:' + correction.id,
+    )
     ui.entryAdd.disabled = state.busy
     ui.entryUndo.disabled = state.busy || !state.lastPoint
     ui.entryUndo.title = state.lastPoint
@@ -505,8 +612,9 @@
 
   async function submitEntry(event) {
     event.preventDefault()
-    if (state.busy || !state.opened || !state.opened.entry) return
-    var entry = state.opened.entry
+    var entry = (state.opened && state.opened.entry) || state.projectEntry
+    if (state.busy || !entry) return
+    if (state.correction !== null) return submitCorrection()
     var values = fieldValueMap()
     var startedAt = performance.now()
     state.busy = true
@@ -517,14 +625,19 @@
         bridge.recordPoint(
           state.project.dir,
           { dataset: entry.dataset, values: values },
-          state.view.name,
+          state.view ? state.view.name : undefined,
         ),
       )
       var afterRecord = performance.now()
       state.lastPoint = { id: recorded.id, dataset: recorded.dataset, values: recorded.values }
 
       var afterRebuild
-      if (recorded.redraw || recorded.reread) {
+      // With no tab open there is no drawing to patch: the point landed, and the bar's own count is
+      // the only thing on screen that has to catch up.
+      if (!state.view) {
+        if (state.projectEntry) state.projectEntry.active = recorded.active
+        afterRebuild = performance.now()
+      } else if (recorded.redraw || recorded.reread) {
         // A point that moves the axes, a panel that cannot be patched, or a log another writer grew
         // while this window was idle: in every case the drawing on screen was made from a state the
         // log has moved past, and patching one mark onto it would mark it current while it lies.
@@ -684,6 +797,120 @@
     }
   }
 
+  /**
+   * Select a record for editing, or clear the selection.
+   *
+   * Selecting in one panel clears the ring in the others, so the strip can never be aimed at a mark
+   * the user is not looking at. The values come from the core, not the tooltip: a tooltip rounds for
+   * reading, and a correction must start from the number the log holds.
+   */
+  async function selectPoint(id, index) {
+    if (id === null) {
+      closeCorrection()
+      return
+    }
+    if (state.selection && state.selection.id !== id) {
+      var previous = state.handles[state.selection.index]
+      if (previous && previous.clearSelection) previous.clearSelection()
+    }
+    state.selection = { id: id, index: index }
+    if (state.busy || !state.view) return
+    state.busy = true
+    try {
+      var detail = await call(bridge.point(state.project.dir, id, state.view.name))
+      state.correction = detail
+      state.timing = null
+      state.status = {
+        kind: 'ok',
+        text:
+          'Editing ' +
+          detail.id +
+          ' · ' +
+          describeValues(detail.values) +
+          ' · Escape cancels',
+        problems: [],
+      }
+      state.busy = false
+      renderEntry()
+      focusFirstField()
+    } catch (error) {
+      state.correction = null
+      state.selection = null
+      state.busy = false
+      renderEntry()
+      setStatus('error', (error && error.message) || 'the core could not read that point')
+    }
+  }
+
+  /** Put the bar back to adding, and take the ring off. */
+  function closeCorrection() {
+    if (state.selection) {
+      var handle = state.handles[state.selection.index]
+      if (handle && handle.clearSelection) handle.clearSelection()
+    }
+    state.selection = null
+    state.correction = null
+    state.status = null
+    renderEntry()
+  }
+
+  /**
+   * Save an edit to an existing record. The log gets a `point_corrected` event that supersedes the
+   * original; nothing is overwritten and nothing is deleted. The core rebuilds the tab before this
+   * returns, so a panel drawn by a recipe is reported stale instead of continuing to look current.
+   */
+  async function submitCorrection() {
+    var correction = state.correction
+    var values = fieldValueMap()
+    state.busy = true
+    renderEntry()
+    try {
+      var corrected = await call(
+        bridge.correctPoint(state.project.dir, correction.id, values, state.view ? state.view.name : undefined),
+      )
+      state.correction = null
+      state.selection = null
+      state.busy = false
+      if (corrected.view) {
+        state.opened = corrected.view
+        state.view = corrected.view.view
+        renderTabs()
+        renderView(captureRestore())
+      }
+      var stale = (corrected.view && corrected.view.kept) || []
+      var note =
+        'Corrected ' +
+        corrected.id +
+        ' · ' +
+        describeValues(corrected.values) +
+        ' · ' +
+        corrected.active +
+        ' active in ' +
+        corrected.dataset +
+        '. A point_corrected event supersedes the original; the log keeps both.'
+      if (stale.length > 0) {
+        note +=
+          ' Panel ' +
+          (stale[0].index + 1) +
+          ' was drawn by a recipe, so it is stale until it is rerun — ' +
+          'the window will not claim it still holds.'
+      }
+      setStatus(stale.length > 0 ? 'error' : 'ok', note)
+      focusFirstField()
+    } catch (error) {
+      var firstInvalid = markProblems((error && error.problems) || [])
+      setStatus(
+        'error',
+        (error && error.message) || 'the core refused the correction',
+        (error && error.problems) || ((error && error.hint) ? [error.hint] : []),
+      )
+      if (firstInvalid) firstInvalid.focus()
+    } finally {
+      state.busy = false
+      renderEntry()
+    }
+  }
+
   async function undoPoint() {
     if (state.busy || !state.lastPoint) return
     var target = state.lastPoint
@@ -749,6 +976,8 @@
   async function afterOpen(opened) {
     state.project = { dir: opened.dir, name: opened.name }
     state.views = opened.views
+    state.datasets = opened.datasets || []
+    state.projectEntry = opened.entry || null
     state.view = null
     state.opened = null
     state.lastPoint = null
@@ -778,9 +1007,249 @@
     ui.meta.textContent = ''
     showEmpty(
       'No saved tabs',
-      'This project has no views yet. A tab is a view file, and the CLI writes one:',
+      'A tab is a saved question: which dataset it reads, and which recipe draws it.',
       'bench --project "' + opened.dir + '" view new "first tab" --dataset main --recipe fit',
+      { label: 'Create a tab…', run: openTabDialog },
     )
+    // A project with no tabs can still take a point: the empty state hid the bar, so put it back and
+    // leave the cursor where typing goes.
+    renderEntry()
+    focusFirstField()
+  }
+
+  // --- tabs ------------------------------------------------------------------------------------
+
+  /** Put the project's datasets in the select, and the catalog in the panel select once it arrives. */
+  function fillTabDialog() {
+    ui.tabDataset.textContent = ''
+    state.datasets.forEach(function (dataset) {
+      var option = node('option', null, dataset.id + ' · ' + dataset.shape + ' · ' + dataset.active + ' points')
+      option.value = dataset.id
+      ui.tabDataset.appendChild(option)
+    })
+
+    ui.tabPanel.textContent = ''
+    var plot = node('option', null, 'Plot the dataset')
+    plot.value = 'plot'
+    ui.tabPanel.appendChild(plot)
+    var recipes = (state.recipes && state.recipes.recipes) || []
+    recipes.forEach(function (recipe) {
+      var option = node('option', null, recipe.name + ' — ' + recipe.summary)
+      option.value = recipe.name
+      ui.tabPanel.appendChild(option)
+    })
+
+    var problem = state.recipes && state.recipes.problem
+    ui.tabNote.textContent = problem
+      ? 'No recipe is offered because the analysis runtime is not available: ' + problem
+      : 'A recipe panel is built by the analysis runtime; a plot panel needs nothing but the log.'
+  }
+
+  /**
+   * The one dialog that writes a view file. It offers datasets and recipes and never a free-form
+   * panel: what it can build is exactly what `bench view new` can build.
+   */
+  async function openTabDialog() {
+    if (!state.project) return
+    ui.tabError.hidden = true
+    ui.tabPanel.value = 'plot'
+    ui.tabReplace.checked = false
+    ui.tabReplaceField.hidden = true
+    ui.tabName.value = state.datasets[0] ? state.datasets[0].id : ''
+    syncTabReplace()
+    fillTabDialog()
+    ui.tabDialog.showModal()
+    ui.tabName.focus()
+    ui.tabName.select()
+
+    if (state.recipes === null) {
+      try {
+        state.recipes = await call(bridge.recipes())
+      } catch (error) {
+        state.recipes = { recipes: [], problem: (error && error.message) || String(error) }
+      }
+      if (ui.tabDialog.open) fillTabDialog()
+    }
+  }
+
+  /** Show the replace checkbox only when the typed name is already taken. */
+  function syncTabReplace() {
+    var name = ui.tabName.value.trim().toLowerCase()
+    var taken = name !== '' && state.views.some(function (view) {
+      return view.name.toLowerCase() === name
+    })
+    ui.tabReplaceField.hidden = !taken
+    if (!taken) ui.tabReplace.checked = false
+  }
+
+  // --- projects -------------------------------------------------------------------------------
+
+  /** One row of the custom-shape editor: a name, a type the core declared, and a way to drop it. */
+  function shapeFieldRow(name, type) {
+    var row = node('div', 'sheet-field')
+    var fieldName = document.createElement('input')
+    fieldName.type = 'text'
+    fieldName.value = name || ''
+    fieldName.dataset.role = 'field-name'
+    fieldName.setAttribute('aria-label', 'field name')
+    var fieldType = document.createElement('select')
+    fieldType.dataset.role = 'field-type'
+    fieldType.setAttribute('aria-label', 'field type')
+    ;((state.shapeChoice && state.shapeChoice.types) || []).forEach(function (option) {
+      var item = node('option', null, option)
+      item.value = option
+      fieldType.appendChild(item)
+    })
+    fieldType.value = type || 'number'
+    var remove = node('button', 'ghost', 'Remove')
+    remove.type = 'button'
+    remove.addEventListener('click', function () {
+      row.remove()
+      syncProjectPreview()
+    })
+    row.appendChild(fieldName)
+    row.appendChild(fieldType)
+    row.appendChild(remove)
+    ui.projectFields.appendChild(row)
+  }
+
+  /** The folder the project will be created in, said before the click that creates it. */
+  function syncProjectPreview() {
+    var name = ui.projectName.value.trim()
+    var folder = ui.projectFolder.value.trim().replace(/[\\/]+$/, '')
+    if (folder === '') {
+      ui.projectPreview.textContent = 'Choose the folder this project should live in.'
+      return
+    }
+    var slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'project'
+    ui.projectPreview.textContent = folder + '/' + slug
+  }
+
+  async function openProjectDialog() {
+    ui.projectError.hidden = true
+    ui.projectName.value = ''
+    ui.projectFolder.value = ''
+    ui.projectShape.value = 'default'
+    ui.projectCustom.hidden = true
+    ui.projectFields.textContent = ''
+    syncProjectPreview()
+    ui.projectDialog.showModal()
+    ui.projectName.focus()
+
+    if (state.shapeChoice === null) {
+      try {
+        state.shapeChoice = await call(bridge.shapeChoice())
+      } catch (error) {
+        state.shapeChoice = { id: 'xy.v1', fields: [], types: ['number'] }
+      }
+      var labels = state.shapeChoice.fields
+        .map(function (field) {
+          return field.name + ' (' + field.type + ')'
+        })
+        .join(', ')
+      ui.projectShape.options[0].textContent = state.shapeChoice.id + ' · ' + labels
+    }
+  }
+
+  async function submitProject(event) {
+    event.preventDefault()
+    var name = ui.projectName.value.trim()
+    var folder = ui.projectFolder.value.trim()
+    var shape
+    if (ui.projectShape.value === 'custom') {
+      var names = ui.projectFields.querySelectorAll('[data-role="field-name"]')
+      var types = ui.projectFields.querySelectorAll('[data-role="field-type"]')
+      var fields = Array.prototype.map.call(names, function (input, index) {
+        return { name: input.value.trim(), type: types[index].value }
+      })
+      var id = ui.projectShapeName.value.trim()
+      shape = { id: /\.v[0-9]+$/.test(id) ? id : id + '.v1', fields: fields }
+    }
+
+    ui.projectCreate.disabled = true
+    ui.projectError.hidden = true
+    try {
+      var opened = await call(bridge.createProject(folder, name, shape))
+      ui.projectDialog.close()
+      await afterOpen(opened)
+      var entry = state.projectEntry
+      setStatus(
+        'ok',
+        'Created project “' +
+          opened.name +
+          '” at ' +
+          opened.dir +
+          ' · shape ' +
+          (entry ? entry.shape : 'none') +
+          (entry && entry.fields.length ? ' (' + entry.fields.map(function (f) { return f.name }).join(', ') + ')' : '') +
+          '. Type a point below, or create a tab.',
+      )
+      focusFirstField()
+    } catch (error) {
+      ui.projectError.hidden = false
+      ui.projectError.textContent = ''
+      ui.projectError.appendChild(node('div', null, (error && error.message) || 'the core refused the project'))
+      var hint = error && error.hint
+      if (hint) ui.projectError.appendChild(node('div', null, hint))
+      ;((error && error.problems) || []).forEach(function (problem) {
+        ui.projectError.appendChild(node('div', null, problem))
+      })
+    } finally {
+      ui.projectCreate.disabled = false
+    }
+  }
+
+  async function createTab(event) {
+    event.preventDefault()
+    if (!state.project) return
+    var recipe = ui.tabPanel.value === 'plot' ? undefined : ui.tabPanel.value
+    var draft = {
+      name: ui.tabName.value.trim(),
+      dataset: ui.tabDataset.value,
+      columns: 1,
+      ...(recipe === undefined ? {} : { recipe: recipe }),
+      ...(ui.tabReplace.checked ? { replace: true } : {}),
+    }
+    ui.tabCreate.disabled = true
+    ui.tabError.hidden = true
+    try {
+      var opened = await call(bridge.writeView(state.project.dir, draft))
+      var listed = await call(bridge.views(state.project.dir))
+      state.views = listed.views
+      state.opened = opened
+      state.view = opened.view
+      state.correction = null
+      state.selection = null
+      state.lastPoint = null
+      state.entryKey = null
+      state.timing = null
+      ui.tabDialog.close()
+      renderTabs()
+      renderView()
+      focusFirstField()
+      var facts = opened.view.panels[0] ? factsFor(opened.view.panels[0]) : ''
+      setStatus(
+        'ok',
+        (draft.replace ? 'Replaced' : 'Created') +
+          ' tab “' +
+          opened.view.name +
+          '” · ' +
+          facts +
+          '. It is a view file, so the next session can draw it again.',
+      )
+    } catch (error) {
+      ui.tabError.hidden = false
+      ui.tabError.textContent = ''
+      ui.tabError.appendChild(node('div', null, (error && error.message) || 'the core refused the tab'))
+      var hint = error && error.hint
+      if (hint) ui.tabError.appendChild(node('div', null, hint))
+      ;((error && error.problems) || []).forEach(function (problem) {
+        ui.tabError.appendChild(node('div', null, problem))
+      })
+    } finally {
+      ui.tabCreate.disabled = false
+      ui.tabName.focus()
+    }
   }
 
   async function openProject(dir) {
@@ -804,13 +1273,57 @@
   function wire() {
     document.getElementById('open-project').addEventListener('click', pickProject)
     document.getElementById('open-project-main').addEventListener('click', pickProject)
+    ui.newTab.addEventListener('click', openTabDialog)
+    ui.newProject.addEventListener('click', openProjectDialog)
+    ui.projectForm.addEventListener('submit', submitProject)
+    ui.projectCancel.addEventListener('click', function () {
+      ui.projectDialog.close()
+    })
+    ui.projectName.addEventListener('input', syncProjectPreview)
+    ui.projectFolder.addEventListener('input', syncProjectPreview)
+    ui.projectPick.addEventListener('click', async function () {
+      try {
+        var chosen = await call(bridge.pickFolder())
+        if (!chosen) return
+        ui.projectFolder.value = chosen
+        syncProjectPreview()
+        ui.projectName.focus()
+      } catch (error) {
+        ui.projectError.hidden = false
+        ui.projectError.textContent = 'Could not open the folder picker: ' + ((error && error.message) || error)
+      }
+    })
+    ui.projectShape.addEventListener('change', function () {
+      var custom = ui.projectShape.value === 'custom'
+      ui.projectCustom.hidden = !custom
+      if (custom && ui.projectFields.children.length === 0) {
+        shapeFieldRow('x', 'number')
+        shapeFieldRow('y', 'number')
+        ui.projectShapeName.focus()
+      }
+    })
+    ui.projectAddField.addEventListener('click', function () {
+      shapeFieldRow('', 'number')
+    })
+    ui.tabForm.addEventListener('submit', createTab)
+    ui.tabCancel.addEventListener('click', function () {
+      ui.tabDialog.close()
+    })
+    ui.tabName.addEventListener('input', syncTabReplace)
+
     ui.toggleMissing.addEventListener('click', function () {
       state.showMissing = !state.showMissing
       renderProjects()
     })
     ui.entry.addEventListener('submit', submitEntry)
     ui.entryUndo.addEventListener('click', undoPoint)
+    ui.entryCancel.addEventListener('click', closeCorrection)
     ui.entry.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && state.correction !== null) {
+        event.preventDefault()
+        closeCorrection()
+        return
+      }
       if (event.key !== 'z' && event.key !== 'Z') return
       if (!event.ctrlKey && !event.metaKey) return
       // Ctrl+Z means undo-the-point only when there is no half-typed text to undo instead. Stealing
@@ -860,8 +1373,9 @@
       else {
         showEmpty(
           'No projects yet',
-          'Create a project with the CLI, then open that folder here. Projects are folders; the window appends to them through the same log the CLI writes.',
+          'A project is a folder with an append-only log. Create one here, or open a folder the CLI made.',
           'bench init C:\\data\\sensor',
+          { label: 'Create a project…', run: openProjectDialog },
         )
         renderFoot()
       }

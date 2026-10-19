@@ -54,6 +54,44 @@ describe('bench CLI, as executed', () => {
     expect(result.stdout).toContain('Exit codes')
   })
 
+  it('declares a chosen shape at init, so an agent can build what the window builds', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bench-shape-'))
+    try {
+      const shapeFile = join(root, 'load.json')
+      await writeFile(
+        shapeFile,
+        JSON.stringify({
+          id: 'load.v1',
+          fields: [
+            { name: 'mass', type: 'number' },
+            { name: 'extension', type: 'number' },
+          ],
+        }),
+        'utf8',
+      )
+      const target = join(root, 'load-cells')
+      const init = await bench(['init', target, '--name', 'load cells', '--shape', shapeFile])
+      expect(init.code).toBe(0)
+      expect(init.stdout).toContain('shape declared from')
+
+      const log = await readFile(join(target, 'data', 'events.jsonl'), 'utf8')
+      expect(log).toContain('"load.v1"')
+      const added = await bench(['--project', target, 'add', '--values', '{"mass":2.5,"extension":12}', '--json'])
+      expect(added.code).toBe(0)
+      // A field the declared shape does not have is the same refusal the window shows.
+      const wrong = await bench(['--project', target, 'add', '--x', '1', '--y', '2'])
+      expect(wrong.code).toBe(1)
+
+      const broken = join(root, 'broken.json')
+      await writeFile(broken, JSON.stringify({ id: 'load', fields: [{ name: 'x', type: 'number' }] }), 'utf8')
+      const refused = await bench(['init', join(root, 'nope'), '--shape', broken])
+      expect(refused.code).toBe(1)
+      expect(refused.stderr).toContain('not a shape id')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('runs a whole session: init, add, correct, retract, list, check, state, chart', async () => {
     const init = await bench(['init', project, '--name', 'cli-smoke'])
     expect(init.code).toBe(0)
@@ -288,8 +326,13 @@ describe('bench import, as executed', () => {
 // why a present-but-broken environment must fail rather than skip).
 const analysisReady = existsSync(interpreterCandidates(process.cwd())[0]!)
 
+// These three spawn the Python interpreter, and a cold start on a loaded machine is ~2 s per run —
+// three CLI calls plus the recipe sat right at the 5 s default. The budget is for the runtime, not
+// for the assertions: they still fail the moment the output is wrong.
+const ANALYSIS_TIMEOUT = 20_000
+
 describe.skipIf(!analysisReady)('analysis through the CLI', () => {
-  it('refuses a fit and draws nothing it cannot justify', async () => {
+  it('refuses a fit and draws nothing it cannot justify', { timeout: ANALYSIS_TIMEOUT }, async () => {
     const target = await mkdtemp(join(tmpdir(), 'bench-refusal-'))
     try {
       await bench(['init', target, '--name', 'two-points'])
@@ -317,7 +360,7 @@ describe.skipIf(!analysisReady)('analysis through the CLI', () => {
     }
   })
 
-  it('marks an analysis stale when the data moves, and a rerun makes it current again', async () => {
+  it('marks an analysis stale when the data moves, and a rerun makes it current again', { timeout: ANALYSIS_TIMEOUT }, async () => {
     const target = await mkdtemp(join(tmpdir(), 'bench-runs-'))
     try {
       await bench(['init', target, '--name', 'runs'])
@@ -363,7 +406,7 @@ describe.skipIf(!analysisReady)('analysis through the CLI', () => {
     }
   })
 
-  it('draws a curve with a band when the data supports one, and says so on the artifact', async () => {
+  it('draws a curve with a band when the data supports one, and says so on the artifact', { timeout: ANALYSIS_TIMEOUT }, async () => {
     const target = await mkdtemp(join(tmpdir(), 'bench-supported-'))
     try {
       await bench(['init', target, '--name', 'many-points'])

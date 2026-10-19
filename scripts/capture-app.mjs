@@ -10,8 +10,9 @@
  *   BENCH_PROJECT=<dir>   project to open (defaults to the committed drift-sensor fixture)
  *
  * Frames: three scalings and an interaction frame from the project, then an append, its undo, a
- * refusal, and a point typed after the real CLI appended behind the window's back — captured on a
- * scratch copy of the project, so the committed log is never written by a review run.
+ * refusal, a point typed after the real CLI appended behind the window's back, a correction made by
+ * selecting a mark, a tab built from the dialog, and a project created with a shape of its own —
+ * captured on scratch copies, so no committed log is ever written by a review run.
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -74,6 +75,9 @@ const frames = [
   'app-undo.png',
   'app-refused.png',
   'app-second-writer.png',
+  'app-corrected.png',
+  'app-new-tab.png',
+  'app-new-project.png',
 ]
 let missing = 0
 for (const frame of frames) {

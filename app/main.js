@@ -11,7 +11,7 @@
  */
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as bench from './core.bundle.mjs'
@@ -105,15 +105,38 @@ ipcMain.handle('bench:views', (_event, dir) =>
 )
 
 ipcMain.handle('bench:view', (_event, dir, name) => guarded(() => bench.openView(dir, name)))
+ipcMain.handle('bench:point', (_event, dir, id, viewName) => guarded(() => bench.point(dir, id, viewName)))
+ipcMain.handle('bench:recipes', () => guarded(() => bench.recipes()))
+ipcMain.handle('bench:shapeChoice', () => guarded(async () => bench.shapeChoice()))
 
-// The write channel. Three calls, each one a `Workspace` method: there is no generic "run this"
+// Creating a project is a write: one log event, one folder. The dialog collects a name, a parent
+// folder and a shape; everything else — the folder's slug, the shape's validation — is the core's.
+ipcMain.handle('bench:createProject', (_event, parent, name, shape) =>
+  guarded(() => bench.createProject(parent, name, shape)),
+)
+
+ipcMain.handle('bench:pickFolder', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  const result = await dialog.showOpenDialog(owner, {
+    title: 'Where should this project live?',
+    buttonLabel: 'Use this folder',
+    properties: ['openDirectory', 'createDirectory'],
+  })
+  return { ok: true, value: result.canceled ? null : result.filePaths[0] }
+})
+
+// The write channel. Four calls, each one a `Workspace` method: there is no generic "run this"
 // escape hatch, so the window cannot grow a write path the core has not already agreed to.
 ipcMain.handle('bench:recordPoint', (_event, dir, draft, viewName) =>
   guarded(() => bench.recordPoint(dir, draft, viewName)),
 )
+ipcMain.handle('bench:correctPoint', (_event, dir, id, values, viewName) =>
+  guarded(() => bench.correctPoint(dir, id, values, viewName)),
+)
 ipcMain.handle('bench:retractPoint', (_event, dir, id, reason) =>
   guarded(() => bench.retractPoint(dir, id, reason)),
 )
+ipcMain.handle('bench:writeView', (_event, dir, draft) => guarded(() => bench.writeView(dir, draft)))
 ipcMain.handle('bench:refreshView', (_event, dir, name, options) =>
   guarded(() => bench.refreshView(dir, name, options)),
 )
@@ -249,16 +272,23 @@ async function focusField(index) {
 /** Everything a review needs to see about the bar, read from the live DOM. */
 async function entryState() {
   return window.webContents.executeJavaScript(`(() => {
-    const field = (name) => document.querySelector('input[data-field="' + name + '"]')
     const status = document.getElementById('entry-status')
     const notice = document.getElementById('notice')
     return JSON.stringify({
       focused: document.activeElement && (document.activeElement.dataset.field || document.activeElement.tagName),
-      typed: {
-        x: field('x') ? field('x').value : null,
-        y: field('y') ? field('y').value : null,
-      },
+      // Keyed by field name, because a project may declare fields that are not x and y.
+      typed: (() => {
+        const out = {}
+        document.querySelectorAll('#entry-fields input').forEach((input) => {
+          out[input.dataset.field] = input.value
+        })
+        return out
+      })(),
       badges: Array.prototype.map.call(document.querySelectorAll('.panel-strip .badge'), (b) => b.textContent),
+      correcting: !document.getElementById('entry-correct').hidden,
+      correctLabel: document.getElementById('entry-correct').hidden
+        ? null
+        : document.getElementById('entry-correct-label').textContent,
       status: status.hidden ? null : status.textContent,
       notice: notice.hidden ? null : notice.textContent,
       readout: document.getElementById('entry-readout').textContent,
@@ -310,6 +340,9 @@ async function runCli(args) {
 
 /** The capture run's entry: real keystrokes, and loudly wrong if they do not land. */
 async function enterPoint(x, y) {
+  // A previous step may have handed the foreground away (a spawned CLI, the shell itself). Ask for
+  // it again here rather than reporting a keystroke that never landed.
+  if (!(await focusWindowForInput())) throw new Error('the window never took focus')
   const { timing, synthetic } = await submitEntry(x, y)
   if (synthetic) throw new Error('the capture could not type into the window (no focus)')
   return timing
@@ -510,6 +543,276 @@ async function capture() {
       throw new Error(`the saved tab says n = ${savedView.panels[1].n}, the log holds 16`)
     }
     await writeFile(join(captureDir, 'app-second-writer.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // Correct a record by selecting it. The click is dispatched into the drawing's own pointer
+    // handling, the new value is typed into the bar, and Enter saves — the same path a person uses.
+    const selected = await window.webContents.executeJavaScript(`(() => {
+      const panels = document.querySelectorAll('.panel')
+      const host = panels[panels.length - 1] && panels[panels.length - 1].querySelector('.panel-chart')
+      const circle = host && host.querySelector('svg circle[data-point-id]')
+      if (!circle) return null
+      const box = circle.getBoundingClientRect()
+      const at = {
+        clientX: Math.round(box.left + box.width / 2),
+        clientY: Math.round(box.top + box.height / 2),
+      }
+      for (const type of ['pointerdown', 'pointerup']) {
+        host.dispatchEvent(
+          new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, button: 0, ...at }),
+        )
+      }
+      return circle.getAttribute('data-point-id')
+    })()`)
+    if (!selected) throw new Error('no mark in the plot panel to select')
+    for (let waited = 0; waited < 40; waited += 1) {
+      const open = await window.webContents.executeJavaScript(
+        "!document.getElementById('entry-correct').hidden",
+      )
+      if (open) break
+      await sleep(100)
+    }
+    const strip = JSON.parse(await entryState())
+    console.log(
+      '[bench] correction-open ' +
+        JSON.stringify({ id: selected, label: strip.correctLabel, values: strip.typed, status: strip.status }),
+    )
+    if (!strip.correcting) throw new Error('clicking a mark did not open the correction strip')
+    if (strip.typed.x === '' || strip.typed.y === '') {
+      throw new Error('the correction strip was not prefilled from the log')
+    }
+    // The correction row adds a line to a strip that already holds fields, a button and a readout.
+    // Overflow here would clip the record id, which is the one thing the row exists to name.
+    const stripLayout = await window.webContents.executeJavaScript(`(() => {
+      const entry = document.getElementById('entry')
+      const label = document.getElementById('entry-correct-label')
+      return JSON.stringify({
+        entry: { w: Math.round(entry.getBoundingClientRect().width), h: Math.round(entry.getBoundingClientRect().height) },
+        label: { w: Math.round(label.getBoundingClientRect().width), scroll: label.scrollWidth },
+        overflowX: label.scrollWidth - Math.round(label.getBoundingClientRect().width),
+      })
+    })()`)
+    console.log('[bench] correction-layout ' + stripLayout)
+    const stripBox = JSON.parse(stripLayout)
+    if (stripBox.overflowX > 1) {
+      throw new Error(`the correction row overflows by ${stripBox.overflowX}px`)
+    }
+
+    await focusField(1)
+    pressKey('a', ['control'])
+    pressKey('Backspace')
+    typeText('24.5')
+    pressEnter()
+    for (let waited = 0; waited < 50; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Corrected /.test(state.status || '')) break
+      await sleep(100)
+    }
+    await sleep(400)
+    const correctedState = JSON.parse(await entryState())
+    const lastEvent = JSON.parse((await readFile(join(writableDir, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n').pop())
+    console.log(
+      '[bench] corrected ' +
+        JSON.stringify({
+          id: selected,
+          status: correctedState.status,
+          readout: correctedState.readout,
+          badges: correctedState.badges,
+          event: lastEvent.type,
+          supersedes: lastEvent.supersedes,
+        }),
+    )
+    if (lastEvent.type !== 'point_corrected' || lastEvent.supersedes !== selected) {
+      throw new Error(`the correction was not recorded as an event (last was ${lastEvent.type})`)
+    }
+    if (!/^Corrected /.test(correctedState.status || '')) {
+      throw new Error('the bar did not report the correction')
+    }
+    if (!/n = 16/.test(correctedState.readout)) {
+      throw new Error(`correcting a point must not change the count: "${correctedState.readout}"`)
+    }
+    if (!/stale/.test(correctedState.status || '')) {
+      throw new Error('the correction did not say the recipe panel is now stale')
+    }
+    await writeFile(join(captureDir, 'app-corrected.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // A tab built from the dialog: a name, a dataset, a recipe. It runs against a second, untouched
+    // copy of the fixture — the frames above appended and corrected points, and a verdict computed
+    // from those edits would say more about this harness than about the door being shown.
+    const tabProject = join(dirname(writableDir), 'tab-fixture')
+    await cp(startupDir, tabProject, { recursive: true })
+    nextStartup = tabProject
+    window.webContents.reload()
+    await new Promise((done) => ipcMain.once('bench:ready', done))
+    if (!(await focusWindowForInput())) throw new Error('the window never took focus for the tab door')
+    await sleep(400)
+
+    await window.webContents.executeJavaScript("document.getElementById('new-tab').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      const ready = await window.webContents.executeJavaScript(
+        "(() => { const d = document.getElementById('tab-dialog'); return d.open && !!document.querySelector('#tab-panel option[value=\"drift\"]') })()",
+      )
+      if (ready) break
+      await sleep(100)
+    }
+    const dialogReady = await window.webContents.executeJavaScript(
+      "(() => { const d = document.getElementById('tab-dialog'); return d.open && !!document.querySelector('#tab-panel option[value=\"drift\"]') })()",
+    )
+    if (!dialogReady) throw new Error('the tab dialog never offered a recipe')
+
+    await window.webContents.executeJavaScript(`(() => {
+      const name = document.getElementById('tab-name')
+      name.value = 'regimes'
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+      const panel = document.getElementById('tab-panel')
+      panel.value = 'drift'
+      panel.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(200)
+    const dialogState = await window.webContents.executeJavaScript(`(() => JSON.stringify({
+      name: document.getElementById('tab-name').value,
+      dataset: document.getElementById('tab-dataset').value,
+      panel: document.getElementById('tab-panel').value,
+      replaceShown: !document.getElementById('tab-replace-field').hidden,
+      note: document.getElementById('tab-note').textContent,
+    }))()`)
+    console.log('[bench] tab-dialog ' + dialogState)
+    await window.webContents.executeJavaScript("document.getElementById('tab-create').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^(Created|Replaced) tab/.test(state.status || '')) break
+      const failed = await window.webContents.executeJavaScript(
+        "(() => { const e = document.getElementById('tab-error'); return e.hidden ? null : e.textContent })()",
+      )
+      if (failed) throw new Error('the tab dialog refused: ' + failed)
+      await sleep(100)
+    }
+    await sleep(400)
+    const tabState = JSON.parse(await entryState())
+    const tabFile = JSON.parse(await readFile(join(tabProject, 'views', 'regimes.json'), 'utf8'))
+    const tabNames = await window.webContents.executeJavaScript(
+      "Array.prototype.map.call(document.querySelectorAll('#tabs .item-name'), (n) => n.textContent)",
+    )
+    console.log(
+      '[bench] tab-created ' +
+        JSON.stringify({
+          status: tabState.status,
+          badges: tabState.badges,
+          meta: tabState.meta,
+          tabs: tabNames,
+          recipe: tabFile.panels[0].recipe,
+          verdict: tabFile.panels[0].verdict,
+        }),
+    )
+    if (tabFile.panels[0].recipe !== 'drift') throw new Error('the tab was not built by the recipe')
+    if (!tabState.badges.every((badge) => badge === 'current')) {
+      throw new Error('a freshly built tab must be current')
+    }
+    if (!tabNames.includes('regimes')) throw new Error('the new tab is not in the rail')
+    await writeFile(join(captureDir, 'app-new-tab.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // A project created from the window, with fields of its own choosing. The shape is declared at
+    // init and every later point inherits it, so the frame shows the bar offering those fields and
+    // the first point typed into them.
+    const projectRoot = join(dirname(writableDir), 'new-project')
+    // The dialog refuses a parent that does not exist rather than creating a tree from a typo; a
+    // person arrives here from the folder picker, so the harness makes the folder first.
+    await mkdir(projectRoot, { recursive: true })
+    await window.webContents.executeJavaScript("document.getElementById('new-project').click()")
+    await sleep(300)
+    await window.webContents.executeJavaScript(`(() => {
+      const set = (id, value) => {
+        const input = document.getElementById(id)
+        input.value = value
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      }
+      set('project-name', 'load cells')
+      set('project-folder', ${JSON.stringify(projectRoot)})
+      const shape = document.getElementById('project-shape')
+      shape.value = 'custom'
+      shape.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(200)
+    const projectDialog = await window.webContents.executeJavaScript(`(() => {
+      const names = document.querySelectorAll('#project-fields [data-role="field-name"]')
+      names[0].value = 'mass'
+      names[1].value = 'extension'
+      document.getElementById('project-shape-name').value = 'load'
+      return JSON.stringify({
+        preview: document.getElementById('project-preview').textContent,
+        custom: !document.getElementById('project-custom').hidden,
+        fields: Array.prototype.map.call(names, (input) => input.value),
+      })
+    })()`)
+    console.log('[bench] project-dialog ' + projectDialog)
+    await window.webContents.executeJavaScript("document.getElementById('project-create').click()")
+    for (let waited = 0; waited < 80; waited += 1) {
+      const refused = await window.webContents.executeJavaScript(
+        "(() => { const e = document.getElementById('project-error'); return e.hidden ? null : e.textContent })()",
+      )
+      if (refused) throw new Error('the project dialog refused: ' + refused)
+      const closed = await window.webContents.executeJavaScript(
+        "!document.getElementById('project-dialog').open",
+      )
+      if (closed) break
+      await sleep(100)
+    }
+    await sleep(300)
+    const newProject = join(projectRoot, 'load-cells')
+    const projectEvents = (await readFile(join(newProject, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    const declared = projectEvents.find((event) => event.type === 'shape_defined')
+    const projectState = JSON.parse(await entryState())
+    console.log(
+      '[bench] project-created ' +
+        JSON.stringify({
+          status: projectState.status,
+          fields: projectState.typed,
+          shape: declared && declared.shape.id,
+          declared: declared && declared.shape.fields.map((field) => field.name),
+        }),
+    )
+    if (!declared || declared.shape.id !== 'load.v1') {
+      throw new Error('the project did not declare the chosen shape')
+    }
+    if (JSON.stringify(declared.shape.fields.map((field) => field.name)) !== '["mass","extension"]') {
+      throw new Error('the declared shape does not hold the chosen fields')
+    }
+    if (!/Created project/.test(projectState.status || '')) {
+      throw new Error('the bar did not report the project it created')
+    }
+    if (!/mass/.test(projectState.status || '')) throw new Error('the status does not name the fields')
+
+    // The same bar types into the new project: the door is only open if a point can follow the shape.
+    await focusField(0)
+    typeText('2.5')
+    await focusField(1)
+    typeText('12')
+    pressEnter()
+    for (let waited = 0; waited < 50; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Recorded /.test(state.status || '')) break
+      await sleep(100)
+    }
+    await sleep(300)
+    const firstPoint = JSON.parse(await entryState())
+    console.log(
+      '[bench] project-first-point ' +
+        JSON.stringify({ status: firstPoint.status, readout: firstPoint.readout, typed: firstPoint.typed }),
+    )
+    if (!/^Recorded /.test(firstPoint.status || '')) {
+      throw new Error('the first point in the new project was not recorded')
+    }
+    if (!/n = 1/.test(firstPoint.readout)) {
+      throw new Error(`the new project should hold one point: "${firstPoint.readout}"`)
+    }
+    await writeFile(join(captureDir, 'app-new-project.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
   }
 

@@ -1,6 +1,60 @@
 import { describe, expect, it } from 'vitest'
-import { editDistance, validateValues } from '../src/core/shapes.ts'
+import { editDistance, validateShapeDefinition, validateValues } from '../src/core/shapes.ts'
 import type { Shape } from '../src/core/events.ts'
+
+describe('validateShapeDefinition', () => {
+  it('accepts a shape the binder can fold, and reads its version from the id', () => {
+    const declared = validateShapeDefinition({
+      id: 'reading.v1',
+      fields: [
+        { name: 'mass', type: 'number', unit: 'g' },
+        { name: 'label', type: 'string', optional: true },
+      ],
+    })
+    expect(declared).toEqual({
+      id: 'reading.v1',
+      version: 1,
+      fields: [
+        { name: 'mass', type: 'number', unit: 'g' },
+        { name: 'label', type: 'string', optional: true },
+      ],
+    })
+  })
+
+  it('refuses two fields with one name', () => {
+    expect(() =>
+      validateShapeDefinition({
+        id: 'load.v1',
+        fields: [
+          { name: 'x', type: 'number' },
+          { name: 'x', type: 'number' },
+        ],
+      }),
+    ).toThrow(/appears twice/)
+  })
+
+  it('refuses a type the binder cannot fold', () => {
+    expect(() => validateShapeDefinition({ id: 'load.v1', fields: [{ name: 'x', type: 'float' }] })).toThrow(
+      /unknown type "float"/,
+    )
+  })
+
+  it('refuses an id without a version, because a shape is versioned by name', () => {
+    expect(() => validateShapeDefinition({ id: 'load', fields: [{ name: 'x', type: 'number' }] })).toThrow(
+      /not a shape id/,
+    )
+  })
+
+  it('refuses a shape with no fields rather than declaring an empty one', () => {
+    expect(() => validateShapeDefinition({ id: 'load.v1', fields: [] })).toThrow(/at least one field/)
+  })
+
+  it('refuses a field name the CLI could not spell as a flag', () => {
+    expect(() => validateShapeDefinition({ id: 'load.v1', fields: [{ name: 'Load (N)', type: 'number' }] })).toThrow(
+      /unusable name/,
+    )
+  })
+})
 
 const shape: Shape = {
   id: 'reading.v1',

@@ -78,6 +78,7 @@ const OPTIONS = {
   title: { type: 'string' },
   query: { type: 'string' },
   columns: { type: 'string' },
+  shape: { type: 'string' },
   file: { type: 'string' },
   scan: { type: 'string' },
   refresh: { type: 'boolean' },
@@ -149,6 +150,9 @@ Options for view new / add
   --query '{"where":[…]}'    select rows: field/op/value clauses, all must hold
   --title <text>             panel heading
   --columns <1-4>            grid columns for the tab (view new only)
+
+Options for init
+  --shape <file>            declare the point shape from a JSON file instead of xy.v1
 
 Options for import
   --map <field=column>       map a shape field to a column with a different name, repeatable
@@ -390,8 +394,25 @@ async function main(): Promise<void> {
   switch (command) {
     case 'init': {
       const target = resolve(args[0] ?? '.')
+      // `--shape <file>` declares the fields at the one moment they can be chosen. Without it the
+      // default xy.v1 is used, exactly as before. The window's create dialog writes the same event
+      // through the same function; this flag is how an agent does the same thing without a dialog.
+      let shape: unknown = undefined
+      if (values.shape !== undefined) {
+        let text: string
+        try {
+          text = await readFile(resolve(values.shape), 'utf8')
+        } catch {
+          die(`cannot read shape file ${values.shape}`, EXIT_MISSING)
+        }
+        try {
+          shape = JSON.parse(text)
+        } catch {
+          die(`${values.shape} is not valid JSON`)
+        }
+      }
       try {
-        const handle = await initProject(target, values.name)
+        const handle = await initProject(target, values.name, undefined, shape)
         try {
           await rememberProject(handle.dir, { name: handle.config.name, created: handle.config.created })
         } catch (error) {
@@ -403,11 +424,15 @@ async function main(): Promise<void> {
           )
         } else {
           process.stdout.write(`created project "${handle.config.name}" at ${handle.dir}\n`)
-          process.stdout.write(`  shape xy.v1 (x, y) · dataset main\n`)
+          process.stdout.write(
+            `  shape ${shape ? 'declared from ' + values.shape : 'xy.v1 (x, y)'} · dataset main\n`,
+          )
           process.stdout.write(`  next: bench add --x 1.2 --y 3.4\n`)
         }
       } catch (error) {
-        die((error as Error).message, EXIT_INVARIANT)
+        // `fail` maps a BenchError to its own kind, so a bad shape file exits 1 (invalid input)
+        // rather than 3, which would tell an agent the log was at risk when nothing was written.
+        fail(error)
       }
       return
     }

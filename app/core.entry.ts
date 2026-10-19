@@ -20,13 +20,135 @@
 import { APP_ROOT, assessRuns } from '../src/core/analysis.ts'
 import { incrementalMark, renderChart } from '../src/core/chart.ts'
 import type { ChartPoint } from '../src/core/chart.ts'
-import type { ShapeField } from '../src/core/events.ts'
+import type { PointValue, ShapeField } from '../src/core/events.ts'
+import { stat } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { DEFAULT_SHAPE, initProject } from '../src/core/project.ts'
+import { SHAPE_FIELD_TYPES } from '../src/core/shapes.ts'
 import { listProjects, rememberProject } from '../src/core/registry.ts'
 import type { KnownProject } from '../src/core/registry.ts'
-import { Workspace } from '../src/core/workspace.ts'
+import { RecipeRunner } from '../src/core/runner.ts'
+import { BenchError, Workspace } from '../src/core/workspace.ts'
 import type { PointDraft } from '../src/core/workspace.ts'
-import { listViews, loadView, materializePanel, panelStatuses, saveView, selectInput } from '../src/core/views.ts'
+import {
+  listViews,
+  loadView,
+  materializePanel,
+  panelStatuses,
+  requireFreeName,
+  saveView,
+  selectInput,
+} from '../src/core/views.ts'
 import type { PanelStatus, ViewFile, ViewSummary } from '../src/core/views.ts'
+
+export interface RecipeChoice {
+  name: string
+  summary: string
+  params: { name: string; type: string; default?: unknown; values?: string[] }[]
+}
+
+export interface RecipeCatalog {
+  recipes: RecipeChoice[]
+  /** Set when the analysis runtime is missing or refusing: the tab dialog still offers a plot. */
+  problem?: string
+}
+
+/**
+ * What the tab dialog can build a panel from: the same catalog `bench recipes` prints, read through
+ * the same runner. Starting the interpreter is why this is a separate call rather than something
+ * the window does on boot — a window that could not start Python would still have to open.
+ */
+export async function recipes(): Promise<RecipeCatalog> {
+  const runner = new RecipeRunner(APP_ROOT)
+  try {
+    await runner.start()
+    const catalog = await runner.catalog()
+    return {
+      recipes: catalog.map((recipe) => ({
+        name: recipe.name,
+        summary: recipe.summary,
+        params: recipe.params.map((param) => ({
+          name: param.name,
+          type: param.type,
+          ...(param.default === undefined ? {} : { default: param.default }),
+          ...(param.values === undefined ? {} : { values: param.values }),
+        })),
+      })),
+    }
+  } catch (error) {
+    return { recipes: [], problem: error instanceof Error ? error.message : String(error) }
+  } finally {
+    await runner.dispose()
+  }
+}
+
+export interface ViewDraft {
+  name: string
+  dataset: string
+  /** Absent means a plain plot of the dataset; present means a panel built by that recipe. */
+  recipe?: string
+  params?: Record<string, unknown>
+  columns?: number
+  /** Replace the file when the name is taken. A tab is never deleted: it is superseded on purpose. */
+  replace?: boolean
+}
+
+/**
+ * Create a tab, or replace one when the caller says so with `replace`.
+ *
+ * This is a tab-shaped write, not an analysis request: the panel is materialized exactly as
+ * `bench view new` materializes it, no `analysis_run` event is recorded, and a recipe panel still
+ * carries the recipe's verdict so the drawing states its own evidence (ADR 0008).
+ */
+export async function writeView(dir: string, draft: ViewDraft): Promise<OpenedView> {
+  const name = draft.name.trim()
+  if (name === '') {
+    throw new BenchError('invalid', 'a tab needs a name', { hint: 'name the question this tab answers' })
+  }
+  const workspace = await workspaceFor(dir)
+  const reread = await workspace.freshen()
+  // Never delete a tab: replacing one is an explicit act, and the refusal says how to do it.
+  await requireFreeName(workspace.dir, name, draft.replace === true)
+
+  const view: ViewFile = {
+    v: 1,
+    name,
+    layout: { columns: Math.min(4, Math.max(1, Math.trunc(draft.columns ?? 2))) },
+    panels: [],
+  }
+
+  let runner: RecipeRunner | undefined
+  try {
+    if (draft.recipe !== undefined) {
+      runner = new RecipeRunner(APP_ROOT)
+      await runner.start()
+    }
+    const materialized = await materializePanel(
+      workspace,
+      {
+        dataset: draft.dataset,
+        ...(draft.recipe === undefined ? {} : { recipe: draft.recipe }),
+        ...(draft.params === undefined ? {} : { params: draft.params }),
+        title: name,
+      },
+      runner,
+    )
+    view.panels.push(materialized.panel)
+  } catch (error) {
+    if (error instanceof BenchError) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    // Nothing has been saved at this point, and the runner cannot write to the log, so say both.
+    throw new BenchError('invariant', `${message} — the tab was not saved`, {
+      hint: 'a plain plot needs no analysis runtime; a recipe panel does',
+    })
+  } finally {
+    if (runner) await runner.dispose()
+  }
+
+  await saveView(workspace.dir, view)
+  sessionView = { dir: workspace.dir, view }
+  return describe(workspace, view, reread)
+}
 
 export interface ProjectList {
   projects: KnownProject[]
@@ -83,31 +205,96 @@ export interface OpenedProject {
   views: ViewSummary[]
   viewProblems: string[]
   datasets: { id: string; shape: string; active: number }[]
+  /**
+   * Where a typed point would land before any tab exists. A project with no tabs still has a dataset
+   * and a shape, and the entry bar is the door a new project needs most — without this, creating a
+   * project would end in a window that cannot be given a single point.
+   */
+  entry: EntryTarget | null
 }
 
 /**
  * Open a project by directory (a subfolder is fine: the core walks up to the root), record a recent,
  * and describe what the window can show. This is the same `Workspace` the CLI uses.
  */
-export async function openProject(dir: string): Promise<OpenedProject> {
-  session = await Workspace.open(dir)
-  const workspace = session
+async function describeProject(workspace: Workspace): Promise<OpenedProject> {
   await rememberProject(workspace.dir, {
     name: workspace.config.name,
     created: workspace.config.created,
   })
   const { views, problems } = await listViews(workspace.dir)
+  const datasets = [...workspace.state.datasets.values()].map((dataset) => ({
+    id: dataset.id,
+    shape: dataset.shape,
+    active: workspace.dataset(dataset.id).points.length,
+  }))
   return {
     dir: workspace.dir,
     name: workspace.config.name,
     views,
     viewProblems: problems,
-    datasets: [...workspace.state.datasets.values()].map((dataset) => ({
-      id: dataset.id,
-      shape: dataset.shape,
-      active: workspace.dataset(dataset.id).points.length,
-    })),
+    datasets,
+    entry: datasets[0] ? targetForDataset(workspace, datasets[0].id) : null,
   }
+}
+
+export async function openProject(dir: string): Promise<OpenedProject> {
+  session = await Workspace.open(dir)
+  return describeProject(session)
+}
+
+/**
+ * What the create dialog offers: the default shape, and the field types a custom one may use. The
+ * window does not keep its own copy of the type list — a second one would drift from the binder's.
+ */
+export interface ShapeChoice {
+  id: string
+  fields: ShapeField[]
+  types: string[]
+}
+
+export function shapeChoice(): ShapeChoice {
+  return { id: DEFAULT_SHAPE.id, fields: DEFAULT_SHAPE.fields, types: [...SHAPE_FIELD_TYPES] }
+}
+
+/**
+ * Create a project, with its shape chosen now or never.
+ *
+ * A shape is declared by a `shape_defined` event at init and every later point inherits it, so this
+ * is the one moment a person can pick the fields. The dialog's custom fields arrive here as data and
+ * are validated by the core before anything is written; the folder is derived from the name so two
+ * clicks of the same name cannot silently pick a different folder.
+ */
+export async function createProject(parentDir: string, name: string, shape?: unknown): Promise<OpenedProject> {
+  const clean = name.trim()
+  if (clean === '') {
+    throw new BenchError('invalid', 'a project needs a name', { hint: 'name it after the data, e.g. load cells' })
+  }
+  const parent = resolve(parentDir)
+  let info
+  try {
+    info = await stat(parent)
+  } catch {
+    throw new BenchError('missing', `no folder at ${parent}`, {
+      hint: 'choose the folder the project should live in',
+    })
+  }
+  if (!info.isDirectory()) {
+    throw new BenchError('invalid', `${parent} is not a folder`, { hint: 'choose a folder, not a file' })
+  }
+
+  const folder = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'project'
+  const target = join(parent, folder)
+  try {
+    await initProject(target, clean, undefined, shape)
+  } catch (error) {
+    if (error instanceof BenchError) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    throw new BenchError('invalid', message, { hint: 'choose another name, or another folder' })
+  }
+
+  session = await Workspace.open(target)
+  return describeProject(session)
 }
 
 export interface OpenedView {
@@ -133,8 +320,13 @@ export interface OpenedView {
 function entryTarget(workspace: Workspace, view: ViewFile): EntryTarget | null {
   const first = view.panels[0]
   if (!first) return null
+  return targetForDataset(workspace, first.dataset)
+}
+
+/** The same answer for a tab's panel and for a project with no tabs: one rule, one place. */
+function targetForDataset(workspace: Workspace, datasetId: string): EntryTarget | null {
   try {
-    const dataset = workspace.dataset(first.dataset)
+    const dataset = workspace.dataset(datasetId)
     return {
       dataset: dataset.id,
       shape: dataset.shape,
@@ -281,6 +473,93 @@ export async function recordPoint(dir: string, draft: PointDraft, viewName?: str
 function placementOf(markup: string, attribute: 'cx' | 'cy'): number {
   const match = new RegExp(`${attribute}="([-0-9.]+)"`).exec(markup)
   return match ? Number(match[1]) : 0
+}
+
+export interface PointDetail {
+  id: string
+  dataset: string
+  shape: string
+  /** The fields to offer in the correction strip: the shape's, not the point's own keys. */
+  fields: ShapeField[]
+  values: Record<string, string | number | boolean | null>
+  tObserved: string
+  /** Corrections already recorded against it, so a strip can say this is the third one. */
+  corrections: number
+  /** Panels of the open tab drawn by a recipe that include this point: a change makes them stale. */
+  recipePanels: number[]
+}
+
+/**
+ * What the strip needs to edit one existing record: its values, the fields its shape demands, and
+ * what a change would invalidate. Read-only, and it freshens first — a strip prefilled from a bind
+ * the log has moved past would offer numbers that are no longer the point's.
+ */
+export async function point(dir: string, id: string, viewName?: string): Promise<PointDetail> {
+  const workspace = await workspaceFor(dir)
+  await workspace.freshen()
+  const found = workspace.findPoint(id)
+  if (!found) {
+    throw new BenchError('missing', `no point with id "${id}"`, { hint: 'the log may have been rewritten' })
+  }
+  const shape = workspace.shapeOf(found.dataset)
+  const recipePanels: number[] = []
+  if (viewName !== undefined) {
+    const view = await openViewFile(workspace.dir, viewName)
+    view.panels.forEach((panel, index) => {
+      if (panel.recipe === undefined) return
+      try {
+        const input = selectInput(workspace.state, panel.dataset, panel.query)
+        if (input && input.points.some((candidate) => candidate.id === id)) recipePanels.push(index)
+      } catch {
+        /* a panel that cannot be selected has nothing to say about this point */
+      }
+    })
+  }
+  return {
+    id,
+    dataset: found.dataset,
+    shape: shape.id,
+    fields: shape.fields,
+    values: { ...found.point.values },
+    tObserved: found.point.tObserved,
+    corrections: found.point.corrections.length,
+    recipePanels,
+  }
+}
+
+export interface CorrectedPoint {
+  id: string
+  dataset: string
+  /** The point as the log now describes it, which is not always what was typed. */
+  values: Record<string, string | number | boolean | null>
+  active: number
+  /** The tab, rebuilt and redrawn. A recipe panel is kept and reported stale, never silently reused. */
+  view: RefreshedView | null
+}
+
+/**
+ * Correct one existing point, as an event that supersedes it — never an edit of the original record.
+ *
+ * The rebuild is not optional here. A correction changes a value, which changes every panel's input
+ * fingerprint; returning without refreshing would leave the screen claiming an analysis still holds
+ * on numbers it was not drawn from. Plot panels are rebuilt from the new state and a recipe panel is
+ * kept with its `stale` badge, because running it would be an analysis request (ADR 0002).
+ */
+export async function correctPoint(
+  dir: string,
+  id: string,
+  values: Record<string, PointValue>,
+  viewName?: string,
+): Promise<CorrectedPoint> {
+  const workspace = await workspaceFor(dir)
+  const corrected = await workspace.correctPoint(id, values, 'corrected in the window')
+  await workspace.writeStateBrief()
+  const active = workspace.dataset(corrected.dataset).points.length
+  if (viewName === undefined) {
+    return { id, dataset: corrected.dataset, values: corrected.now, active, view: null }
+  }
+  const view = await refreshView(dir, viewName, { draw: true })
+  return { id, dataset: corrected.dataset, values: corrected.now, active, view }
 }
 
 export interface RetractedPoint {

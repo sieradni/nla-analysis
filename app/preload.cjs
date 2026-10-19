@@ -15,9 +15,20 @@ contextBridge.exposeInMainWorld('bench', {
   views: (dir) => ipcRenderer.invoke('bench:views', dir),
   view: (dir, name) => ipcRenderer.invoke('bench:view', dir, name),
   pickProject: () => ipcRenderer.invoke('bench:pickProject'),
-  // writing: append one point, retract one point, rebuild a tab from the current data. Nothing that
-  // takes a log event, a file path or a raw command, so the window cannot write anything else.
+  point: (dir, id, viewName) => ipcRenderer.invoke('bench:point', dir, id, viewName),
+  recipes: () => ipcRenderer.invoke('bench:recipes'),
+  shapeChoice: () => ipcRenderer.invoke('bench:shapeChoice'),
+  pickFolder: () => ipcRenderer.invoke('bench:pickFolder'),
+  // writing
+  writeView: (dir, draft) => ipcRenderer.invoke('bench:writeView', dir, draft),
+  createProject: (parent, name, shape) =>
+    ipcRenderer.invoke('bench:createProject', parent, name, shape),
+  // Writing: append one point, correct one point, retract one point, write a tab, rebuild a tab from
+  // the current data. Nothing that takes a log event, a file path or a raw command, so the window
+  // cannot write anything else.
   recordPoint: (dir, draft, viewName) => ipcRenderer.invoke('bench:recordPoint', dir, draft, viewName),
+  correctPoint: (dir, id, values, viewName) =>
+    ipcRenderer.invoke('bench:correctPoint', dir, id, values, viewName),
   retractPoint: (dir, id, reason) => ipcRenderer.invoke('bench:retractPoint', dir, id, reason),
   refreshView: (dir, name, options) => ipcRenderer.invoke('bench:refreshView', dir, name, options),
   ready: () => ipcRenderer.send('bench:ready'),

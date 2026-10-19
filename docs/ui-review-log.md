@@ -17,6 +17,9 @@ Format: date · step · what to look at · verdict · follow-up.
 | 2026-10-19 | Point entry (ADR 0006) | (1) Type `6.5`, `Tab`, `16.4`, Enter: the mark appears, the plot's own `n = 15` and the footer agree, and the bar reports what it recorded plus `13 ms` for the whole path. (2) The fitted panel turns `stale` with the exact command that fixes it, while the plot beside it is `current` — the window refreshed what it can and says what it cannot. | **pending** | captured on a scratch copy of the fixture, so the committed log was not written by a review run. The stale fitted panel is the intended behaviour, not a failure — say if it reads that way |
 | 2026-10-19 | Undo (Ctrl+Z in an empty bar) | (1) The point disappears and **both** panels return to `current`: the retraction put the input fingerprint back to what the file was drawn from. (2) The status line names the record and says it stays in the log — nothing was deleted. | **pending** | keyboard-only path: only fires when the bar is empty, so it never steals away an edit-in-progress undo |
 | 2026-10-19 | Entry refused | (1) `seven` is still in the `x` field after the refusal — a rejection that ate the number would be a worse bug than the rejection. (2) Both fields are marked and the two problems are named the way the shape names them, so the fix is obvious from the frame. Nothing was written: the count is still 14. | **pending** | the capture asserts the text survived (`typed.x === 'seven'`), so this frame cannot silently rot |
+| 2026-10-19 | New tab (ADR 0008) | (1) `New tab…` opens one dialog: a name, a dataset, and a panel — a plain plot or a recipe. The frame is the tab it built: `regimes` in the rail, `drift · tentative · n = 14`, badge `current`. (2) The replace tick appears only when the typed name is already taken, so overwriting a tab is an explicit act. | **pending** | one panel per tab from the window; a second panel is still `bench view add`. Say if that is the wrong cut |
+| 2026-10-19 | Creating a project with its own shape | (1) The dialog offers the shipped shape or custom fields; the frame is a project whose shape is `load.v1 (mass, extension)`, declared at init, with the entry bar offering exactly those two fields. (2) One point typed into it reads `1 active in main` — a created project takes data without a tab existing yet. | **pending** | shape mistakes are permanent in this slice (no editor, no `shape_extended`), which is why the fields are validated before the folder is created |
+| 2026-10-19 | Correcting a point by selecting it | (1) Clicking a mark puts a dashed ring on it and opens a `Correcting …` row above the fields, prefilled from the log — the values are the log's, not the tooltip's rounded readout. (2) After `24.5` replaces `2.55` and Enter: the mark moves, the count stays 16, and the status says a `point_corrected` event supersedes the original — while the fitted panel turns `stale` rather than pretending the curve still holds. | **pending** | no separate button for it: the row's discoverability rests on the idle hint in the status area (`Click a point to correct it, or Shift+Arrow in a chart`). Say if that reads or needs a real control |
 | 2026-10-19 | A second writer (ADR 0007) | (1) [app-second-writer.png](ui-review/app-second-writer.png): the bar says `16 active in main · the log had changed on disk, so it was reread before this point was added`, and `n = 16` — the capture asserts the same numbers, so the frame cannot rot. (2) The distance from stale to right is the caption's whole point: before the typed point the bar read `n = 14` while the log held 15, and the plot panel under the strip had 14 marks. | **pending** | captured by spawning the real `bench` binary in the middle of the capture run, so this is a genuine two-process frame; the fitted panel beside it still reads `stale`, which is correct and not the defect |
 
 ## Desktop window — what to look at
@@ -24,14 +27,15 @@ Format: date · step · what to look at · verdict · follow-up.
 The frames are [app-100.png](ui-review/app-100.png), [app-125.png](ui-review/app-125.png),
 [app-150.png](ui-review/app-150.png), [app-interaction.png](ui-review/app-interaction.png),
 [app-entry.png](ui-review/app-entry.png), [app-undo.png](ui-review/app-undo.png),
-[app-refused.png](ui-review/app-refused.png) and
-[app-second-writer.png](ui-review/app-second-writer.png), captured from the real window by
-`pnpm app:capture`. The entry, undo, refusal and second-writer frames are typed into with real
-keystrokes, on a scratch copy of the project so the committed log stays untouched. The last of them
-runs the real `bench` binary mid-capture — another process writes the log, then a point is typed —
-so it is evidence about two writers, not one. `docs/ui-review/index.html` shows all eight on one page
-when opened in a browser; the in-app Preview tab serves only the HTML file it is handed, so the images
-there come from opening the folder instead.
+[app-refused.png](ui-review/app-refused.png), [app-second-writer.png](ui-review/app-second-writer.png),
+[app-corrected.png](ui-review/app-corrected.png), [app-new-tab.png](ui-review/app-new-tab.png) and
+[app-new-project.png](ui-review/app-new-project.png), captured from the real window by
+`pnpm app:capture`. Everything after the three scalings is driven through the window itself — real
+keystrokes into the entry bar, clicks dispatched into the drawing, and the app's own dialog buttons —
+on scratch copies of the project, so no committed log is ever written by a review run. One frame
+(`app-second-writer`) runs the real `bench` binary mid-capture, so it is evidence about two writers.
+`docs/ui-review/index.html` shows all eleven on one page when opened in a browser; the in-app Preview
+tab serves only the HTML file it is handed, so the images there come from opening the folder instead.
 
 - **Rail**: projects most-recent-first, the open one marked; tabs under it with panel counts. Projects
   whose folder is gone are hidden behind a count — say if that should be visible by default instead.

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { interpreterCandidates } from '../src/core/runner.ts'
 
 /**
  * The desktop shell does not import `src/core`; it imports the bundle that `pnpm app:build` produces,
@@ -17,6 +18,9 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest'
  */
 const bundlePath = join(process.cwd(), 'app', 'core.bundle.mjs')
 const built = existsSync(bundlePath)
+// A recipe panel needs the Python environment; a plot panel does not, and neither does anything else
+// here. Skipped only when the environment has not been created (tests/run.test.ts says why).
+const analysisReady = existsSync(interpreterCandidates(process.cwd())[0]!)
 const fixture = join(process.cwd(), 'fixtures', 'projects', 'drift-sensor')
 
 describe.skipIf(!built)('bundled core, as the desktop shell loads it', () => {
@@ -151,6 +155,50 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(appended[1].reason).toBe('undo from the window')
   })
 
+  it('corrects a selected point as an event, and says the recipe panel no longer holds', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const opened = (await api.openView!(dir, 'drift over time')) as Window
+    const drawn = opened.view.panels[1].chart.points[0] as { id: string; x: number; y: number }
+
+    // What the strip is filled from: the log's own number, not the tooltip's rounded one.
+    const detail = (await api.point!(dir, drawn.id, 'drift over time')) as Window
+    expect(detail.values).toEqual({ x: drawn.x, y: drawn.y })
+    expect(detail.fields.map((field: { name: string }) => field.name)).toEqual(['x', 'y'])
+    expect(detail.corrections).toBe(0)
+    // Panel 0 was drawn by a recipe from this point, so changing it invalidates that drawing.
+    expect(detail.recipePanels).toEqual([0])
+
+    const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+    const corrected = (await api.correctPoint!(
+      dir,
+      drawn.id,
+      { x: drawn.x, y: drawn.y + 5 },
+      'drift over time',
+    )) as Window
+
+    expect(corrected.values).toEqual({ x: drawn.x, y: drawn.y + 5 })
+    expect(corrected.active).toBe(14)
+    // A correction is not a deletion and not an in-place edit: one new event that supersedes the old.
+    const appended = (await readFile(join(dir, 'data', 'events.jsonl'), 'utf8'))
+      .slice(before.length)
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(appended.map((event: Window) => event.type)).toEqual(['point_corrected'])
+    expect(appended[0].supersedes).toBe(drawn.id)
+    expect(appended[0].values).toEqual({ x: drawn.x, y: drawn.y + 5 })
+
+    // The plot panel is rebuilt from the corrected state; the fitted panel cannot be, so it is kept
+    // and reported stale rather than being left looking like it still describes this project.
+    expect(corrected.view.kept.map((entry: Window) => entry.index)).toEqual([0])
+    expect(corrected.view.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
+
+    const shown = (await api.openView!(dir, 'drift over time')) as Window
+    expect(shown.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
+    expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('14 active points')
+  })
+
   it('asks for a redraw when the point would move the axes', async () => {
     const api = await shell()
     const dir = await scratchProject()
@@ -177,6 +225,103 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     // The saved file is what the window will open next time, so the count there has to be the new one.
     const saved = JSON.parse(await readFile(join(dir, 'views', 'drift-over-time.json'), 'utf8')) as Window
     expect(saved.panels[1].n).toBe(15)
+  })
+
+  it('creates a project with the shape the dialog chose, and refuses a shape it cannot fold', async () => {
+    const api = await shell()
+    const parent = await mkdtemp(join(tmpdir(), 'bench-shell-new-'))
+    scratch.push(parent)
+
+    const created = (await api.createProject!(parent, 'load cells', {
+      id: 'load.v1',
+      fields: [
+        { name: 'mass', type: 'number' },
+        { name: 'extension', type: 'number' },
+      ],
+    })) as Window
+    expect(created.dir).toBe(join(parent, 'load-cells'))
+    expect(created.name).toBe('load cells')
+    expect(created.views).toEqual([])
+    // A project with no tabs still has somewhere to type: that is what makes the door usable.
+    expect(created.entry).toMatchObject({ dataset: 'main', shape: 'load.v1', active: 0 })
+    expect(created.entry.fields.map((field: Window) => field.name)).toEqual(['mass', 'extension'])
+
+    // The shape is declared in the log, not in a side file that could drift from it.
+    const events = (await readFile(join(created.dir, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    const declared = events.find((event: Window) => event.type === 'shape_defined')
+    expect(declared.shape.id).toBe('load.v1')
+    expect(declared.shape.fields.map((field: Window) => field.name)).toEqual(['mass', 'extension'])
+
+    // And the point that follows is validated against it.
+    const recorded = (await api.recordPoint!(created.dir, { values: { mass: 2.5, extension: 12 } })) as Window
+    expect(recorded.active).toBe(1)
+    await expect(api.recordPoint!(created.dir, { values: { x: 1, y: 2 } })).rejects.toThrow(/point rejected/)
+
+    await expect(
+      api.createProject!(parent, 'broken', { id: 'load.v1', fields: [{ name: 'x', type: 'float' }] }),
+    ).rejects.toThrow(/unknown type/)
+    // A refusal must not leave a half-made project behind.
+    await expect(readFile(join(parent, 'broken', 'project.json'), 'utf8')).rejects.toThrow()
+  })
+
+  it('writes a tab from a chosen dataset, and refuses to overwrite one by accident', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    await api.openView!(dir, 'drift over time')
+
+    const created = (await api.writeView!(dir, { name: 'slope check', dataset: 'main', columns: 1 })) as Window
+    expect(created.view.name).toBe('slope check')
+    expect(created.view.layout.columns).toBe(1)
+    expect(created.view.panels).toHaveLength(1)
+    // A plain panel plots the dataset and records no run: a tab is a saved question, not an analysis.
+    expect(created.view.panels[0].recipe).toBeUndefined()
+    expect(created.view.panels[0].n).toBe(14)
+    expect(created.statuses.map((status: Window) => status.state)).toEqual(['current'])
+    expect(created.svgs).toHaveLength(1)
+
+    const file = JSON.parse(await readFile(join(dir, 'views', 'slope-check.json'), 'utf8')) as Window
+    expect(file.name).toBe('slope check')
+    expect(file.panels[0].n).toBe(14)
+
+    // A tab the user built is not something to overwrite silently.
+    await expect(api.writeView!(dir, { name: 'slope check', dataset: 'main' })).rejects.toThrow(
+      /already exists/,
+    )
+    // And a dataset that is not there is a refusal, not an empty chart.
+    await expect(api.writeView!(dir, { name: 'other', dataset: 'nope' })).rejects.toThrow(/no dataset/)
+  })
+
+  it.skipIf(!analysisReady)('builds a recipe panel, and replaces a tab only when told', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const catalog = (await api.recipes!()) as Window
+    expect(catalog.recipes.map((recipe: Window) => recipe.name)).toContain('drift')
+    expect(catalog.problem).toBeUndefined()
+
+    const withRecipe = (await api.writeView!(dir, {
+      name: 'regimes',
+      dataset: 'main',
+      recipe: 'drift',
+      columns: 1,
+    })) as Window
+    expect(withRecipe.view.panels[0].recipe).toBe('drift')
+    // The verdict travels with the panel, so the drawing states its own evidence (non-negotiable 6).
+    expect(withRecipe.view.panels[0].verdict).toBe('tentative')
+    expect(withRecipe.statuses[0].state).toBe('current')
+
+    // Replacing is an explicit act, and the new panel is what the file now holds.
+    const replaced = (await api.writeView!(dir, {
+      name: 'regimes',
+      dataset: 'main',
+      columns: 1,
+      replace: true,
+    })) as Window
+    expect(replaced.view.panels[0].recipe).toBeUndefined()
+    const file = JSON.parse(await readFile(join(dir, 'views', 'regimes.json'), 'utf8')) as Window
+    expect(file.panels[0].recipe).toBeUndefined()
   })
 
   it('refuses a typo by naming the field, which is what the bar marks', async () => {

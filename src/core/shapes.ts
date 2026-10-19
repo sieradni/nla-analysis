@@ -1,4 +1,77 @@
 import type { PointValue, Shape, ShapeField } from './events.ts'
+import { BenchError } from './errors.ts'
+
+/** The field types a shape may declare. Kept here so a shape cannot be written with a type the
+ * binder does not know how to fold. */
+export const SHAPE_FIELD_TYPES = ['number', 'integer', 'string', 'instant', 'boolean'] as const
+
+const FIELD_NAME = /^[a-z][a-z0-9_]{0,31}$/
+const SHAPE_ID = /^[a-z][a-z0-9_-]*\.v([0-9]+)$/
+
+/**
+ * Validate a shape before it is declared in a log, because a shape is irreversible: every point
+ * written against it inherits its mistakes, and the binder has no way to reinterpret them later.
+ *
+ * The rules are deliberately narrow — names the CLI can spell as flags, types the binder folds — and
+ * the refusal names the field that is wrong, the same way point validation does.
+ */
+export function validateShapeDefinition(value: unknown): Shape {
+  const input = (value ?? {}) as { id?: unknown; version?: unknown; fields?: unknown }
+  const id = typeof input.id === 'string' ? input.id.trim() : ''
+  const match = SHAPE_ID.exec(id)
+  if (!match) {
+    throw new BenchError('invalid', `"${id || '(no id)'}" is not a shape id`, {
+      hint: 'shape ids look like reading.v1 — a lowercase name and a version',
+    })
+  }
+  if (!Array.isArray(input.fields) || input.fields.length === 0) {
+    throw new BenchError('invalid', `shape ${id} needs at least one field`, {
+      hint: 'a point with no fields has nothing to record',
+    })
+  }
+
+  const fields: ShapeField[] = []
+  const seen = new Set<string>()
+  input.fields.forEach((raw, index) => {
+    const field = (raw ?? {}) as { name?: unknown; type?: unknown; optional?: unknown; unit?: unknown }
+    const name = typeof field.name === 'string' ? field.name.trim() : ''
+    if (!FIELD_NAME.test(name)) {
+      throw new BenchError('invalid', `field ${index + 1} has an unusable name "${name}"`, {
+        hint: 'field names are lowercase letters, digits and underscores, starting with a letter',
+      })
+    }
+    if (seen.has(name)) {
+      throw new BenchError('invalid', `field "${name}" appears twice in shape ${id}`, {
+        hint: 'two fields with one name would make every point ambiguous',
+      })
+    }
+    seen.add(name)
+    const type = field.type
+    if (typeof type !== 'string' || !(SHAPE_FIELD_TYPES as readonly string[]).includes(type)) {
+      throw new BenchError(
+        'invalid',
+        `field "${name}" has unknown type "${String(type)}"`,
+        { hint: `use one of: ${SHAPE_FIELD_TYPES.join(', ')}` },
+      )
+    }
+    fields.push({
+      name,
+      type: type as ShapeField['type'],
+      ...(field.optional === true ? { optional: true } : {}),
+      ...(typeof field.unit === 'string' && field.unit.trim() !== '' ? { unit: field.unit.trim() } : {}),
+    })
+  })
+
+  const version = Number(match[1])
+  if (!Number.isInteger(version) || version < 1) {
+    throw new BenchError('invalid', `shape ${id} has an impossible version`, {
+      hint: 'the version is the number after .v — reading.v1 is version 1',
+    })
+  }
+  return { id, version, fields }
+}
+
+/** The suggestion and validation helpers below are about points, not definitions. */
 
 export interface ShapeValidation {
   errors: string[]

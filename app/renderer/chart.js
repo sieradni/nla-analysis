@@ -87,6 +87,14 @@
     dot.setAttribute('visibility', 'hidden')
     svg.appendChild(dot)
 
+    // Selection is a second, larger ring: hover answers "which record is this?", selection says
+    // "this is the one being edited", and they can be different marks at the same time.
+    var selection = document.createElementNS(SVG_NS, 'circle')
+    selection.setAttribute('class', 'select-dot')
+    selection.setAttribute('visibility', 'hidden')
+    svg.appendChild(selection)
+    var selected = null
+
     function zoomFactor() {
       return base.w / box.w
     }
@@ -135,6 +143,46 @@
       options.tooltip.hidden = true
     }
 
+    /** What was drawn at these client coordinates, or null. Hover and click want the same answer. */
+    function nearest(clientX, clientY) {
+      if (marks.length === 0) return null
+      var at = toBox(clientX, clientY)
+      var tolerance = HOVER_RADIUS_PX * (box.w / at.rect.width)
+      var best = null
+      var bestDistance = tolerance * tolerance
+      for (var index = 0; index < marks.length; index += 1) {
+        var point = marks[index]
+        var dx = point.cx - at.x
+        var dy = point.cy - at.y
+        var distance = dx * dx + dy * dy
+        if (distance <= bestDistance) {
+          bestDistance = distance
+          best = point
+        }
+      }
+      return best
+    }
+
+    /** Put the selection ring on one mark and tell the window which record it is. */
+    function showSelection(mark) {
+      selected = mark
+      var at = toBox(0, 0)
+      var perPixel = box.w / at.rect.width
+      hideHover()
+      selection.setAttribute('cx', String(mark.cx))
+      selection.setAttribute('cy', String(mark.cy))
+      selection.setAttribute('r', String(9 * perPixel))
+      selection.setAttribute('stroke-width', String(1.5 * perPixel))
+      selection.setAttribute('visibility', 'visible')
+      if (options.onSelect) options.onSelect(mark.id)
+    }
+
+    function clearSelection(notify) {
+      selected = null
+      selection.setAttribute('visibility', 'hidden')
+      if (notify && options.onSelect) options.onSelect(null)
+    }
+
     function showHover(mark, clientX, clientY) {
       var rect = toBox(clientX, clientY).rect
       var perPixel = box.w / rect.width
@@ -176,21 +224,7 @@
     }
 
     function hover(clientX, clientY) {
-      if (marks.length === 0) return hideHover()
-      var at = toBox(clientX, clientY)
-      var tolerance = HOVER_RADIUS_PX * (box.w / at.rect.width)
-      var best = null
-      var bestDistance = tolerance * tolerance
-      for (var index = 0; index < marks.length; index += 1) {
-        var point = marks[index]
-        var dx = point.cx - at.x
-        var dy = point.cy - at.y
-        var distance = dx * dx + dy * dy
-        if (distance <= bestDistance) {
-          bestDistance = distance
-          best = point
-        }
-      }
+      var best = nearest(clientX, clientY)
       if (best) showHover(best, clientX, clientY)
       else hideHover()
     }
@@ -198,7 +232,7 @@
     host.addEventListener('pointerdown', function (event) {
       if (event.button !== 0) return
       host.setPointerCapture(event.pointerId)
-      drag = { id: event.pointerId, x: event.clientX, y: event.clientY }
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: 0 }
       host.classList.add('dragging')
       hideHover()
     })
@@ -208,6 +242,7 @@
         var rect = svg.getBoundingClientRect()
         box.x -= (event.clientX - drag.x) * (box.w / rect.width)
         box.y -= (event.clientY - drag.y) * (box.h / rect.height)
+        drag.moved += Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y)
         drag.x = event.clientX
         drag.y = event.clientY
         constrain()
@@ -219,8 +254,15 @@
 
     function endDrag(event) {
       if (!drag || drag.id !== event.pointerId) return
+      var wasClick = drag.moved < 4
       host.classList.remove('dragging')
       drag = null
+      // A click is a press that did not pan. That is the one gesture that selects, so dragging the
+      // chart never changes which record the correction strip is aimed at.
+      if (!wasClick) return
+      var mark = nearest(event.clientX, event.clientY)
+      if (mark) showSelection(mark)
+      else clearSelection(true)
     }
     host.addEventListener('pointerup', endDrag)
     host.addEventListener('pointercancel', endDrag)
@@ -246,6 +288,29 @@
     })
 
     host.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') {
+        clearSelection(true)
+        return
+      }
+      // The keyboard path to a record, for someone who cannot point at one: shift-arrow steps the
+      // selection along x, wrapping at the ends. Panning keeps the unshifted arrows.
+      if (event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        var ordered = marks.slice().sort(function (left, right) {
+          return left.cx - right.cx
+        })
+        if (ordered.length === 0) return
+        var at = -1
+        for (var index = 0; index < ordered.length; index += 1) {
+          if (selected && ordered[index].id === selected.id) at = index
+        }
+        var step = event.key === 'ArrowRight' ? 1 : -1
+        var next = at === -1 ? (step === 1 ? 0 : ordered.length - 1) : at + step
+        if (next < 0) next = ordered.length - 1
+        if (next >= ordered.length) next = 0
+        showSelection(ordered[next])
+        event.preventDefault()
+        return
+      }
       if (event.key === '0') {
         reset()
         event.preventDefault()
@@ -285,7 +350,14 @@
       if (point) values[id] = point
     }
 
-    return { reset: reset, zoom: zoomFactor, addMark: addMark }
+    return {
+      reset: reset,
+      zoom: zoomFactor,
+      addMark: addMark,
+      clearSelection: function () {
+        clearSelection(false)
+      },
+    }
   }
 
   window.BenchCharts = { mount: mount }

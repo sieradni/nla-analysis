@@ -201,6 +201,116 @@ button {
   color: var(--ink);
 }
 
+/* --- sheets ---------------------------------------------------------------------------------
+   Native <dialog>, because a modal that traps focus and closes on Escape is a thing the platform
+   already does correctly. The look is the same paper and the same one accent as everything else. */
+
+.sheet {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  padding: var(--s4) var(--s5) var(--s5);
+  width: 420px;
+  max-width: calc(100vw - 2 * var(--s5));
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+}
+
+.sheet::backdrop {
+  background: rgba(27, 29, 31, 0.28);
+}
+
+.sheet h2 {
+  margin: 0 0 var(--s2);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.sheet-note {
+  margin: 0 0 var(--s3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.sheet-field {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  margin-bottom: var(--s2);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.sheet-field input,
+.sheet-field select {
+  padding: 5px var(--s2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--text-md);
+}
+
+.sheet-field input:focus,
+.sheet-field select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.sheet-row {
+  display: flex;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.sheet-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sheet-fields {
+  margin: var(--s2) 0;
+}
+
+.sheet-fields .sheet-field {
+  grid-template-columns: minmax(0, 1fr) 108px auto;
+  gap: var(--s2);
+  margin-bottom: var(--s1);
+}
+
+.sheet-check {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s2) 0;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+  margin-top: var(--s4);
+}
+
+.sheet-actions .ghost {
+  padding: 5px var(--s3);
+  font-size: var(--text-sm);
+}
+
+.sheet-error {
+  margin-top: var(--s3);
+  color: var(--danger);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
 .rail-foot {
   padding: var(--s2) var(--s4) var(--s3);
   border-top: 1px solid var(--line);
@@ -399,6 +509,14 @@ button {
   pointer-events: none;
 }
 
+/* Selection is drawn, not implied: a dashed ring on the record the correction strip is aimed at. */
+.select-dot {
+  fill: none;
+  stroke: var(--accent);
+  stroke-dasharray: 3 2;
+  pointer-events: none;
+}
+
 .tooltip {
   position: fixed;
   z-index: 10;
@@ -518,6 +636,40 @@ button {
   padding: var(--s3) var(--s5) var(--s3);
   border-top: 1px solid var(--line);
   background: var(--surface);
+}
+
+.entry.correcting {
+  grid-template-areas:
+    "correct correct correct"
+    "fields add undo"
+    "status status readout";
+}
+
+/* The correction row reuses the entry fields: one refusal path, one place numbers are typed. */
+.entry-correct {
+  grid-area: correct;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.entry-correct .id {
+  font-family: var(--font-num);
+  color: var(--accent);
+}
+
+.entry-correct .note {
+  color: var(--muted);
+}
+
+.entry-correct button {
+  margin-left: auto;
+}
+
+.entry-status .idle {
+  color: var(--muted);
 }
 
 .entry-fields {
