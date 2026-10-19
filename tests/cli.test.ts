@@ -183,6 +183,14 @@ describe('bench CLI, as executed', () => {
       // The recorded path was resolved when it was written, so a rename has to be healed the same
       // way — and running `state` against the folder is exactly the recovery the file describes.
       await rename(dir, moved)
+      // The stale line itself must still be refused, but now it says which path it tried and what to
+      // do next, instead of leaving the session to guess that the folder moved.
+      const stale = await bench(['--project', dir, 'state'])
+      expect(stale.code).toBe(2)
+      expect(stale.stderr).toContain('not inside a bench project')
+      expect(stale.stderr).toContain(dir)
+      expect(stale.stderr).toContain("folder's current path")
+      expect(stale.stderr).toContain('AGENTS.md')
       expect((await bench(['--project', moved, 'state'])).code).toBe(0)
       const afterMove = await readFile(join(moved, 'AGENTS.md'), 'utf8')
       expect(afterMove).toContain(`${launcher} --project "${moved.replaceAll('\\', '/')}" state`)

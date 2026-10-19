@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { access } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { EventLog, newSession } from './log.ts'
 import { makeEvent } from './events.ts'
 import type { IsoTime, Shape } from './events.ts'
@@ -54,12 +54,13 @@ function commandPath(path: string): string {
  * project created by `bench init` from the artifact points at that artifact, and one created in the
  * repository points at the repository.
  */
-function launcherInvocation(): { command: string; note: string } {
+function launcherInvocation(): { command: string; note: string; kind: 'packaged' | 'checkout' } {
   const packaged = [join(dirname(process.execPath), 'bench.cmd'), join(APP_ROOT, 'bench.cmd')].find(
     (candidate) => existsSync(candidate),
   )
   if (packaged) {
     return {
+      kind: 'packaged',
       command: `"${commandPath(packaged)}"`,
       note: [
         'The desktop app does not put its CLI on PATH: `bench.cmd` sits beside `bench.exe`, which',
@@ -69,6 +70,7 @@ function launcherInvocation(): { command: string; note: string } {
     }
   }
   return {
+    kind: 'checkout',
     command: `pnpm -C "${commandPath(APP_ROOT)}" bench`,
     note: [
       `That is the CLI script of the bench checkout at \`${APP_ROOT}\`; \`pnpm -C\` runs it from any`,
@@ -89,6 +91,32 @@ export function launcherProjectPath(dir: string): string {
 
 function projectAgents(dir: string): string {
   const launcher = launcherInvocation()
+  // A project inside this checkout is addressed relative to it, so the file stays true on any clone:
+  // the demo fixture must not record one machine's absolute path. Anything else needs the checkout's
+  // absolute path, because there is no common root to write it against.
+  const inside = commandPath(relative(APP_ROOT, dir))
+  const local =
+    launcher.kind === 'checkout' &&
+    inside !== '' &&
+    !inside.startsWith('../') &&
+    !isAbsolute(inside)
+  const command = local ? 'pnpm bench' : launcher.command
+  const projectPath = local ? inside : commandPath(dir)
+  const note = local
+    ? [
+        "That is this checkout's CLI script, and the path above is this project relative to it: run",
+        'the line from the checkout root. If `bench` is on PATH it is the same CLI.',
+      ].join('\n')
+    : launcher.note
+  const moved = local
+    ? [
+        'If this folder has moved since that line was written, run `pnpm bench` from the checkout root',
+        "with `--project` pointing at the folder's current path and run `state`: that rewrites this line.",
+      ].join('\n')
+    : [
+        'If this folder has moved since that line was written, run the same launcher with `--project`',
+        "pointing at the folder's current path and run `state`: that rewrites this line.",
+      ].join('\n')
   return `# AGENTS.md
 
 This folder is a **bench data project**. The append-only event log is the truth.
@@ -107,12 +135,11 @@ This folder is a **bench data project**. The append-only event log is the truth.
 The CLI is the only way to read or mutate this project. This file records the launcher that created
 it, refreshed to whichever CLI last wrote the brief, so the next session does not have to find it:
 
-    ${launcher.command} --project "${commandPath(dir)}" state
+    ${command} --project "${projectPath}" state
 
-${launcher.note}
+${note}
 
-If this folder has moved since that line was written, run the same launcher with \`--project\`
-pointing at the folder's current path and run \`state\`: that rewrites this line.
+${moved}
 
 ## After changing anything
 

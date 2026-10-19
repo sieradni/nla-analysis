@@ -16,13 +16,13 @@ This folder is a **bench data project**. The append-only event log is the truth.
 The CLI is the only way to read or mutate this project. This file records the launcher that created
 it, refreshed to whichever CLI last wrote the brief, so the next session does not have to find it:
 
-    pnpm -C "C:/Users/micha/Code/NLAnalysis" bench --project "C:/Users/micha/Code/NLAnalysis/fixtures/projects/drift-sensor" state
+    pnpm bench --project "fixtures/projects/drift-sensor" state
 
-That is the CLI script of the bench checkout at `C:\Users\micha\Code\NLAnalysis`; `pnpm -C` runs it from any
-folder. If `bench` is on PATH it is the same CLI.
+That is this checkout's CLI script, and the path above is this project relative to it: run
+the line from the checkout root. If `bench` is on PATH it is the same CLI.
 
-If this folder has moved since that line was written, run the same launcher with `--project`
-pointing at the folder's current path and run `state`: that rewrites this line.
+If this folder has moved since that line was written, run `pnpm bench` from the checkout root
+with `--project` pointing at the folder's current path and run `state`: that rewrites this line.
 
 ## After changing anything
 

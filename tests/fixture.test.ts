@@ -121,6 +121,13 @@ describe('drift-sensor fixture', () => {
     for (const id of marked) expect(ids.has(id)).toBe(true)
   })
 
+  it('records a launcher a clone can follow, with no machine path', async () => {
+    const agents = await readFile(join(projectDir, 'AGENTS.md'), 'utf8')
+    // The fixture is committed, so an absolute checkout path would be dead on every other clone.
+    expect(agents).not.toMatch(/\b[A-Za-z]:[\\/]/)
+    expect(agents).toContain('pnpm bench --project "fixtures/projects/drift-sensor" state')
+  })
+
   it('preserves the original bytes of a corrected point', async () => {
     const { state } = await loadFixture()
     const corrected = activePoints(state, 'main').filter((point) => point.corrections.length > 0)

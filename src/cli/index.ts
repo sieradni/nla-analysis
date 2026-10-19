@@ -201,10 +201,27 @@ async function locateProject(explicit?: string): Promise<string> {
 
 /** Every command opens the project the same way, and every open records a recent. */
 async function openWorkspace(explicit?: string): Promise<Workspace> {
+  const target = await locateProject(explicit)
   let workspace: Workspace
   try {
-    workspace = await Workspace.open(await locateProject(explicit))
+    workspace = await Workspace.open(target)
   } catch (error) {
+    // A project records the folder it had when its launcher line was written, so a moved folder
+    // arrives here under the old path. Name the path that was tried and the one step that repairs
+    // the file; the refusal itself is unchanged, and a path that is not a project still fails.
+    if (
+      error instanceof BenchError &&
+      error.message === 'not inside a bench project' &&
+      explicit !== undefined
+    ) {
+      fail(
+        new BenchError('missing', `not inside a bench project: ${target}`, {
+          hint:
+            `if this project moved, run ${launcherCommand()} with --project set to the folder's ` +
+            'current path and run state; that rewrites the line in its AGENTS.md',
+        }),
+      )
+    }
     fail(error)
   }
   // Recency is application state, not project state. A read-only home must not fail `bench list`,
