@@ -866,18 +866,16 @@
     renderEntry()
     try {
       var corrected = await call(
-        bridge.correctPoint(state.project.dir, correction.id, values, state.view ? state.view.name : undefined),
+        bridge.correctPoint(state.project.dir, correction.id, values, state.view.name),
       )
       state.correction = null
       state.selection = null
       state.busy = false
-      if (corrected.view) {
-        state.opened = corrected.view
-        state.view = corrected.view.view
-        renderTabs()
-        renderView(captureRestore())
-      }
-      var stale = (corrected.view && corrected.view.kept) || []
+      state.opened = corrected.view
+      state.view = corrected.view.view
+      renderTabs()
+      renderView(captureRestore())
+      var stale = corrected.view.kept
       var note =
         'Corrected ' +
         corrected.id +
@@ -1133,22 +1131,18 @@
     ui.projectCustom.hidden = true
     ui.projectFields.textContent = ''
     syncProjectPreview()
+    if (state.shapeChoice) {
+      ui.projectShape.options[0].textContent =
+        state.shapeChoice.id +
+        ' · ' +
+        state.shapeChoice.fields
+          .map(function (field) {
+            return field.name + ' (' + field.type + ')'
+          })
+          .join(', ')
+    }
     ui.projectDialog.showModal()
     ui.projectName.focus()
-
-    if (state.shapeChoice === null) {
-      try {
-        state.shapeChoice = await call(bridge.shapeChoice())
-      } catch (error) {
-        state.shapeChoice = { id: 'xy.v1', fields: [], types: ['number'] }
-      }
-      var labels = state.shapeChoice.fields
-        .map(function (field) {
-          return field.name + ' (' + field.type + ')'
-        })
-        .join(', ')
-      ui.projectShape.options[0].textContent = state.shapeChoice.id + ' · ' + labels
-    }
   }
 
   async function submitProject(event) {
@@ -1206,7 +1200,6 @@
     var draft = {
       name: ui.tabName.value.trim(),
       dataset: ui.tabDataset.value,
-      columns: 1,
       ...(recipe === undefined ? {} : { recipe: recipe }),
       ...(ui.tabReplace.checked ? { replace: true } : {}),
     }
@@ -1349,6 +1342,12 @@
       startup = await bridge.startup()
     } catch (error) {
       /* start without a hint */
+    }
+    // One cheap read, so the create dialog opens without waiting on the core.
+    try {
+      state.shapeChoice = await call(bridge.shapeChoice())
+    } catch (error) {
+      /* the dialog still works; it just cannot name the shipped shape */
     }
 
     try {

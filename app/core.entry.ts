@@ -6,9 +6,10 @@
  * chart. Bundling exists because Electron's Node does not strip TypeScript types; `pnpm app:build`
  * runs esbuild over this entry and writes `app/core.bundle.mjs`, which is generated and ignored.
  *
- * The facade is deliberately small: list projects, open one, list its tabs, open one tab, append a
- * point, undo it, refresh a tab. Anything a window wants that is not here is a core capability that
- * does not exist yet, and it should be added to the core rather than reimplemented in the shell.
+ * The facade is deliberately small: read what the window shows, and six writes — create a project,
+ * write a tab, append a point, correct one, retract one, rebuild a tab (ADR 0008). Anything a window
+ * wants that is not here is a core capability that does not exist yet, and it belongs in the core
+ * rather than reimplemented in the shell.
  *
  * One `Workspace` is kept per open project. That is what makes the write path a keystroke rather
  * than a log re-read: `recordPoint` folds the new event into memory instead of re-reading the file
@@ -87,8 +88,6 @@ export interface ViewDraft {
   dataset: string
   /** Absent means a plain plot of the dataset; present means a panel built by that recipe. */
   recipe?: string
-  params?: Record<string, unknown>
-  columns?: number
   /** Replace the file when the name is taken. A tab is never deleted: it is superseded on purpose. */
   replace?: boolean
 }
@@ -110,12 +109,8 @@ export async function writeView(dir: string, draft: ViewDraft): Promise<OpenedVi
   // Never delete a tab: replacing one is an explicit act, and the refusal says how to do it.
   await requireFreeName(workspace.dir, name, draft.replace === true)
 
-  const view: ViewFile = {
-    v: 1,
-    name,
-    layout: { columns: Math.min(4, Math.max(1, Math.trunc(draft.columns ?? 2))) },
-    panels: [],
-  }
+  // A tab from the window holds one panel, so one column. Multi-panel tabs are still `bench view add`.
+  const view: ViewFile = { v: 1, name, layout: { columns: 1 }, panels: [] }
 
   let runner: RecipeRunner | undefined
   try {
@@ -128,7 +123,6 @@ export async function writeView(dir: string, draft: ViewDraft): Promise<OpenedVi
       {
         dataset: draft.dataset,
         ...(draft.recipe === undefined ? {} : { recipe: draft.recipe }),
-        ...(draft.params === undefined ? {} : { params: draft.params }),
         title: name,
       },
       runner,
@@ -247,13 +241,7 @@ export async function openProject(dir: string): Promise<OpenedProject> {
  * What the create dialog offers: the default shape, and the field types a custom one may use. The
  * window does not keep its own copy of the type list — a second one would drift from the binder's.
  */
-export interface ShapeChoice {
-  id: string
-  fields: ShapeField[]
-  types: string[]
-}
-
-export function shapeChoice(): ShapeChoice {
+export function shapeChoice(): { id: string; fields: ShapeField[]; types: string[] } {
   return { id: DEFAULT_SHAPE.id, fields: DEFAULT_SHAPE.fields, types: [...SHAPE_FIELD_TYPES] }
 }
 
@@ -338,7 +326,7 @@ function targetForDataset(workspace: Workspace, datasetId: string): EntryTarget 
   }
 }
 
-async function describe(workspace: Workspace, view: ViewFile, reread = false): Promise<OpenedView> {
+async function describe(workspace: Workspace, view: ViewFile, reread: boolean): Promise<OpenedView> {
   const statuses = await panelStatuses(workspace, view)
   const freshness = await assessRuns(APP_ROOT, workspace.state)
   return {
@@ -477,8 +465,6 @@ function placementOf(markup: string, attribute: 'cx' | 'cy'): number {
 
 export interface PointDetail {
   id: string
-  dataset: string
-  shape: string
   /** The fields to offer in the correction strip: the shape's, not the point's own keys. */
   fields: ShapeField[]
   values: Record<string, string | number | boolean | null>
@@ -494,7 +480,7 @@ export interface PointDetail {
  * what a change would invalidate. Read-only, and it freshens first — a strip prefilled from a bind
  * the log has moved past would offer numbers that are no longer the point's.
  */
-export async function point(dir: string, id: string, viewName?: string): Promise<PointDetail> {
+export async function point(dir: string, id: string, viewName: string): Promise<PointDetail> {
   const workspace = await workspaceFor(dir)
   await workspace.freshen()
   const found = workspace.findPoint(id)
@@ -503,22 +489,18 @@ export async function point(dir: string, id: string, viewName?: string): Promise
   }
   const shape = workspace.shapeOf(found.dataset)
   const recipePanels: number[] = []
-  if (viewName !== undefined) {
-    const view = await openViewFile(workspace.dir, viewName)
-    view.panels.forEach((panel, index) => {
-      if (panel.recipe === undefined) return
-      try {
-        const input = selectInput(workspace.state, panel.dataset, panel.query)
-        if (input && input.points.some((candidate) => candidate.id === id)) recipePanels.push(index)
-      } catch {
-        /* a panel that cannot be selected has nothing to say about this point */
-      }
-    })
-  }
+  const view = await openViewFile(workspace.dir, viewName)
+  view.panels.forEach((panel, index) => {
+    if (panel.recipe === undefined) return
+    try {
+      const input = selectInput(workspace.state, panel.dataset, panel.query)
+      if (input && input.points.some((candidate) => candidate.id === id)) recipePanels.push(index)
+    } catch {
+      /* a panel that cannot be selected has nothing to say about this point */
+    }
+  })
   return {
     id,
-    dataset: found.dataset,
-    shape: shape.id,
     fields: shape.fields,
     values: { ...found.point.values },
     tObserved: found.point.tObserved,
@@ -534,7 +516,7 @@ export interface CorrectedPoint {
   values: Record<string, string | number | boolean | null>
   active: number
   /** The tab, rebuilt and redrawn. A recipe panel is kept and reported stale, never silently reused. */
-  view: RefreshedView | null
+  view: RefreshedView
 }
 
 /**
@@ -549,17 +531,18 @@ export async function correctPoint(
   dir: string,
   id: string,
   values: Record<string, PointValue>,
-  viewName?: string,
+  viewName: string,
 ): Promise<CorrectedPoint> {
   const workspace = await workspaceFor(dir)
   const corrected = await workspace.correctPoint(id, values, 'corrected in the window')
   await workspace.writeStateBrief()
-  const active = workspace.dataset(corrected.dataset).points.length
-  if (viewName === undefined) {
-    return { id, dataset: corrected.dataset, values: corrected.now, active, view: null }
+  return {
+    id,
+    dataset: corrected.dataset,
+    values: corrected.now,
+    active: workspace.dataset(corrected.dataset).points.length,
+    view: await refreshView(dir, viewName, { draw: true }),
   }
-  const view = await refreshView(dir, viewName, { draw: true })
-  return { id, dataset: corrected.dataset, values: corrected.now, active, view }
 }
 
 export interface RetractedPoint {

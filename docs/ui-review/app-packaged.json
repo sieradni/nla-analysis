@@ -1,6 +1,7 @@
 {
   "packaged": true,
   "electron": "44.9.0",
+  "url": "resources/app/renderer/index.html",
   "facts": {
     "panels": 2,
     "marks": 28,
@@ -13,8 +14,7 @@
       "y"
     ],
     "readout": "n = 14",
-    "title": "drift over time",
-    "empty": "none"
+    "title": "drift over time"
   },
   "tabDialog": {
     "open": true,
@@ -27,13 +27,6 @@
     "offered": [],
     "problem": "no Python interpreter at \"python\" and none on PATH — recipes need the analysis environment"
   },
-  "elapsedMs": 2870,
-  "artifactBytes": 386558561,
-  "checked": [
-    "the executable started and reported app.isPackaged",
-    "it drew the project: panels and marks",
-    "the entry bar offered the shape fields",
-    "no recipe was offered and the reason named the runtime",
-    "fixtures, tests, node_modules, docs and .venv were not shipped"
-  ]
+  "elapsedMs": 2626,
+  "artifactBytes": 386557413
 }

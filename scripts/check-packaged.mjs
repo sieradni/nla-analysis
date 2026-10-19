@@ -11,7 +11,7 @@
  * Usage: pnpm app:package:check     (after pnpm app:package)
  */
 import { spawn } from 'node:child_process'
-import { cp, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -63,17 +63,12 @@ child.on('error', (error) => fail(`could not start ${exe}: ${error.message}`))
 const code = await new Promise((done) => child.on('exit', (status) => done(status ?? 1)))
 const elapsed = Date.now() - startedAt
 
-function line(marker) {
-  const found = stdout.split('\n').find((entry) => entry.includes(marker))
-  return found ? found.slice(found.indexOf(marker) + marker.length).trim() : null
-}
-
-const reported = line('[bench] packaged ')
+const reported = stdout.split('\n').find((entry) => entry.includes('[bench] packaged '))
 if (!reported) {
   console.error(stderr.trim())
   fail(`the packaged build printed no report (exit ${code})`)
 }
-const report = JSON.parse(reported)
+const report = JSON.parse(reported.slice(reported.indexOf('[bench] packaged ') + '[bench] packaged '.length))
 console.log(`launched ${exe}`)
 console.log(
   `  packaged=${report.packaged} electron=${report.electron} panels=${report.facts.panels} marks=${report.facts.marks}`,
@@ -85,6 +80,10 @@ console.log(`  ${elapsed} ms from spawn to report, then exit ${code}`)
 
 if (code !== 0) fail(`the build reported success but exited ${code}`)
 if (report.packaged !== true) fail('app.isPackaged was false: this is not a packaged build')
+// The renderer has to be the one inside the artifact, not the repository's.
+if (!/resources[\\/]app[\\/]renderer[\\/]index\.html$/i.test(report.url)) {
+  fail(`the window loaded ${report.url}`)
+}
 if (!report.facts.panels || !report.facts.marks) fail('the build painted no chart')
 if (!report.facts.fields.length) fail('the entry bar offered no fields')
 if (report.recipes.offered.length !== 0) fail('a recipe was offered without the analysis runtime')
@@ -129,6 +128,7 @@ await writeFile(
     {
       packaged: report.packaged,
       electron: report.electron,
+      url: report.url.replace(/^.*resources[\\/]app/i, 'resources/app'),
       // The notice names a command with the scratch project's path in it; the receipt does not need
       // this machine's layout, so it keeps only what was checked.
       facts: { ...report.facts, notice: undefined },
@@ -136,13 +136,6 @@ await writeFile(
       recipes: report.recipes,
       elapsedMs: elapsed,
       artifactBytes: size,
-      checked: [
-        'the executable started and reported app.isPackaged',
-        'it drew the project: panels and marks',
-        'the entry bar offered the shape fields',
-        'no recipe was offered and the reason named the runtime',
-        'fixtures, tests, node_modules, docs and .venv were not shipped',
-      ],
     },
     null,
     2,
@@ -156,7 +149,6 @@ await rm(scratch, { recursive: true, force: true })
 
 async function sizeOf(dir) {
   let total = 0
-  const { readdir } = await import('node:fs/promises')
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name)
     total += entry.isDirectory() ? await sizeOf(path) : (await stat(path)).size

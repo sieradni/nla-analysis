@@ -237,14 +237,6 @@ async function submitEntry(x, y) {
   return { timing: await waitForTiming(before), synthetic: true }
 }
 
-/** Empty both entry fields, so the next typed point starts from nothing. */
-function clearFields() {
-  return window.webContents.executeJavaScript(`(() => {
-    document.querySelectorAll('#entry-fields input').forEach((input) => { input.value = '' })
-    return true
-  })()`)
-}
-
 /** Read one entry field, so a harness can tell "typed" from "not delivered". */
 function fieldValue(name) {
   return window.webContents.executeJavaScript(
@@ -374,8 +366,6 @@ async function smoke() {
     fields: Array.prototype.map.call(document.querySelectorAll('#entry-fields input'), (i) => i.dataset.field),
     readout: document.getElementById('entry-readout').textContent,
     title: document.getElementById('view-title').textContent,
-    notice: document.getElementById('notice').hidden ? null : document.getElementById('notice').textContent,
-    empty: getComputedStyle(document.getElementById('empty')).display,
   }))()`))
 
   // The degradation the build has to show honestly: a recipe panel needs the analysis runtime, which
@@ -410,7 +400,6 @@ async function smoke() {
   const report = {
     packaged: app.isPackaged,
     electron: process.versions.electron,
-    resources: process.resourcesPath,
     url: window.webContents.getURL(),
     facts,
     tabDialog: dialog,
@@ -418,7 +407,6 @@ async function smoke() {
   }
   console.log('[bench] packaged ' + JSON.stringify(report))
   await writeFile(join(smokeDir, 'app-packaged.png'), (await window.webContents.capturePage()).toPNG())
-  await writeFile(join(smokeDir, 'packaged.json'), JSON.stringify(report, null, 2) + '\n')
 
   const drawn = facts.panels > 0 && facts.marks > 0
   const usable = facts.fields.length > 0
@@ -589,11 +577,12 @@ async function capture() {
     // A second writer, which is how this product is meant to be operated: an agent runs `bench` in a
     // terminal while the window is open. This spawns the real binary, not a second Workspace in this
     // process, so the window's cached bind is genuinely behind the file (ADR 0007).
-    await clearFields()
+    await window.webContents.executeJavaScript(
+      "document.querySelectorAll('#entry-fields input').forEach((input) => { input.value = '' })",
+    )
     await runCli(['add', '--x', '7.2', '--y', '8.4'])
     // A child process can take the focus on Windows; without it the entry frame would be synthetic.
     if (!(await focusWindowForInput())) throw new Error('the window never took focus back')
-    await clearFields()
     const stale = JSON.parse(await entryState())
     console.log('[bench] second-writer-stale ' + JSON.stringify({ readout: stale.readout, marks: stale.marks }))
 

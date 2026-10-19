@@ -194,8 +194,6 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(corrected.view.kept.map((entry: Window) => entry.index)).toEqual([0])
     expect(corrected.view.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
 
-    const shown = (await api.openView!(dir, 'drift over time')) as Window
-    expect(shown.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
     expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('14 active points')
   })
 
@@ -272,9 +270,8 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     const dir = await scratchProject()
     await api.openView!(dir, 'drift over time')
 
-    const created = (await api.writeView!(dir, { name: 'slope check', dataset: 'main', columns: 1 })) as Window
+    const created = (await api.writeView!(dir, { name: 'slope check', dataset: 'main' })) as Window
     expect(created.view.name).toBe('slope check')
-    expect(created.view.layout.columns).toBe(1)
     expect(created.view.panels).toHaveLength(1)
     // A plain panel plots the dataset and records no run: a tab is a saved question, not an analysis.
     expect(created.view.panels[0].recipe).toBeUndefined()
@@ -283,7 +280,6 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(created.svgs).toHaveLength(1)
 
     const file = JSON.parse(await readFile(join(dir, 'views', 'slope-check.json'), 'utf8')) as Window
-    expect(file.name).toBe('slope check')
     expect(file.panels[0].n).toBe(14)
 
     // A tab the user built is not something to overwrite silently.

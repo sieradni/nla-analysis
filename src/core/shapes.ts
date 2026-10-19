@@ -6,7 +6,8 @@ import { BenchError } from './errors.ts'
 export const SHAPE_FIELD_TYPES = ['number', 'integer', 'string', 'instant', 'boolean'] as const
 
 const FIELD_NAME = /^[a-z][a-z0-9_]{0,31}$/
-const SHAPE_ID = /^[a-z][a-z0-9_-]*\.v([0-9]+)$/
+// Version 0 is not a shape: the first declared version is 1, so the id carries it.
+const SHAPE_ID = /^[a-z][a-z0-9_-]*\.v([1-9][0-9]*)$/
 
 /**
  * Validate a shape before it is declared in a log, because a shape is irreversible: every point
@@ -16,7 +17,7 @@ const SHAPE_ID = /^[a-z][a-z0-9_-]*\.v([0-9]+)$/
  * the refusal names the field that is wrong, the same way point validation does.
  */
 export function validateShapeDefinition(value: unknown): Shape {
-  const input = (value ?? {}) as { id?: unknown; version?: unknown; fields?: unknown }
+  const input = (value ?? {}) as { id?: unknown; fields?: unknown }
   const id = typeof input.id === 'string' ? input.id.trim() : ''
   const match = SHAPE_ID.exec(id)
   if (!match) {
@@ -62,13 +63,7 @@ export function validateShapeDefinition(value: unknown): Shape {
     })
   })
 
-  const version = Number(match[1])
-  if (!Number.isInteger(version) || version < 1) {
-    throw new BenchError('invalid', `shape ${id} has an impossible version`, {
-      hint: 'the version is the number after .v — reading.v1 is version 1',
-    })
-  }
-  return { id, version, fields }
+  return { id, version: Number(match[1]), fields }
 }
 
 /** The suggestion and validation helpers below are about points, not definitions. */
