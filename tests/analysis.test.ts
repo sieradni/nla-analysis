@@ -27,7 +27,7 @@ function event(type: string, at: string, payload: Record<string, unknown>): Benc
   } as unknown as BenchEvent
 }
 
-function point(id: number, at: string, x: number, y: number): BenchEvent {
+function point(at: string, x: number, y: number): BenchEvent {
   return event('point_recorded', at, {
     dataset: 'main',
     shape: 'xy.v1',
@@ -50,10 +50,10 @@ function scaffold(): BenchEvent[] {
     event('project_created', '2026-01-01T00:00:00.000Z', { name: 'fresh' }),
     event('shape_defined', '2026-01-01T00:00:00.001Z', { shape: SHAPE }),
     event('dataset_created', '2026-01-01T00:00:00.002Z', { dataset: 'main', shape: 'xy.v1' }),
-    point(1, '2026-01-02T00:00:00.000Z', 1, 2.4),
-    point(2, '2026-01-02T01:00:00.000Z', 2, 4.9),
-    point(3, '2026-01-02T02:00:00.000Z', 3, 7.1),
-    point(4, '2026-01-02T03:00:00.000Z', 4, 9.6),
+    point('2026-01-02T00:00:00.000Z', 1, 2.4),
+    point('2026-01-02T01:00:00.000Z', 2, 4.9),
+    point('2026-01-02T02:00:00.000Z', 3, 7.1),
+    point('2026-01-02T03:00:00.000Z', 4, 9.6),
   ]
 }
 
@@ -123,7 +123,7 @@ describe('analysis freshness', () => {
 
   it('counts the points added since a run', async () => {
     const { base, run } = projectWithRun()
-    const judged = bind([...base, run, point(9, '2026-01-04T00:00:00.000Z', 5, 12.1)])
+    const judged = bind([...base, run, point('2026-01-04T00:00:00.000Z', 5, 12.1)])
 
     const verdict = (await assessRuns(root, judged)).get(run.id)!
     expect(verdict.status).toBe('stale')

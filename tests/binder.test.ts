@@ -80,6 +80,24 @@ describe('bind', () => {
     expect(state.problems).toEqual([])
   })
 
+  it('reports an unknown shape once per dataset, and also when the dataset is empty', () => {
+    const bornBroken = [
+      makeEvent('project_created', 'test', { name: 'broken' }),
+      makeEvent('shape_defined', 'test', { shape: DEFAULT_SHAPE }),
+      makeEvent('dataset_created', 'test', { dataset: DEFAULT_DATASET, shape: 'gone.v9' }),
+      point(1, 1, '2026-01-01T00:00:00.000Z'),
+      point(2, 2, '2026-01-02T00:00:00.000Z'),
+      point(3, 3, '2026-01-03T00:00:00.000Z'),
+    ]
+    const withPoints = bind(bornBroken)
+    expect(withPoints.problems).toEqual([`dataset "${DEFAULT_DATASET}" references unknown shape "gone.v9"`])
+
+    // An empty dataset referencing a missing shape is still a problem worth reporting. Checking
+    // inside the per-point loop meant this case was silently fine.
+    const empty = bind(bornBroken.filter((event) => event.type !== 'point_recorded'))
+    expect(empty.problems).toHaveLength(1)
+  })
+
   it('reports a correction that targets a missing point', () => {
     const orphan = makeEvent('point_corrected', 'test', {
       dataset: DEFAULT_DATASET,

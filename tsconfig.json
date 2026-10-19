@@ -8,6 +8,11 @@
     "noEmit": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    // Turned on because a trial run found three pieces of real cruft: an unused import, an unused
+    // parameter, and a shape check that should have been using its loop variable. Unused code is
+    // where the next bug hides.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,

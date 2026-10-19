@@ -191,10 +191,10 @@ export function bind(events: BenchEvent[]): ProjectState {
 
   for (const dataset of state.datasets.values()) {
     dataset.points.sort(byTime)
-    for (const point of dataset.points) {
-      if (!state.shapes.has(dataset.shape)) {
-        state.problems.push(`dataset "${dataset.id}" references unknown shape "${dataset.shape}"`)
-      }
+    // Checked once per dataset, not once per point: inside the loop this reported the same broken
+    // reference as many times as the dataset had points, and skipped an empty one entirely.
+    if (!state.shapes.has(dataset.shape)) {
+      state.problems.push(`dataset "${dataset.id}" references unknown shape "${dataset.shape}"`)
     }
   }
 

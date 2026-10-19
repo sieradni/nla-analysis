@@ -22,7 +22,7 @@ import {
 } from '../core/project.ts'
 import type { ProjectHandle } from '../core/project.ts'
 import { RecipeRunner } from '../core/runner.ts'
-import type { RecipeSchema, RunInput } from '../core/runner.ts'
+import type { RunInput } from '../core/runner.ts'
 import { renderState } from '../core/state.ts'
 import { coerce, parseDelimited, parseJsonl } from '../core/table.ts'
 
