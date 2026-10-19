@@ -99,6 +99,12 @@ same stripped environment. It fails unless:
   `recipes/runner.py` **are**;
 - the shipped CLI created a fresh project, imported a timed table, made and rendered a view, passed
   `bench check`, and reported version 1 — with no Node install and no Python;
+- the shipped CLI ran a **recipe-backed** `fit` and a `view new --recipe`, proving the bundled CLI
+  resolves `recipes/` through the one `APP_ROOT` in `src/core/analysis.ts` rather than counting its
+  way up from the bundle, using the repository's `recipes\.venv` (run `pnpm setup:recipes` first;
+  `pnpm verify` needs the same environment);
+- that analysis left no `recipes/__pycache__` in the artifact — the recipe runner spawns Python
+  with `PYTHONDONTWRITEBYTECODE`, so analysis-then-check passes twice without repackaging;
 - `bench.cmd` and `resources/app/src/cli/index.mjs` are present;
 - Electron's fallback `default_app.asar` is gone, and the artifact is under 450 MB.
 

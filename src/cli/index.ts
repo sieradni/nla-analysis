@@ -3,8 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
-import { fileURLToPath } from 'node:url'
-import { freshnessNote } from '../core/analysis.ts'
+import { APP_ROOT, freshnessNote } from '../core/analysis.ts'
 import {
   BenchError,
   Workspace,
@@ -45,16 +44,6 @@ import { RecipeRunner } from '../core/runner.ts'
 import { renderState } from '../core/state.ts'
 import { commitImport, planImport } from '../core/import.ts'
 import { diffCounts, diffRows, type RowDiff } from '../core/versions.ts'
-
-/**
- * Recipes belong to the application, not to the user's project: they are the analysis library that
- * ships with bench, pinned and shared. A project owns data, shapes, views and decisions; it will be
- * able to add its own recipes later, but it does not carry a copy of these.
- *
- * Resolved from this file's own location rather than from the working directory, so `bench` works
- * from anywhere -- inside a project, from a parent folder, or from a completely unrelated path.
- */
-const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 const EXIT_OK = 0
 const EXIT_INVALID = 1

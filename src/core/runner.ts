@@ -132,10 +132,15 @@ export class RecipeRunner {
       )
     }
 
+    // Python writes `__pycache__` beside the recipe it imports, which for a packaged build is inside
+    // the artifact — a folder that is supposed to be read-only output of `pnpm app:package`. Suppress
+    // it here, at the one place every caller goes through (window, CLI, or Electron in Node mode),
+    // rather than in a launcher: a wrapper only covers the command it wraps.
     const child = spawn(interpreter, [this.script], {
       cwd: this.root,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
     })
     this.child = child
 
