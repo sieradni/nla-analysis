@@ -1,7 +1,53 @@
 import { describe, expect, it } from 'vitest'
-import { renderChart, ticks, wrapCaption } from '../src/core/chart.ts'
+import { incrementalMark, renderChart, ticks, wrapCaption } from '../src/core/chart.ts'
 
 const base = { x: { label: 'x' }, y: { label: 'y' } }
+
+describe('incrementalMark', () => {
+  const spec = {
+    ...base,
+    points: [
+      { x: 1, y: 2, id: 'p1' },
+      { x: 2, y: 4, id: 'p2' },
+      { x: 3, y: 6, id: 'p3' },
+    ],
+    footer: 'n = 3 · no fit — unmodelled',
+  }
+
+  it('produces exactly the markup a redraw would, character for character', () => {
+    const point = { x: 2.5, y: 5, id: 'p4' }
+    const mark = incrementalMark(spec, point)
+    expect(mark).not.toBeNull()
+
+    // The whole point of patching rather than redrawing is that the two are indistinguishable. A
+    // test that compared rounded numbers would let a drift of one attribute through; comparing the
+    // strings cannot.
+    const redrawn = renderChart({ ...spec, points: [...spec.points, point] })
+    expect(redrawn).toContain(mark!)
+    expect(mark!.startsWith('<circle ')).toBe(true)
+    expect(mark!).toContain('data-point-id="p4"')
+  })
+
+  it('refuses a mark that would move the axes, so the caller has to redraw', () => {
+    // Outside the domain a redraw rescales, and a mark drawn against the old scale would be wrong.
+    expect(incrementalMark(spec, { x: 1000, y: 5, id: 'far' })).toBeNull()
+    expect(incrementalMark(spec, { x: 2, y: -500, id: 'far' })).toBeNull()
+  })
+
+  it('accepts a value inside the padded domain that no drawn point reaches', () => {
+    // The domain is padded by 6% of the range: x spans [0.88, 3.12] and y [1.76, 6.24] here. A new
+    // value can be outside every drawn point and still not move the axes, which is the case that
+    // makes patching worthwhile — and the boundary is what the next assertion pins.
+    expect(incrementalMark(spec, { x: 0.9, y: 6.2, id: 'p0' })).not.toBeNull()
+    expect(incrementalMark(spec, { x: 0.8, y: 6.2, id: 'p0' })).toBeNull()
+  })
+
+  it('places a mark relative to a fitted line as well as to points', () => {
+    const fitted = { ...base, line: [{ x: 0, y: 0 }, { x: 10, y: 20 }] }
+    expect(incrementalMark(fitted, { x: 5, y: 10, id: 'm' })).not.toBeNull()
+    expect(incrementalMark(fitted, { x: 5, y: 90, id: 'm' })).toBeNull()
+  })
+})
 
 describe('ticks', () => {
   it('produces evenly spaced, rounded values inside the domain', () => {

@@ -73,6 +73,7 @@ const HEIGHT = 440
 const LEFT = 72
 const RIGHT = 26
 const BOTTOM = 62
+const POINT_RADIUS = 3.4
 
 // Single quotes inside these stacks, deliberately: they are interpolated into a double-quoted XML
 // attribute, and `font-family="ui-monospace, "Cascadia Mono"…"` is not well-formed XML. A browser
@@ -175,7 +176,33 @@ interface ChartFrame {
   parts: string[]
 }
 
-function frame(spec: ChartSpec): ChartFrame {
+/** Where one value sits on the canvas, and the axes it was placed against. */
+interface Geometry {
+  x0: number
+  x1: number
+  y0: number
+  y1: number
+  top: number
+  bottomEdge: number
+  plotW: number
+  plotH: number
+  sx: (value: number) => number
+  sy: (value: number) => number
+  /** Placement of the stacked header and the wrapped caption, so frame can draw without recomputing. */
+  titleY: number
+  subtitleY: number
+  footerY: number
+  captionLines: string[]
+  xLabel: string
+  yLabel: string
+}
+
+/**
+ * The scales a spec implies, derived from everything it draws — points, line, band, series. This is
+ * the one place the mapping from data to canvas is decided, so a mark appended later lands exactly
+ * where a full redraw would put it.
+ */
+function geometry(spec: ChartSpec): Geometry {
   const xs: number[] = []
   const ys: number[] = []
   for (const p of spec.points ?? []) {
@@ -217,12 +244,68 @@ function frame(spec: ChartSpec): ChartFrame {
   const plotH = HEIGHT - top - bottom
   const bottomEdge = top + plotH
 
-  const sx = (value: number): number => LEFT + ((value - x0) / (x1 - x0)) * plotW
-  const sy = (value: number): number => top + plotH - ((value - y0) / (y1 - y0)) * plotH
+  return {
+    x0,
+    x1,
+    y0,
+    y1,
+    top,
+    bottomEdge,
+    plotW,
+    plotH,
+    sx: (value: number): number => LEFT + ((value - x0) / (x1 - x0)) * plotW,
+    sy: (value: number): number => top + plotH - ((value - y0) / (y1 - y0)) * plotH,
+    titleY,
+    subtitleY,
+    footerY,
+    captionLines,
+    xLabel: spec.x.unit ? `${spec.x.label} (${spec.x.unit})` : spec.x.label,
+    yLabel: spec.y.unit ? `${spec.y.label} (${spec.y.unit})` : spec.y.label,
+  }
+}
+
+/** One mark's markup, from the same code that draws a whole chart. */
+function pointMark(sx: (value: number) => number, sy: (value: number) => number, point: ChartPoint): string {
+  const identity = point.id === undefined ? '' : ` data-point-id="${escapeXml(point.id)}"`
+  return `<circle cx="${sx(point.x).toFixed(2)}" cy="${sy(point.y).toFixed(2)}" r="${POINT_RADIUS}" fill="${ACCENT}" stroke="${PAPER}" stroke-width="1.5"${identity}/>`
+}
+
+/**
+ * A mark for one more observation, drawn against the scales a chart already has — or `null` when the
+ * point would move them.
+ *
+ * This exists so a typed point can appear without redrawing ten thousand of them: the window appends
+ * this markup to the SVG it already has. `null` is the important half of the contract: a point
+ * outside the drawn domain would rescale the axes, and a rescale is a different picture, not an
+ * extra mark, so the caller has to redraw instead of patching.
+ */
+export function incrementalMark(spec: ChartSpec, point: ChartPoint): string | null {
+  const { x0, x1, y0, y1, sx, sy } = geometry(spec)
+  if (point.x < x0 || point.x > x1 || point.y < y0 || point.y > y1) return null
+  return pointMark(sx, sy, point)
+}
+
+function frame(spec: ChartSpec): ChartFrame {
+  const {
+    x0,
+    x1,
+    y0,
+    y1,
+    top,
+    bottomEdge,
+    plotW,
+    plotH,
+    sx,
+    sy,
+    titleY,
+    subtitleY,
+    footerY,
+    captionLines,
+    xLabel,
+    yLabel,
+  } = geometry(spec)
 
   const parts: string[] = [`<rect width="${WIDTH}" height="${HEIGHT}" fill="${PAPER}"/>`]
-  const xLabel = spec.x.unit ? `${spec.x.label} (${spec.x.unit})` : spec.x.label
-  const yLabel = spec.y.unit ? `${spec.y.label} (${spec.y.unit})` : spec.y.label
   const accessibleName = spec.title ?? `${yLabel} against ${xLabel}`
   const desc = spec.footer ?? `${(spec.points ?? []).length} points plotted`
 
@@ -237,8 +320,10 @@ function frame(spec: ChartSpec): ChartFrame {
     )
   }
   if (spec.footer) {
+    // `class="footer"` so the window can rewrite this one line when it appends a point without a
+    // redraw: the count in it is the honest n, and it may not fall behind the marks.
     parts.push(
-      `<text x="${LEFT}" y="${footerY}" font-family="${NUMBERS}" font-size="10.5" fill="${MUTED}" style="font-variant-numeric:tabular-nums">${escapeXml(spec.footer)}</text>`,
+      `<text class="footer" x="${LEFT}" y="${footerY}" font-family="${NUMBERS}" font-size="10.5" fill="${MUTED}" style="font-variant-numeric:tabular-nums">${escapeXml(spec.footer)}</text>`,
     )
   }
 
@@ -316,10 +401,7 @@ function frame(spec: ChartSpec): ChartFrame {
   })
 
   for (const point of spec.points ?? []) {
-    const identity = point.id === undefined ? '' : ` data-point-id="${escapeXml(point.id)}"`
-    parts.push(
-      `<circle cx="${sx(point.x).toFixed(2)}" cy="${sy(point.y).toFixed(2)}" r="3.4" fill="${ACCENT}" stroke="${PAPER}" stroke-width="1.5"${identity}/>`,
-    )
+    parts.push(pointMark(sx, sy, point))
   }
 
   parts.push(
