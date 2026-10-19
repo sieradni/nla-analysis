@@ -71,6 +71,7 @@ const frames = [
   'app-interaction.png',
   'app-entry.png',
   'app-undo.png',
+  'app-refused.png',
 ]
 let missing = 0
 for (const frame of frames) {

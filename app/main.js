@@ -422,6 +422,28 @@ async function capture() {
     console.log('[bench] undo-state ' + (await entryState()))
     await writeFile(join(captureDir, 'app-undo.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
+
+    // A refusal, typed the way a person types a typo. The assertion that matters is not on screen:
+    // the text has to still be in the field afterwards. A rejection that also loses the number just
+    // typed is a worse bug than the rejection.
+    await focusField(0)
+    typeText('seven')
+    pressEnter()
+    for (let waited = 0; waited < 50; waited += 1) {
+      const refused = await window.webContents.executeJavaScript(
+        "!document.getElementById('entry-status').hidden",
+      )
+      if (refused) break
+      await sleep(100)
+    }
+    await sleep(300)
+    const refused = JSON.parse(await entryState())
+    console.log('[bench] refused-state ' + JSON.stringify(refused))
+    if (refused.typed.x !== 'seven') {
+      throw new Error('the refused entry did not keep what was typed')
+    }
+    await writeFile(join(captureDir, 'app-refused.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
   }
 
   const metrics = app.getAppMetrics()
