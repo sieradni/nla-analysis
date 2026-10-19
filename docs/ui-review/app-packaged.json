@@ -1,0 +1,39 @@
+{
+  "packaged": true,
+  "electron": "44.9.0",
+  "facts": {
+    "panels": 2,
+    "marks": 28,
+    "badges": [
+      "current",
+      "current"
+    ],
+    "fields": [
+      "x",
+      "y"
+    ],
+    "readout": "n = 14",
+    "title": "drift over time",
+    "empty": "none"
+  },
+  "tabDialog": {
+    "open": true,
+    "options": [
+      "plot"
+    ],
+    "note": "No recipe is offered because the analysis runtime is not available: no Python interpreter at \"python\" and none on PATH — recipes need the analysis environment"
+  },
+  "recipes": {
+    "offered": [],
+    "problem": "no Python interpreter at \"python\" and none on PATH — recipes need the analysis environment"
+  },
+  "elapsedMs": 2870,
+  "artifactBytes": 386558561,
+  "checked": [
+    "the executable started and reported app.isPackaged",
+    "it drew the project: panels and marks",
+    "the entry bar offered the shape fields",
+    "no recipe was offered and the reason named the runtime",
+    "fixtures, tests, node_modules, docs and .venv were not shipped"
+  ]
+}

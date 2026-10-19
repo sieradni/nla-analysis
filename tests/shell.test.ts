@@ -294,7 +294,9 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     await expect(api.writeView!(dir, { name: 'other', dataset: 'nope' })).rejects.toThrow(/no dataset/)
   })
 
-  it.skipIf(!analysisReady)('builds a recipe panel, and replaces a tab only when told', async () => {
+  // Three interpreter starts (catalog, build, rebuild), each ~1.5–4 s on a cold cache: the 5 s
+  // default measured the machine, not the behaviour.
+  it.skipIf(!analysisReady)('builds a recipe panel, and replaces a tab only when told', { timeout: 30_000 }, async () => {
     const api = await shell()
     const dir = await scratchProject()
     const catalog = (await api.recipes!()) as Window

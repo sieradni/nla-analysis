@@ -31,12 +31,20 @@ const startupDir = process.env.BENCH_APP_PROJECT ? resolve(process.env.BENCH_APP
 const writableDir = process.env.BENCH_CAPTURE_WRITABLE ? resolve(process.env.BENCH_CAPTURE_WRITABLE) : null
 /** `BENCH_MEASURE=<n>` drives n entries and reports keystroke → painted frame. */
 const measureRuns = process.env.BENCH_MEASURE ? Number(process.env.BENCH_MEASURE) : 0
+/**
+ * `BENCH_SMOKE=<dir>` is the packaged build's own proof: open a project, draw it, report what the
+ * build can and cannot do, write one frame, quit. It runs in the shipped executable, so the answer
+ * is about the artifact rather than about the dev checkout.
+ */
+const smokeDir = process.env.BENCH_SMOKE ? resolve(process.env.BENCH_SMOKE) : null
 /** What the next renderer boot should open: changed between the read-only and the entry frames. */
 let nextStartup = startupDir
 
 // A capture run must not write into the operator's real profile, and neither should a review run
-// leave a Chromium cache behind in it.
-if (captureDir) app.setPath('userData', resolve(here, '..', 'artifacts', 'electron-profile'))
+// leave a Chromium cache behind in it. A packaged build has no repository to write into, so the
+// proof run points this at a temporary directory instead.
+if (process.env.BENCH_USER_DATA) app.setPath('userData', resolve(process.env.BENCH_USER_DATA))
+else if (captureDir) app.setPath('userData', resolve(here, '..', 'artifacts', 'electron-profile'))
 
 let window = null
 
@@ -346,6 +354,78 @@ async function enterPoint(x, y) {
   const { timing, synthetic } = await submitEntry(x, y)
   if (synthetic) throw new Error('the capture could not type into the window (no focus)')
   return timing
+}
+
+// --- packaged smoke --------------------------------------------------------------------------
+
+/**
+ * What the shipped build has to be able to answer: it is packaged, it drew a chart from a project
+ * folder, the entry bar offers the shape's fields, and it says why no recipe is on offer.
+ */
+async function smoke() {
+  await mkdir(smokeDir, { recursive: true })
+  // One paint plus a thumbnail render; the window is offscreen, so there is no other signal.
+  await sleep(1500)
+
+  const facts = JSON.parse(await window.webContents.executeJavaScript(`(() => JSON.stringify({
+    panels: document.querySelectorAll('.panel').length,
+    marks: document.querySelectorAll('circle[data-point-id]').length,
+    badges: Array.prototype.map.call(document.querySelectorAll('.panel-strip .badge'), (b) => b.textContent),
+    fields: Array.prototype.map.call(document.querySelectorAll('#entry-fields input'), (i) => i.dataset.field),
+    readout: document.getElementById('entry-readout').textContent,
+    title: document.getElementById('view-title').textContent,
+    notice: document.getElementById('notice').hidden ? null : document.getElementById('notice').textContent,
+    empty: getComputedStyle(document.getElementById('empty')).display,
+  }))()`))
+
+  // The degradation the build has to show honestly: a recipe panel needs the analysis runtime, which
+  // this build does not carry. Ask the same catalog the dialog asks.
+  let catalog
+  try {
+    catalog = await bench.recipes()
+  } catch (error) {
+    catalog = { recipes: [], problem: error instanceof Error ? error.message : String(error) }
+  }
+
+  // The degradation has to be visible where a person would look for it, not only in the report:
+  // open the tab dialog and read what it offers and why.
+  await window.webContents.executeJavaScript("document.getElementById('new-tab').click()")
+  let dialog = { open: false, options: [], note: '' }
+  for (let waited = 0; waited < 50; waited += 1) {
+    dialog = JSON.parse(await window.webContents.executeJavaScript(`(() => {
+      const sheet = document.getElementById('tab-dialog')
+      if (!sheet.open) return JSON.stringify({ open: false, options: [], note: '' })
+      return JSON.stringify({
+        open: true,
+        options: Array.prototype.map.call(document.querySelectorAll('#tab-panel option'), (o) => o.value),
+        note: document.getElementById('tab-note').textContent,
+      })
+    })()`))
+    // Stop as soon as the catalog has arrived one way or the other.
+    if (dialog.open && (dialog.options.length > 1 || /not available/.test(dialog.note))) break
+    await sleep(100)
+  }
+  await window.webContents.executeJavaScript("document.getElementById('tab-dialog').close()")
+
+  const report = {
+    packaged: app.isPackaged,
+    electron: process.versions.electron,
+    resources: process.resourcesPath,
+    url: window.webContents.getURL(),
+    facts,
+    tabDialog: dialog,
+    recipes: { offered: catalog.recipes.map((recipe) => recipe.name), problem: catalog.problem ?? null },
+  }
+  console.log('[bench] packaged ' + JSON.stringify(report))
+  await writeFile(join(smokeDir, 'app-packaged.png'), (await window.webContents.capturePage()).toPNG())
+  await writeFile(join(smokeDir, 'packaged.json'), JSON.stringify(report, null, 2) + '\n')
+
+  const drawn = facts.panels > 0 && facts.marks > 0
+  const usable = facts.fields.length > 0
+  if (!app.isPackaged) console.error('[bench] packaged smoke: this is not a packaged build')
+  if (!drawn) console.error('[bench] packaged smoke: no chart was drawn')
+  if (!usable) console.error('[bench] packaged smoke: the entry bar offers no fields')
+  app.exit(app.isPackaged && drawn && usable ? 0 : 1)
 }
 
 // --- review capture --------------------------------------------------------------------------
@@ -878,6 +958,13 @@ async function measure() {
 }
 
 ipcMain.once('bench:ready', () => {
+  if (smokeDir) {
+    smoke().catch((error) => {
+      console.error('[bench] packaged smoke failed:', error)
+      app.exit(1)
+    })
+    return
+  }
   if (captureDir) {
     capture().catch((error) => {
       console.error('[bench] capture failed:', error)

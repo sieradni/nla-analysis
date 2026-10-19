@@ -139,6 +139,13 @@ export class RecipeRunner {
     })
     this.child = child
 
+    // A start that fails (a missing interpreter on a machine without one, a packaged build with no
+    // environment) reports through the child's `error` event; writing to that child afterwards must
+    // reject the pending request, not crash the window with an unhandled stream error.
+    child.stdin.on('error', () => {
+      this.failAll(new Error('analysis runtime is not running'))
+    })
+
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => this.consume(chunk))
 
@@ -147,14 +154,35 @@ export class RecipeRunner {
       this.stderrTail = (this.stderrTail + chunk).slice(-2000)
     })
 
+    // ENOENT here is the ordinary case on a machine that has no analysis environment — a packaged
+    // build, for instance. Saying "spawn python ENOENT" to that person is a stack trace, not an
+    // answer; the caller already knows to carry on without recipes.
+    const describeStartFailure = (error: Error): string => {
+      const missing = (error as NodeJS.ErrnoException).code === 'ENOENT'
+      return missing
+        ? `no Python interpreter at "${interpreter}" and none on PATH — recipes need the analysis environment`
+        : `analysis runtime failed to start: ${error.message}`
+    }
+
     child.on('error', (error) => {
       this.lastError = error.message
-      this.failAll(new Error(`analysis runtime failed to start: ${error.message}`))
+      this.failAll(new Error(describeStartFailure(error)))
     })
     child.on('close', (code) => {
       this.child = undefined
       const reason = this.lastError ?? this.stderrTail.trim().split('\n').at(-1) ?? `exit code ${code}`
       this.failAll(new Error(`analysis runtime exited: ${reason}`))
+    })
+
+    // Wait for the spawn to settle before returning. Otherwise the first request can race the
+    // failure and report "analysis runtime is not running", which tells a reader nothing about the
+    // missing interpreter — the message a person actually needs.
+    await new Promise<void>((resolve, reject) => {
+      child.once('spawn', () => resolve())
+      child.once('error', (error) => {
+        this.child = undefined
+        reject(new Error(describeStartFailure(error)))
+      })
     })
   }
 
@@ -198,7 +226,7 @@ export class RecipeRunner {
 
   private send(request: Record<string, unknown>): Promise<Record<string, unknown>> {
     const child = this.child
-    if (!child) return Promise.reject(new Error('analysis runtime is not running'))
+    if (!child || child.stdin.destroyed) return Promise.reject(new Error('analysis runtime is not running'))
 
     const id = typeof request.id === 'string' ? request.id : ulid()
     const message = { ...request, id }
