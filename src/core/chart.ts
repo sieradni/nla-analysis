@@ -74,8 +74,12 @@ const LEFT = 72
 const RIGHT = 26
 const BOTTOM = 62
 
-const NUMBERS = `ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, monospace`
-const LABELS = `ui-sans-serif, "Segoe UI", system-ui, sans-serif`
+// Single quotes inside these stacks, deliberately: they are interpolated into a double-quoted XML
+// attribute, and `font-family="ui-monospace, "Cascadia Mono"…"` is not well-formed XML. A browser
+// loading the file as HTML forgives that; anything parsing it as XML — a canvas loader, an image
+// pipeline, the desktop window — refuses the whole document.
+const NUMBERS = `ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace`
+const LABELS = `ui-sans-serif, 'Segoe UI', system-ui, sans-serif`
 
 function escapeXml(value: string): string {
   return value

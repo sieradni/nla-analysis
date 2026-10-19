@@ -19,6 +19,7 @@ const cli = join(process.cwd(), 'src', 'cli', 'index.ts')
 let root: string
 let project: string
 let other: string
+let benchHome: string
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'bench-workspace-'))
@@ -26,10 +27,17 @@ beforeAll(async () => {
   other = join(root, 'through-cli')
   await initProject(project, 'in-process')
   await initProject(other, 'through-cli')
+  // The last test drives the real CLI, and every CLI command records a recent. Spawned children
+  // inherit this, so a test run cannot leave scratch projects in the operator's project list — which
+  // is exactly what it did before this line existed.
+  benchHome = await mkdtemp(join(tmpdir(), 'bench-home-'))
+  process.env.BENCH_HOME = benchHome
 })
 
 afterAll(async () => {
+  delete process.env.BENCH_HOME
   await rm(root, { recursive: true, force: true })
+  await rm(benchHome, { recursive: true, force: true })
 })
 
 describe('Workspace', () => {

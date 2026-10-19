@@ -164,6 +164,32 @@ describe('renderChart', () => {
     expect(svg).toContain('a &lt; b &amp; &quot;c&quot;')
   })
 
+  it('emits well-formed XML, not merely markup an HTML parser forgives', () => {
+    const svg = renderChart({
+      ...base,
+      title: 't',
+      subtitle: 's',
+      footer: 'n = 2',
+      caption: 'a caption',
+      provenance: { dataset: 'main', shape: 'xy.v1' },
+      points: [{ x: 1, y: 2, id: 'p1' }],
+      line: [
+        { x: 1, y: 2 },
+        { x: 2, y: 3 },
+      ],
+      lines: [{ points: [{ x: 1, y: 2 }], label: 'regime' }],
+    })
+
+    // The font stacks used to contain double quotes, which closed the attribute they sat in and made
+    // the whole document unparseable as XML — the desktop window refused every chart. A browser
+    // loading it as HTML hides that, so check the property directly: every tag is a name followed by
+    // `name="value"` pairs, which is exactly what a stray quote breaks.
+    const tag = /^<\/?([a-zA-Z][\w:-]*)((?:\s+[\w:-]+="[^"]*")*)\s*\/?>$/
+    const tags = svg.match(/<[^>]+>/g) ?? []
+    expect(tags.length).toBeGreaterThan(10)
+    for (const matched of tags) expect(matched, matched).toMatch(tag)
+  })
+
   it("writes each point's identity onto the mark, so a hover has something to resolve", () => {
     const svg = renderChart({
       x: { label: 'x' },

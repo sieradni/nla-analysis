@@ -11,6 +11,7 @@
  * as a guarantee.
  */
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,8 +22,25 @@ import type { RunInput, RunResult } from './runner.ts'
 /**
  * The application's own directory: the one holding `recipes/`. Derived from this module's location
  * rather than the working directory, so it is right no matter where the command was invoked from.
+ *
+ * Found by walking up, not by counting directories. Counting works only while this file sits at
+ * `src/core/`; the desktop shell imports the *bundled* core from `app/`, where two levels up is the
+ * parent of the repository and every recipe would look missing. That bug is cheap to prevent and
+ * expensive to notice, because it reads as "the recipe was deleted" rather than "the path is wrong".
  */
-export const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+function locateAppRoot(start: string): string {
+  let current = start
+  for (;;) {
+    if (existsSync(join(current, 'recipes')) && existsSync(join(current, 'package.json'))) {
+      return current
+    }
+    const parent = dirname(current)
+    if (parent === current) return resolve(start, '..', '..')
+    current = parent
+  }
+}
+
+export const APP_ROOT = locateAppRoot(dirname(fileURLToPath(import.meta.url)))
 
 export type Freshness = 'fresh' | 'stale' | 'unverifiable'
 
