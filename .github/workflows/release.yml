@@ -1,0 +1,72 @@
+name: release
+
+# Releases are cut by pushing a version tag. `workflow_dispatch` exists so the same job can be run
+# by hand without publishing: it builds and uploads the zip as a workflow artifact, and the release
+# step is skipped because the ref is not a tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # `pnpm install` is also what puts Electron in node_modules/electron/dist. The package script
+      # copies that runtime rather than downloading one, so this step is the only place it arrives.
+      - run: pnpm install --frozen-lockfile
+
+      # Typecheck, bundle the core and CLI, and run the test suite. Tests that need the Python
+      # environment skip themselves with a warning when it is absent, which is the expected state
+      # here: the artifact ships recipes but not an interpreter.
+      - run: pnpm verify
+
+      - run: pnpm app:package
+
+      # The exe and its CLI are what the release is for, so both are exercised before anything is
+      # uploaded. `--help` needs no Python and no Node.
+      - name: Smoke the packaged CLI
+        shell: pwsh
+        run: |
+          & artifacts\bench-win32-x64\bench.cmd --help | Out-String | Write-Host
+          if ($LASTEXITCODE -ne 0) { throw "bench.cmd --help exited $LASTEXITCODE" }
+
+      - name: Zip the artifact
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zip = "bench-$tag-win32-x64.zip"
+          7z a -tzip -mx=5 $zip .\artifacts\bench-win32-x64 | Select-Object -Last 3
+          if (-not (Test-Path $zip)) { throw "7z produced no $zip" }
+          Write-Host "$zip: $([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-win32-x64
+          path: bench-*-win32-x64.zip
+          retention-days: 7
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zip = "bench-$tag-win32-x64.zip"
+          gh release create $tag $zip --title "bench $tag" --generate-notes --verify-tag
