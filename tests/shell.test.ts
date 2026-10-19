@@ -199,6 +199,58 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('14 active points')
   })
 
+  it('imports a messy file through the window door: preview, map, then one append', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const opened = (await api.openView!(dir, 'drift over time')) as Window
+    expect(opened.view.panels[1].n).toBe(14)
+    const file = join(process.cwd(), 'fixtures', 'imports', 'lab-export.csv')
+
+    const preview = (await api.importPreview!(dir, file)) as Window
+    expect(preview.columns).toEqual(['timestamp', 'temp_c', 'volts', 'note', 'operator'])
+    // The preamble lines are counted, never imported.
+    expect(preview.comments).toBe(2)
+    expect(preview.rows).toBe(5)
+    // The fixture's shape is x, y; this export names neither, so nothing is suggested.
+    expect(preview.suggested).toEqual({})
+    expect(preview.duplicate).toBe(false)
+
+    // A mapping that leaves a required field out is a refusal that names the field.
+    await expect(api.importFile!(dir, file, { x: 'temp_c' })).rejects.toThrow(/no column for the required field "y"/)
+
+    const logBefore = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+    const imported = (await api.importFile!(dir, file, { x: 'temp_c', y: 'volts' }, { viewName: 'drift over time' })) as Window
+    expect(imported.rows).toBe(5)
+    expect(imported.preserved).toMatch(/^data\/raw\/[0-9a-f]{12}-lab-export\.csv$/)
+    expect(imported.active).toBe(19)
+    // The open tab comes back redrawn, with the plot panel rebuilt and the fitted one honestly stale.
+    expect(imported.view.view.panels[1].n).toBe(19)
+    expect(imported.view.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
+
+    // What the log holds: one point per row, then the record that names the preserved original.
+    const appended = (await readFile(join(dir, 'data', 'events.jsonl'), 'utf8'))
+      .slice(logBefore.length)
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(appended.map((event: Window) => event.type)).toEqual([
+      'point_recorded',
+      'point_recorded',
+      'point_recorded',
+      'point_recorded',
+      'point_recorded',
+      'import_completed',
+    ])
+    expect(appended[0].values).toEqual({ x: 21.4, y: 3.301 })
+    expect(appended[0].t_observed).toBe('2026-01-05T09:00:00.000Z')
+    expect(appended[5]).toMatchObject({ dataset: 'main', rows: 5, file: imported.preserved })
+    // Evidence, byte for byte.
+    expect(await readFile(join(dir, imported.preserved), 'utf8')).toBe(await readFile(file, 'utf8'))
+
+    // And the same bytes twice is refused until it is asked for explicitly.
+    await expect(api.importFile!(dir, file, { x: 'temp_c', y: 'volts' })).rejects.toThrow(/already imported/)
+  })
+
   it('reloads a tab another writer moved, and reports a tab that is gone', async () => {
     const api = await shell()
     const dir = await scratchProject()

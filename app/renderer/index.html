@@ -49,7 +49,9 @@
           <div id="view-meta" class="meta" aria-label="View facts"></div>
         </header>
         <div id="notice" class="notice" hidden></div>
-        <div id="panel-grid" class="grid" style="--columns: 2"></div>
+        <!-- The column count is set from the view (app.js) and defaults in app.css; an inline style
+             here would only be blocked by the shell's own CSP. -->
+        <div id="panel-grid" class="grid"></div>
         <div id="empty" class="empty">
           <h2>Open a project</h2>
           <p>Choose a bench project folder. The window lists its saved tabs and appends points.</p>
@@ -73,6 +75,8 @@
           <button id="entry-undo" class="ghost entry-undo" type="button" disabled>
             Undo last point
           </button>
+          <!-- The other way data arrives: a file from an instrument or a spreadsheet. -->
+          <button id="import-open" class="ghost entry-import" type="button">Import…</button>
           <div id="entry-readout" class="entry-readout"></div>
           <div id="entry-status" class="entry-status" role="status" aria-live="polite" hidden></div>
         </form>
@@ -153,6 +157,34 @@
           <button id="project-create" class="entry-add" type="submit"><span>Create project</span></button>
         </div>
         <div id="project-error" class="sheet-error" role="status" hidden></div>
+      </form>
+    </dialog>
+
+    <!-- Importing is choosing which columns are which fields. The core reads and validates the whole
+         file before anything is written; this sheet shows what it found and asks only for the mapping. -->
+    <dialog id="import-dialog" class="sheet import-sheet" aria-labelledby="import-dialog-title">
+      <form id="import-form" autocomplete="off">
+        <h2 id="import-dialog-title">Import a table</h2>
+        <p class="sheet-note">
+          CSV, TSV, or JSON lines. Every row is checked against the project's shape before anything is
+          written, and the file itself is kept under <code>data/raw/</code>.
+        </p>
+        <div class="import-file">
+          <button id="import-pick" class="ghost" type="button">Choose another…</button>
+          <code id="import-path"></code>
+        </div>
+        <p id="import-summary" class="sheet-note"></p>
+        <div id="import-preview" class="import-preview"></div>
+        <div id="import-fields" class="import-fields"></div>
+        <label id="import-force-field" class="sheet-check" hidden>
+          <input id="import-force" type="checkbox" />
+          <span>Import these exact contents again</span>
+        </label>
+        <div class="sheet-actions">
+          <button id="import-cancel" class="ghost" type="button">Cancel</button>
+          <button id="import-apply" class="entry-add" type="submit" disabled><span>Import</span></button>
+        </div>
+        <div id="import-error" class="sheet-error" role="status" hidden></div>
       </form>
     </dialog>
 

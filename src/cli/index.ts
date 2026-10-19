@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
@@ -15,8 +14,7 @@ import {
   type PointRetraction,
   type RecordedPoint,
 } from '../core/workspace.ts'
-import { makeEvent } from '../core/events.ts'
-import type { BenchEvent, PointValue } from '../core/events.ts'
+import type { PointValue } from '../core/events.ts'
 import { renderChart } from '../core/chart.ts'
 import { validateValues } from '../core/shapes.ts'
 import { findProjectDir, initProject } from '../core/project.ts'
@@ -45,7 +43,7 @@ import {
 } from '../core/views.ts'
 import { RecipeRunner } from '../core/runner.ts'
 import { renderState } from '../core/state.ts'
-import { coerce, parseDelimited, parseJsonl } from '../core/table.ts'
+import { commitImport, planImport } from '../core/import.ts'
 
 /**
  * Recipes belong to the application, not to the user's project: they are the analysis library that
@@ -286,14 +284,6 @@ function shortNumber(value: unknown): string {
   return String(Number(value.toPrecision(6)))
 }
 
-const TIME_COLUMN_NAMES = ['t_observed', 'observed_at', 'timestamp', 'time', 'date', 't']
-
-function guessFormat(path: string): string {
-  const lower = path.toLowerCase()
-  if (lower.endsWith('.jsonl') || lower.endsWith('.ndjson')) return 'jsonl'
-  if (lower.endsWith('.tsv') || lower.endsWith('.tab')) return 'tsv'
-  return 'csv'
-}
 
 interface PanelOptions {
   dataset?: string
@@ -710,129 +700,57 @@ async function main(): Promise<void> {
         die(`cannot find ${file}`, EXIT_MISSING, `looked in ${candidates.map((c) => dirname(c)).join(' and ')}`)
       }
 
-      let text: string
-      try {
-        text = await readFile(source, 'utf8')
-      } catch {
-        die(`cannot read ${source}`, EXIT_MISSING)
-      }
-
-      const datasetId = workspace.resolveDataset(values.dataset)
-      const dataset = workspace.dataset(datasetId)
-      const shape = workspace.shapeOf(datasetId)
-
-      const format = (values.format ?? guessFormat(source)).toLowerCase()
-      if (!['csv', 'tsv', 'jsonl'].includes(format)) {
+      const format = values.format?.toLowerCase()
+      if (format !== undefined && !['csv', 'tsv', 'jsonl'].includes(format)) {
         die(`unknown format "${format}"`, EXIT_INVALID, 'use csv, tsv, or jsonl')
       }
-      const table = format === 'jsonl' ? parseJsonl(text) : parseDelimited(text, format === 'tsv' ? '\t' : undefined)
-      if (table.rows.length === 0) {
-        die('the file has no data rows', EXIT_INVALID, `columns found: ${table.columns.join(', ') || 'none'}`)
-      }
 
-      const requested = new Map<string, string>()
+      const mapping: Record<string, string> = {}
       for (const entry of values.map ?? []) {
         const separator = entry.indexOf('=')
         if (separator <= 0) die(`--map must look like field=column, got "${entry}"`)
-        requested.set(entry.slice(0, separator).trim(), entry.slice(separator + 1).trim())
-      }
-      const lowered = new Map(table.columns.map((column) => [column.toLowerCase(), column]))
-      const mapping = new Map<string, string>()
-      for (const field of shape.fields) {
-        const column = requested.get(field.name) ?? lowered.get(field.name.toLowerCase())
-        if (column === undefined) {
-          if (field.optional === true) continue
-          die(
-            `no column for the required field "${field.name}"`,
-            EXIT_INVALID,
-            `the file has ${table.columns.join(', ')}; use --map ${field.name}=<column>`,
-          )
-        }
-        if (!table.columns.includes(column)) {
-          die(`column "${column}" is not in the file`, EXIT_INVALID, `the file has ${table.columns.join(', ')}`)
-        }
-        mapping.set(field.name, column)
+        mapping[entry.slice(0, separator).trim()] = entry.slice(separator + 1).trim()
       }
 
-      const timeColumn =
-        values.time ?? TIME_COLUMN_NAMES.find((name) => lowered.has(name))
-
-      const errors: string[] = []
-      const warnings: string[] = []
-      const prepared: { values: Record<string, PointValue>; t: string }[] = []
-
-      table.rows.forEach((row, index) => {
-        const where = `row ${index + 2}`
-        const pointValues: Record<string, PointValue> = {}
-        for (const field of shape.fields) {
-          const column = mapping.get(field.name)
-          if (column === undefined) continue
-          // Absent cells are dropped rather than defaulted, so a gap is a gap and validation sees it.
-          const value = coerce(row[column] ?? '', field.type)
-          if (value !== null) pointValues[field.name] = value
-        }
-
-        let observed = new Date().toISOString()
-        if (timeColumn !== undefined) {
-          const raw = row[timeColumn] ?? ''
-          const milliseconds = Date.parse(raw)
-          if (raw === '' || Number.isNaN(milliseconds)) {
-            errors.push(`${where}: "${raw}" is not a parseable time`)
-            return
-          }
-          observed = new Date(milliseconds).toISOString()
-        }
-
-        const validation = validateValues(shape, pointValues)
-        if (validation.errors.length > 0) {
-          errors.push(`${where}: ${validation.errors.join('; ')}`)
-          return
-        }
-        for (const warning of validation.warnings) warnings.push(`${where}: ${warning}`)
-        prepared.push({ values: pointValues, t: observed })
-      })
-
-      if (errors.length > 0) {
-        for (const problem of errors.slice(0, 5)) process.stderr.write(`  ${problem}\n`)
-        if (errors.length > 5) process.stderr.write(`  … and ${errors.length - 5} more\n`)
-        die(`${errors.length} row(s) would not import, so none were`, EXIT_INVALID, 'fix the file, or fix the mapping')
-      }
-
-      const hash = createHash('sha256').update(text).digest('hex')
-      const existing = workspace.allEvents
-      const reimport = existing.find(
-        (event) => event.type === 'import_completed' && event.hash === hash && event.dataset === datasetId,
-      )
-      if (reimport && values.force !== true) {
-        die(
-          `these exact contents were already imported into "${datasetId}"`,
-          EXIT_INVALID,
-          'pass --force to import them a second time',
-        )
+      // One plan answers every question before anything is written; `commitImport` is the only part
+      // that touches the disk, so a refusal cannot leave half a file behind.
+      let plan
+      try {
+        plan = await planImport(workspace, source, {
+          ...(values.dataset === undefined ? {} : { dataset: values.dataset }),
+          mapping,
+          ...(values.time === undefined ? {} : { time: values.time }),
+          ...(values.force === true ? { force: true } : {}),
+          ...(format === undefined ? {} : { format: format as 'csv' | 'tsv' | 'jsonl' }),
+        })
+      } catch (error) {
+        fail(error)
       }
 
       const summary = {
-        dataset: datasetId,
-        shape: dataset.shape,
-        format,
-        rows: prepared.length,
-        columns: table.columns,
-        mapping: Object.fromEntries(mapping),
-        timeColumn: timeColumn ?? null,
-        sourceHash: hash,
-        raggedRows: table.raggedRows,
-        comments: table.comments ?? 0,
+        dataset: plan.dataset,
+        shape: plan.shape,
+        format: plan.format,
+        rows: plan.rows,
+        columns: plan.columns,
+        mapping: plan.mapping,
+        timeColumn: plan.timeColumn,
+        sourceHash: plan.sourceHash,
+        raggedRows: plan.raggedRows,
+        comments: plan.comments,
       }
 
       if (values['dry-run'] === true) {
         if (asJson) {
           process.stdout.write(
-            JSON.stringify({ ok: true, data: { ...summary, dryRun: true, sample: prepared.slice(0, 3) } }, null, 2) + '\n',
+            JSON.stringify({ ok: true, data: { ...summary, dryRun: true, sample: plan.sample } }, null, 2) + '\n',
           )
         } else {
-          process.stdout.write(`would import ${prepared.length} row(s) into ${datasetId} (${dataset.shape})\n`)
-          for (const [field, column] of mapping) process.stdout.write(`  ${field} <= ${column}\n`)
-          if (timeColumn) process.stdout.write(`  t_observed <= ${timeColumn}\n`)
+          process.stdout.write(`would import ${plan.rows} row(s) into ${plan.dataset} (${plan.shape})\n`)
+          for (const [field, column] of Object.entries(plan.mapping)) {
+            process.stdout.write(`  ${field} <= ${column}\n`)
+          }
+          if (plan.timeColumn) process.stdout.write(`  t_observed <= ${plan.timeColumn}\n`)
           process.stdout.write(`  nothing was written\n`)
         }
         return
@@ -840,53 +758,30 @@ async function main(): Promise<void> {
 
       // The original is copied before anything is recorded: an import is evidence, and the file that
       // produced it must outlive whatever is done to the working copy. It is never read again.
-      //
-      // The name is content-addressed rather than clock-stamped, so the same bytes always land at
-      // the same path: a re-import updates one file instead of piling up near-duplicates, and a
-      // project rebuilt from its own script reproduces the same tree. When it arrived is in the
-      // event's `at`, which is where a time belongs.
-      const rawName = `${hash.slice(0, 12)}-${basename(source)}`
-      await mkdir(join(workspace.dir, 'data', 'raw'), { recursive: true })
-      await copyFile(source, join(workspace.dir, 'data', 'raw', rawName))
-      const rawRef = `data/raw/${rawName}`
+      try {
+        await commitImport(workspace, plan)
+      } catch (error) {
+        fail(error)
+      }
 
-      const appended: BenchEvent[] = prepared.map((point) =>
-        makeEvent('point_recorded', workspace.session, {
-          dataset: datasetId,
-          shape: dataset.shape,
-          values: point.values,
-          t_observed: point.t,
-          tags: ['import'],
-        }),
-      )
-      appended.push(
-        makeEvent('import_completed', workspace.session, {
-          dataset: datasetId,
-          file: rawRef,
-          rows: prepared.length,
-          hash,
-          columns: table.columns,
-          mapping: Object.fromEntries(mapping),
-        }),
-      )
-      await workspace.appendAll(appended)
-      await workspace.writeStateBrief()
-
-      for (const warning of warnings.slice(0, 5)) process.stderr.write(`  warning: ${warning}\n`)
+      for (const warning of plan.warnings.slice(0, 5)) process.stderr.write(`  warning: ${warning}\n`)
       if (asJson) {
         process.stdout.write(
-          JSON.stringify({ ok: true, data: { ...summary, preserved: rawRef, warnings } }, null, 2) + '\n',
+          JSON.stringify({ ok: true, data: { ...summary, preserved: plan.preserved, warnings: plan.warnings } }, null, 2) +
+            '\n',
         )
       } else {
-        process.stdout.write(`imported ${prepared.length} row(s) into ${datasetId} from ${basename(source)}\n`)
-        process.stdout.write(`  preserved as ${rawRef}\n`)
-        for (const [field, column] of mapping) process.stdout.write(`  ${field} <= ${column}\n`)
-        if (timeColumn) process.stdout.write(`  t_observed <= ${timeColumn}\n`)
-        if (table.raggedRows > 0) {
-          process.stdout.write(`  ${table.raggedRows} row(s) had a different number of fields than the header\n`)
+        process.stdout.write(`imported ${plan.rows} row(s) into ${plan.dataset} from ${basename(source)}\n`)
+        process.stdout.write(`  preserved as ${plan.preserved}\n`)
+        for (const [field, column] of Object.entries(plan.mapping)) {
+          process.stdout.write(`  ${field} <= ${column}\n`)
         }
-        if ((table.comments ?? 0) > 0) {
-          process.stdout.write(`  ${table.comments} comment line(s) skipped\n`)
+        if (plan.timeColumn) process.stdout.write(`  t_observed <= ${plan.timeColumn}\n`)
+        if (plan.raggedRows > 0) {
+          process.stdout.write(`  ${plan.raggedRows} row(s) had a different number of fields than the header\n`)
+        }
+        if (plan.comments > 0) {
+          process.stdout.write(`  ${plan.comments} comment line(s) skipped\n`)
         }
       }
       return

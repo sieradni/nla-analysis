@@ -1,0 +1,5 @@
+# same export, one cell mistyped by hand
+timestamp,temp_c,volts
+2026-01-05T09:00:00Z,21.4,3.301
+2026-01-05T09:01:00Z,twenty-one,3.355
+2026-01-05T09:02:00Z,22.3,3.402

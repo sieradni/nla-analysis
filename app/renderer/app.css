@@ -311,6 +311,113 @@ button {
   line-height: 1.45;
 }
 
+/* --- import sheet ----------------------------------------------------------------------------
+   A table is wide and a dialog is not; the preview scrolls rather than shrinking the columns into
+   unreadable slivers. The mapping rows keep the field's declared type beside the column choice, so
+   "what will this become" is answered before the click. */
+
+.import-sheet {
+  width: 620px;
+}
+
+.import-file {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+  min-width: 0;
+}
+
+.import-file code {
+  font-family: var(--font-num);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-preview {
+  max-height: 172px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: var(--s3);
+}
+
+.import-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-num);
+  font-size: var(--text-xs);
+}
+
+.import-preview th,
+.import-preview td {
+  padding: 3px var(--s2);
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+
+.import-preview th {
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.import-preview tr:last-child td {
+  border-bottom: 0;
+}
+
+.import-fields {
+  display: grid;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+}
+
+.import-field {
+  display: grid;
+  grid-template-columns: 64px 92px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.import-field-name {
+  font-family: var(--font-num);
+  color: var(--ink);
+}
+
+.import-field-type {
+  font-family: var(--font-num);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.import-field select {
+  padding: 5px var(--s2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--text-md);
+}
+
+.import-field select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.import-sheet .sheet-error p {
+  margin: 0 0 var(--s1);
+}
+
 .rail-foot {
   padding: var(--s2) var(--s4) var(--s3);
   border-top: 1px solid var(--line);
@@ -627,10 +734,10 @@ button {
 
 .entry {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   grid-template-areas:
-    "fields add undo"
-    "status status readout";
+    "fields add undo import"
+    "status status readout readout";
   align-items: center;
   gap: var(--s2) var(--s3);
   padding: var(--s3) var(--s5) var(--s3);
@@ -640,9 +747,15 @@ button {
 
 .entry.correcting {
   grid-template-areas:
-    "correct correct correct"
-    "fields add undo"
-    "status status readout";
+    "correct correct correct correct"
+    "fields add undo import"
+    "status status readout readout";
+}
+
+.entry-import {
+  grid-area: import;
+  padding: 5px var(--s3);
+  font-size: var(--text-sm);
 }
 
 /* The correction row reuses the entry fields: one refusal path, one place numbers are typed. */

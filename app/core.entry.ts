@@ -29,6 +29,8 @@ import { SHAPE_FIELD_TYPES } from '../src/core/shapes.ts'
 import { listProjects, rememberProject } from '../src/core/registry.ts'
 import type { KnownProject } from '../src/core/registry.ts'
 import { RecipeRunner } from '../src/core/runner.ts'
+import { commitImport, planImport, previewImport as planPreview } from '../src/core/import.ts'
+import type { ImportPreview } from '../src/core/import.ts'
 import { sameStamp } from '../src/core/log.ts'
 import type { LogStamp } from '../src/core/log.ts'
 import { BenchError, Workspace } from '../src/core/workspace.ts'
@@ -668,6 +670,54 @@ export async function refreshView(
     counts: view.panels.map((panel) => (typeof panel.n === 'number' ? panel.n : 0)),
     footers: view.panels.map((panel) => panel.chart.footer ?? null),
     reread,
+  }
+}
+
+/**
+ * What the import dialog shows before a mapping is chosen: the file's columns and a sample, the
+ * shape's fields, the columns whose names already match them, and whether these exact bytes have
+ * been in before. Read-only.
+ */
+export async function importPreview(dir: string, file: string): Promise<ImportPreview> {
+  return planPreview(await workspaceFor(dir), file)
+}
+
+export interface ImportedTable {
+  dataset: string
+  rows: number
+  /** The original, preserved under data/raw/ before any point was written. */
+  preserved: string
+  warnings: string[]
+  active: number
+  /** The open tab, rebuilt and redrawn; null when the project has no tab on screen. */
+  view: RefreshedView | null
+}
+
+/**
+ * Import a table through the same plan-and-commit path as `bench import`. The mapping is the
+ * dialog's one decision; everything else — the format, which cell is a number, which row is bad — is
+ * the core's, so the window and the CLI refuse in the same words.
+ */
+export async function importFile(
+  dir: string,
+  file: string,
+  mapping: Record<string, string>,
+  options: { force?: boolean; time?: string; viewName?: string } = {},
+): Promise<ImportedTable> {
+  const workspace = await workspaceFor(dir)
+  const plan = await planImport(workspace, file, {
+    mapping,
+    ...(options.force === true ? { force: true } : {}),
+    ...(options.time === undefined ? {} : { time: options.time }),
+  })
+  await commitImport(workspace, plan)
+  return {
+    dataset: plan.dataset,
+    rows: plan.rows,
+    preserved: plan.preserved,
+    warnings: plan.warnings,
+    active: workspace.dataset(plan.dataset).points.length,
+    view: options.viewName === undefined ? null : await refreshView(dir, options.viewName, { draw: true }),
   }
 }
 

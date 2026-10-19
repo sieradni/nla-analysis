@@ -39,6 +39,8 @@ const measureRuns = process.env.BENCH_MEASURE ? Number(process.env.BENCH_MEASURE
 const smokeDir = process.env.BENCH_SMOKE ? resolve(process.env.BENCH_SMOKE) : null
 /** What the next renderer boot should open: changed between the read-only and the entry frames. */
 let nextStartup = startupDir
+/** A file the capture run hands to the import picker, because a native dialog cannot be driven. */
+let nextPickedFile = null
 
 // A capture run must not write into the operator's real profile, and neither should a review run
 // leave a Chromium cache behind in it. A packaged build has no repository to write into, so the
@@ -218,6 +220,27 @@ ipcMain.handle('bench:createProject', (_event, parent, name, shape) =>
   guarded(() => bench.createProject(parent, name, shape)),
 )
 
+ipcMain.handle('bench:pickImportFile', async (event) => {
+  // Capture-only: the real picker is native and cannot be clicked by the harness. Every interactive
+  // run opens it, which is the path a person uses.
+  if (captureDir && nextPickedFile) {
+    const file = nextPickedFile
+    nextPickedFile = null
+    return { ok: true, value: file }
+  }
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  const result = await dialog.showOpenDialog(owner, {
+    title: 'Import a table',
+    buttonLabel: 'Preview',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Tables (CSV, TSV, JSON lines)', extensions: ['csv', 'tsv', 'tab', 'jsonl', 'ndjson'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  })
+  return { ok: true, value: result.canceled ? null : (result.filePaths[0] ?? null) }
+})
+
 ipcMain.handle('bench:pickFolder', async (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender)
   const result = await dialog.showOpenDialog(owner, {
@@ -240,6 +263,11 @@ ipcMain.handle('bench:retractPoint', (_event, dir, id, reason) =>
   guarded(() => bench.retractPoint(dir, id, reason)),
 )
 ipcMain.handle('bench:writeView', (_event, dir, draft) => guarded(() => bench.writeView(dir, draft)))
+// An import is one plan and one append: a refusal returns before anything is preserved or written.
+ipcMain.handle('bench:importPreview', (_event, dir, file) => guarded(() => bench.importPreview(dir, file)))
+ipcMain.handle('bench:importFile', (_event, dir, file, mapping, options) =>
+  guarded(() => bench.importFile(dir, file, mapping, options)),
+)
 ipcMain.handle('bench:refreshView', (_event, dir, name, options) =>
   guarded(() => bench.refreshView(dir, name, options)),
 )
@@ -387,6 +415,7 @@ async function entryState() {
       marks: document.querySelectorAll('circle[data-point-id]').length,
       panels: document.querySelectorAll('.panel').length,
       tabs: document.querySelectorAll('#tabs .item').length,
+      importClosed: !document.getElementById('import-dialog').open,
       empty: getComputedStyle(document.getElementById('empty')).display,
       emptyText: (document.getElementById('empty').textContent || '').trim(),
     })
@@ -507,7 +536,30 @@ async function smoke() {
 
 // --- review capture --------------------------------------------------------------------------
 
+/**
+ * A frame taken by the renderer, not the window compositor. `capturePage` can return the surface it
+ * last composited, which for a dialog that has just opened is the page underneath it.
+ */
+async function rendererScreenshot() {
+  const session = window.webContents.debugger
+  if (!session.isAttached()) session.attach('1.3')
+  const shot = await session.sendCommand('Page.captureScreenshot', { format: 'png', fromSurface: true })
+  return Buffer.from(shot.data, 'base64')
+}
+
 async function capture() {
+  // The renderer's own errors, so a script that throws says why instead of just "failed to execute".
+  // Content-Security-Policy violations are counted rather than printed: the core's chart markup sets
+  // `font-variant-numeric` as an inline style, which the shell's `style-src 'self'` blocks, so every
+  // axis label reports one and a stack of them buries whatever else the renderer said.
+  let cspViolations = 0
+  window.webContents.on('console-message', (_event, level, message) => {
+    if (/Content Security Policy/.test(message)) {
+      cspViolations += 1
+      return
+    }
+    if (level >= 2) console.log(`[renderer] ${message}`)
+  })
   await mkdir(captureDir, { recursive: true })
   const paintedMs = Date.now() - startedAt
   const factors = [
@@ -1069,8 +1121,232 @@ async function capture() {
     if (!/n = 15/.test(gone.readout || '')) throw new Error(`the bar lost its target: "${gone.readout}"`)
     await writeFile(join(captureDir, 'app-tab-gone.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
+
+    // Importing from the window. The file is the deliberately messy fixture: two comment lines, extra
+    // columns, a blank row, and quoted commas. It is copied first, because the capture proves the
+    // preserved original is byte-identical to what was chosen.
+    const importProject = join(dirname(writableDir), 'import-fixture')
+    await cp(startupDir, importProject, { recursive: true })
+    const messySource = join(here, '..', 'fixtures', 'imports', 'lab-export.csv')
+    const messyFile = join(dirname(importProject), 'lab-export.csv')
+    await cp(messySource, messyFile)
+    nextStartup = importProject
+    nextPickedFile = messyFile
+    window.webContents.reload()
+    await new Promise((done) => ipcMain.once('bench:ready', done))
+    if (!(await focusWindowForInput())) throw new Error('the window never took focus for the import frame')
+    await sleep(700)
+
+    const importBefore = JSON.parse(await entryState())
+    // How many events the project already had, so the assertions below read only this import's rows.
+    importBefore.events = (await readFile(join(importProject, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n').length
+    await window.webContents.executeJavaScript("document.getElementById('import-open').click()")
+    for (let waited = 0; waited < 60; waited += 1) {
+      const ready = await window.webContents.executeJavaScript(
+        "(() => { const d = document.getElementById('import-dialog'); return d.open && document.querySelectorAll('#import-fields select').length === 2 })()",
+      )
+      if (ready) break
+      await sleep(100)
+    }
+    const importSheet = await window.webContents.executeJavaScript(`(() => JSON.stringify({
+      open: document.getElementById('import-dialog').open,
+      path: document.getElementById('import-path').textContent,
+      summary: document.getElementById('import-summary').textContent,
+      headers: Array.prototype.map.call(document.querySelectorAll('#import-preview th'), (th) => th.textContent),
+      rows: document.querySelectorAll('#import-preview tbody tr').length,
+      fields: Array.prototype.map.call(document.querySelectorAll('#import-fields select'), (select) => select.dataset.field),
+      mapped: Array.prototype.map.call(document.querySelectorAll('#import-fields select'), (select) => select.value),
+      apply: !document.getElementById('import-apply').disabled,
+    }))()`)
+    const sheetState = JSON.parse(importSheet)
+    console.log('[bench] import-dialog ' + importSheet)
+    if (!sheetState.open || !sheetState.apply) throw new Error('the import sheet did not open with a preview')
+    if (!/lab-export\.csv$/.test(sheetState.path)) throw new Error('the sheet names the wrong file: ' + sheetState.path)
+    if (!/5 row\(s\)/.test(sheetState.summary) || !/2 comment line\(s\) skipped/.test(sheetState.summary)) {
+      throw new Error('the sheet does not report what the core read: ' + sheetState.summary)
+    }
+    if (!/map a column onto x, y/.test(sheetState.summary)) {
+      throw new Error('the sheet did not name the fields that need a column: ' + sheetState.summary)
+    }
+    if (sheetState.headers.join(',') !== 'timestamp,temp_c,volts,note,operator') {
+      throw new Error('the preview headers are wrong: ' + sheetState.headers.join(','))
+    }
+
+    // Nothing is mapped yet, so the first click is a refusal, not a write.
+    await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
+    for (let waited = 0; waited < 40; waited += 1) {
+      const refused = await window.webContents.executeJavaScript(
+        "(() => { const e = document.getElementById('import-error'); return e.hidden ? null : e.textContent })()",
+      )
+      if (refused) break
+      await sleep(100)
+    }
+    const importRefusal = await window.webContents.executeJavaScript(
+      "(() => { const e = document.getElementById('import-error'); return JSON.stringify({ hidden: e.hidden, text: e.textContent }) })()",
+    )
+    console.log('[bench] import-refused ' + importRefusal)
+    const refusal = JSON.parse(importRefusal)
+    if (refusal.hidden || !/no column for the required field/.test(refusal.text)) {
+      throw new Error('the unmapped import was not refused in the sheet')
+    }
+
+    // Map the two required fields the way a person would: pick each column, then import.
+    await window.webContents.executeJavaScript(`(() => {
+      const set = (field, column) => {
+        const select = document.querySelector('#import-fields select[data-field="' + field + '"]')
+        select.value = column
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      set('x', 'temp_c')
+      set('y', 'volts')
+      return true
+    })()`)
+    await sleep(200)
+    const mapped = await window.webContents.executeJavaScript(`(() => JSON.stringify({
+      mapped: Array.prototype.map.call(document.querySelectorAll('#import-fields select'), (select) => select.value),
+      error: document.getElementById('import-error').hidden ? null : document.getElementById('import-error').textContent,
+    }))()`)
+    console.log('[bench] import-mapped ' + mapped)
+    if (JSON.parse(mapped).mapped.join(',') !== 'temp_c,volts') {
+      throw new Error('the mapping selects did not take: ' + mapped)
+    }
+    if (JSON.parse(mapped).error !== null) {
+      throw new Error('the refusal stayed on screen after the mapping changed: ' + mapped)
+    }
+
+    // The frame the verdict is about: the sheet with a real mapping on it, before anything is
+    // written. Captured after the import the dialog is gone, which is a screenshot of the wrong state.
+    // `capturePage` reads the window's compositor, which can hand back its previous surface when a
+    // modal sheet opens; the renderer's own screenshot is the page as it is now.
+    await writeFile(join(captureDir, 'app-import.png'), await rendererScreenshot())
+    frames += 1
+
+    await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Imported 5 row/.test(state.status || '')) break
+      const failed = await window.webContents.executeJavaScript(
+        "(() => { const e = document.getElementById('import-error'); return e.hidden ? null : e.textContent })()",
+      )
+      if (failed) throw new Error('the import was refused: ' + failed)
+      await sleep(100)
+    }
+    await sleep(500)
+    const importedState = JSON.parse(await entryState())
+    const importLog = (await readFile(join(importProject, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    // Only what this import appended: the fixture itself was built with an import of its own.
+    const appended = importLog.slice(importBefore.events)
+    const recorded = appended.filter((event) => event.type === 'import_completed')
+    const importedPoints = appended.filter((event) => event.type === 'point_recorded')
+    const preserved = recorded[0] ? recorded[0].file : null
+    const preservedText = preserved ? await readFile(join(importProject, preserved), 'utf8') : ''
+    const chosenText = await readFile(messyFile, 'utf8')
+    console.log(
+      '[bench] imported ' +
+        JSON.stringify({
+          status: importedState.status,
+          readout: importedState.readout,
+          marks: importedState.marks,
+          before: importBefore.marks,
+          closed: importedState.importClosed,
+          points: importedPoints.length,
+          record: recorded[0]
+            ? { rows: recorded[0].rows, file: recorded[0].file, mapping: recorded[0].mapping }
+            : null,
+          first: importedPoints[0] ? importedPoints[0].values : null,
+          identical: preservedText === chosenText,
+        }),
+    )
+    if (!/^Imported 5 row\(s\) into main from lab-export\.csv/.test(importedState.status || '')) {
+      throw new Error('the bar did not report the import: ' + importedState.status)
+    }
+    if (!importedState.importClosed) throw new Error('the import sheet stayed open after a successful import')
+    if (!/n = 19/.test(importedState.readout || '')) {
+      throw new Error(`the bar should read n = 19, it reads "${importedState.readout}"`)
+    }
+    if (importedState.marks !== importBefore.marks + 5) {
+      throw new Error(`the drawing should gain 5 marks: ${importBefore.marks} -> ${importedState.marks}`)
+    }
+    if (importedPoints.length !== 5 || recorded.length !== 1) {
+      throw new Error(`the log holds ${importedPoints.length} imported points and ${recorded.length} records`)
+    }
+    if (!preserved || preservedText !== chosenText) {
+      throw new Error('the preserved original is not the file that was chosen')
+    }
+    if (!/^data\/raw\//.test(preserved)) throw new Error('the original was not kept under data/raw: ' + preserved)
+    const importMapping = recorded[0].mapping || {}
+    if (importMapping.x !== 'temp_c' || importMapping.y !== 'volts') {
+      throw new Error('the log recorded a different mapping than the sheet showed: ' + JSON.stringify(importMapping))
+    }
+    if (importMapping.t_observed !== undefined) {
+      throw new Error('the log has a field the shape does not: ' + JSON.stringify(importMapping))
+    }
+    // The timestamp column was picked up by name, not mapped to a field: the first point proves it.
+    const firstImported = importedPoints[0]
+    if (!firstImported || firstImported.t_observed !== '2026-01-05T09:00:00.000Z') {
+      throw new Error('the first point did not take its time from the timestamp column: ' + JSON.stringify(firstImported))
+    }
+
+    // The other refusal, through the same sheet: one cell mistyped, so the whole file is refused and
+    // the log is left exactly as the good import left it.
+    const badFile = join(dirname(importProject), 'lab-export-bad-row.csv')
+    await cp(join(here, '..', 'fixtures', 'imports', 'lab-export-bad-row.csv'), badFile)
+    nextPickedFile = badFile
+    await window.webContents.executeJavaScript("document.getElementById('import-open').click()")
+    for (let waited = 0; waited < 60; waited += 1) {
+      const ready = await window.webContents.executeJavaScript(
+        "(() => document.getElementById('import-dialog').open && /lab-export-bad-row\\.csv$/.test(document.getElementById('import-path').textContent) && document.querySelectorAll('#import-fields select').length === 2)()",
+      )
+      if (ready) break
+      await sleep(100)
+    }
+    await window.webContents.executeJavaScript(`(() => {
+      const set = (field, column) => {
+        const select = document.querySelector('#import-fields select[data-field="' + field + '"]')
+        select.value = column
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      set('x', 'temp_c')
+      set('y', 'volts')
+      document.getElementById('import-apply').click()
+      return true
+    })()`)
+    for (let waited = 0; waited < 60; waited += 1) {
+      const shown = await window.webContents.executeJavaScript(
+        "(() => { const e = document.getElementById('import-error'); return e.hidden ? null : e.textContent })()",
+      )
+      if (shown) break
+      await sleep(100)
+    }
+    const badRow = await window.webContents.executeJavaScript(`(() => JSON.stringify({
+      error: document.getElementById('import-error').hidden ? null : document.getElementById('import-error').textContent,
+      open: document.getElementById('import-dialog').open,
+      status: document.getElementById('entry-status').textContent,
+    }))()`)
+    console.log('[bench] import-bad-row ' + badRow)
+    const badRowState = JSON.parse(badRow)
+    if (!/row 3/.test(badRowState.error || '') || !/twenty-one/.test(badRowState.error || '')) {
+      throw new Error('the bad row was not named in the sheet: ' + badRow)
+    }
+    if (!/so none were/.test(badRowState.error || '')) {
+      throw new Error('the refusal does not say the whole file was refused: ' + badRow)
+    }
+    if (!badRowState.open) throw new Error('the sheet closed on a refusal, taking the mapping with it')
+    const afterRefusal = JSON.parse(await entryState())
+    const logAfterRefusal = (await readFile(join(importProject, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n')
+    if (afterRefusal.marks !== importedState.marks) {
+      throw new Error(`the refused file changed the drawing: ${importedState.marks} -> ${afterRefusal.marks}`)
+    }
+    if (logAfterRefusal.length !== importLog.length) {
+      throw new Error(`the refused file appended ${logAfterRefusal.length - importLog.length} event(s)`)
+    }
+    await window.webContents.executeJavaScript("document.getElementById('import-cancel').click()")
   }
 
+  if (cspViolations > 0) console.log(`[bench] csp-inline-style-blocked=${cspViolations}`)
   const metrics = app.getAppMetrics()
   const memory = metrics.reduce((sum, metric) => sum + (metric.memory?.workingSetSize ?? 0), 0)
   console.log(

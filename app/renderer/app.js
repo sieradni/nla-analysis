@@ -41,6 +41,10 @@
     // The `dir\0name` the main process is watching, so the same tab is not re-registered on every
     // repaint. `null` means nothing is being watched.
     watching: null,
+    // The import sheet: the file on disk, the core's read of it, and whether a write is in flight.
+    importFile: null,
+    importPreview: null,
+    importBusy: false,
   }
   var settled = false
 
@@ -86,6 +90,19 @@
     tabError: document.getElementById('tab-error'),
     tabCreate: document.getElementById('tab-create'),
     tabCancel: document.getElementById('tab-cancel'),
+    importOpen: document.getElementById('import-open'),
+    importDialog: document.getElementById('import-dialog'),
+    importForm: document.getElementById('import-form'),
+    importPick: document.getElementById('import-pick'),
+    importPath: document.getElementById('import-path'),
+    importSummary: document.getElementById('import-summary'),
+    importPreview: document.getElementById('import-preview'),
+    importFields: document.getElementById('import-fields'),
+    importForce: document.getElementById('import-force'),
+    importForceField: document.getElementById('import-force-field'),
+    importApply: document.getElementById('import-apply'),
+    importCancel: document.getElementById('import-cancel'),
+    importError: document.getElementById('import-error'),
     newProject: document.getElementById('new-project'),
     projectDialog: document.getElementById('project-dialog'),
     projectForm: document.getElementById('project-form'),
@@ -1205,6 +1222,189 @@
     if (!taken) ui.tabReplace.checked = false
   }
 
+  // --- import ---------------------------------------------------------------------------------
+
+  function fileBase(path) {
+    return String(path || '').split(/[\\/]/).pop() || path
+  }
+
+  /** A refusal from the core, in the words the CLI would use, inside the sheet that asked. */
+  function showImportError(error) {
+    ui.importError.hidden = false
+    ui.importError.textContent = ''
+    ui.importError.appendChild(node('p', null, (error && error.message) || String(error)))
+    if (error && error.hint) ui.importError.appendChild(node('p', null, error.hint))
+    ;((error && error.problems) || []).forEach(function (problem) {
+      ui.importError.appendChild(node('p', null, problem))
+    })
+  }
+
+  /**
+   * What the core read, before any mapping is promised: the columns, a sample with the values as
+   * they appear in the file, and one row per shape field with the type it will be validated as.
+   */
+  function renderImportPreview(preview) {
+    var notes = [
+      preview.rows + ' row(s)',
+      preview.columns.length + ' column(s)',
+      'into ' + preview.dataset + ' (' + preview.shape + ')',
+    ]
+    if (preview.comments > 0) notes.push(preview.comments + ' comment line(s) skipped')
+    if (preview.raggedRows > 0) notes.push(preview.raggedRows + ' row(s) with a different field count')
+    if (preview.duplicate) notes.push('these exact contents are already in this dataset')
+    var unmapped = preview.fields
+      .filter(function (field) {
+        return !field.optional && !preview.suggested[field.name]
+      })
+      .map(function (field) {
+        return field.name
+      })
+    if (unmapped.length > 0) notes.push('map a column onto ' + unmapped.join(', '))
+    ui.importSummary.textContent = notes.join(' · ')
+
+    ui.importPreview.textContent = ''
+    var table = document.createElement('table')
+    var head = document.createElement('thead')
+    var headRow = document.createElement('tr')
+    preview.columns.forEach(function (column) {
+      headRow.appendChild(node('th', null, column))
+    })
+    head.appendChild(headRow)
+    table.appendChild(head)
+    var body = document.createElement('tbody')
+    preview.sample.forEach(function (row) {
+      var line = document.createElement('tr')
+      preview.columns.forEach(function (column) {
+        line.appendChild(node('td', null, row[column] === '' ? '—' : row[column]))
+      })
+      body.appendChild(line)
+    })
+    table.appendChild(body)
+    ui.importPreview.appendChild(table)
+
+    ui.importFields.textContent = ''
+    preview.fields.forEach(function (field) {
+      var label = node('label', 'import-field')
+      label.appendChild(node('span', 'import-field-name', field.name))
+      label.appendChild(node('span', 'import-field-type', field.type + (field.optional ? ' · optional' : '')))
+      var select = document.createElement('select')
+      select.dataset.field = field.name
+      select.setAttribute('aria-label', field.name + ' · ' + field.type)
+      var none = node('option', null, '— not imported')
+      none.value = ''
+      select.appendChild(none)
+      preview.columns.forEach(function (column) {
+        var option = node('option', null, column)
+        option.value = column
+        select.appendChild(option)
+      })
+      select.value = preview.suggested[field.name] || ''
+      label.appendChild(select)
+      ui.importFields.appendChild(label)
+    })
+
+    // Only a file whose exact bytes are already in the log gets the second door.
+    ui.importForceField.hidden = !preview.duplicate
+    ui.importForce.checked = false
+  }
+
+  async function openImportDialog() {
+    if (!state.project || state.busy || state.importBusy) return
+    var file
+    try {
+      file = await call(bridge.pickImportFile())
+    } catch (error) {
+      showFailure('Could not open the file picker', error)
+      return
+    }
+    if (!file) return
+    await loadImportFile(file)
+  }
+
+  async function loadImportFile(file) {
+    state.importFile = file
+    state.importPreview = null
+    ui.importPath.textContent = file
+    ui.importPath.title = file
+    ui.importSummary.textContent = 'Reading ' + fileBase(file) + '…'
+    ui.importPreview.textContent = ''
+    ui.importFields.textContent = ''
+    ui.importForceField.hidden = true
+    ui.importError.hidden = true
+    ui.importApply.disabled = true
+    if (!ui.importDialog.open) ui.importDialog.showModal()
+
+    try {
+      var preview = await call(bridge.importPreview(state.project.dir, file))
+      state.importPreview = preview
+      renderImportPreview(preview)
+      ui.importApply.disabled = false
+      var first = ui.importFields.querySelector('select')
+      if (first) first.focus()
+    } catch (error) {
+      ui.importSummary.textContent = ''
+      showImportError(error)
+    }
+  }
+
+  async function submitImport(event) {
+    event.preventDefault()
+    var preview = state.importPreview
+    if (!preview || !state.importFile || state.importBusy) return
+
+    var mapping = {}
+    ;(ui.importFields.querySelectorAll('select') || []).forEach(function (select) {
+      if (select.value === '') return
+      mapping[select.dataset.field] = select.value
+    })
+
+    state.importBusy = true
+    state.busy = true
+    ui.importApply.disabled = true
+    ui.importError.hidden = true
+    try {
+      var imported = await call(
+        bridge.importFile(state.project.dir, state.importFile, mapping, {
+          force: ui.importForce.checked,
+          viewName: state.view ? state.view.name : undefined,
+        }),
+      )
+      ui.importDialog.close()
+      if (imported.view) {
+        state.opened = imported.view
+        state.view = imported.view.view
+        if (state.projectEntry && imported.view.entry) state.projectEntry.active = imported.view.entry.active
+        renderTabs()
+        renderView(captureRestore())
+      } else {
+        if (state.projectEntry) state.projectEntry.active = imported.active
+        renderEntry()
+      }
+      state.datasets.forEach(function (dataset) {
+        if (dataset.id === imported.dataset) dataset.active = imported.active
+      })
+      var note =
+        'Imported ' +
+        imported.rows +
+        ' row(s) into ' +
+        imported.dataset +
+        ' from ' +
+        fileBase(state.importFile) +
+        '. The original is preserved at ' +
+        imported.preserved +
+        '.'
+      if (imported.warnings.length > 0) note += ' warning: ' + imported.warnings[0]
+      setStatus('ok', note)
+      focusFirstField()
+    } catch (error) {
+      ui.importApply.disabled = false
+      showImportError(error)
+    } finally {
+      state.importBusy = false
+      state.busy = false
+    }
+  }
+
   // --- projects -------------------------------------------------------------------------------
 
   /** One row of the custom-shape editor: a name, a type the core declared, and a way to drop it. */
@@ -1418,6 +1618,17 @@
       ui.tabDialog.close()
     })
     ui.tabName.addEventListener('input', syncTabReplace)
+    ui.importOpen.addEventListener('click', openImportDialog)
+    ui.importPick.addEventListener('click', openImportDialog)
+    ui.importForm.addEventListener('submit', submitImport)
+    // A refusal belongs to the mapping that produced it; choosing a column clears it rather than
+    // leaving an error about a mapping the user has already changed.
+    ui.importFields.addEventListener('change', function () {
+      ui.importError.hidden = true
+    })
+    ui.importCancel.addEventListener('click', function () {
+      ui.importDialog.close()
+    })
 
     ui.toggleMissing.addEventListener('click', function () {
       state.showMissing = !state.showMissing

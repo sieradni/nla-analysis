@@ -1,0 +1,3 @@
+# the same export, as one JSON object per line
+{"timestamp":"2026-01-05T09:05:00Z","temp_c":22.8,"volts":3.42,"note":"json, quoted"}
+{"timestamp":"2026-01-05T09:06:00Z","temp_c":23.0,"volts":3.43}

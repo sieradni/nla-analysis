@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('bench', {
   views: (dir) => ipcRenderer.invoke('bench:views', dir),
   view: (dir, name) => ipcRenderer.invoke('bench:view', dir, name),
   pickProject: () => ipcRenderer.invoke('bench:pickProject'),
+  // imports: the picker, the read-only preview, and the one call that writes points and the record
+  pickImportFile: () => ipcRenderer.invoke('bench:pickImportFile'),
+  importPreview: (dir, file) => ipcRenderer.invoke('bench:importPreview', dir, file),
+  importFile: (dir, file, mapping, options) => ipcRenderer.invoke('bench:importFile', dir, file, mapping, options),
   point: (dir, id, viewName) => ipcRenderer.invoke('bench:point', dir, id, viewName),
   recipes: () => ipcRenderer.invoke('bench:recipes'),
   shapeChoice: () => ipcRenderer.invoke('bench:shapeChoice'),
