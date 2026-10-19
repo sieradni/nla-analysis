@@ -549,8 +549,11 @@ async function main(): Promise<void> {
         title: handle.config.name,
         subtitle: `${datasetId} · ${recipeName}`,
         ...(footer === '' ? {} : { footer }),
-        // The artifact carries its own conclusion: the terminal scrollback is not durable.
-        ...(result.narrative === '' ? {} : { caption: result.narrative }),
+        // The artifact carries its own conclusion: the terminal scrollback is not durable. Recipes
+        // may supply a shorter form for the canvas; the full argument stays in the log.
+        ...((result.caption ?? result.narrative) === ''
+          ? {}
+          : { caption: result.caption ?? result.narrative }),
       }
 
       // The log stores a project-relative path: an absolute one would bake this machine's layout -

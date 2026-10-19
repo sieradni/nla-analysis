@@ -8,6 +8,17 @@ export interface Axis {
   unit?: string
 }
 
+/**
+ * One fitted line, with an optional label. `muted` marks a secondary regime: same hue, lighter and
+ * dashed, because the palette has exactly one emphasis colour and a second one would be a lie about
+ * which part of the picture matters.
+ */
+export interface ChartSeries {
+  points: { x: number; y: number }[]
+  label?: string
+  muted?: boolean
+}
+
 export interface ChartSpec {
   title?: string
   subtitle?: string
@@ -15,6 +26,8 @@ export interface ChartSpec {
   y: Axis
   points?: { x: number; y: number; label?: string }[]
   line?: { x: number; y: number }[]
+  /** Several fitted lines at once, e.g. one per time regime. */
+  lines?: ChartSeries[]
   /** Half-width interval around the line, sampled at the same x as `line`. */
   band?: { x: number; y0: number; y1: number }[]
   /** Evidence line, e.g. "n = 14 · 2 parameters · DOF 12 · tentative". Always shown when present. */
@@ -135,6 +148,12 @@ export function renderChart(spec: ChartSpec): string {
     xs.push(b.x)
     ys.push(b.y0, b.y1)
   }
+  for (const series of spec.lines ?? []) {
+    for (const p of series.points) {
+      xs.push(p.x)
+      ys.push(p.y)
+    }
+  }
 
   const [x0, x1] = domain(xs)
   const [y0, y1] = domain(ys)
@@ -217,6 +236,48 @@ export function renderChart(spec: ChartSpec): string {
       `<path d="M${path}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`,
     )
   }
+
+  for (const series of spec.lines ?? []) {
+    if (series.points.length < 2) continue
+    const path = series.points.map((p) => `${sx(p.x).toFixed(2)},${sy(p.y).toFixed(2)}`).join(' L')
+    const style = series.muted
+      ? `stroke="${ACCENT}" stroke-opacity="0.55" stroke-dasharray="6 4"`
+      : `stroke="${ACCENT}"`
+    parts.push(
+      `<path d="M${path}" fill="none" ${style} stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`,
+    )
+  }
+
+  // Legend, right-aligned inside the plot. Only for series that were actually drawn and named:
+  // an entry for something invisible would be a key to nothing.
+  const named = (spec.lines ?? []).filter(
+    (series) => series.points.length > 1 && typeof series.label === 'string' && series.label !== '',
+  ).slice(0, 3)
+
+  if (named.length > 0) {
+    // The legend sits over the data, so it needs a plate behind it; a label crossing a line is
+    // unreadable and looks like a rendering fault.
+    const labels = named.map((series) => series.label as string)
+    const widest = Math.max(...labels.map((label) => label.length)) * 5.6 + 30
+    const plateRight = LEFT + plotW - 8
+    parts.push(
+      `<rect x="${(plateRight - widest).toFixed(2)}" y="${(top + 3).toFixed(2)}" width="${widest.toFixed(2)}" height="${(named.length * 15 + 6).toFixed(2)}" rx="3" fill="${PAPER}" fill-opacity="0.96" stroke="${GRID}" stroke-width="1"/>`,
+    )
+  }
+
+  named.forEach((series, index) => {
+    const label = series.label as string
+    const y = top + 15 + index * 15
+    const rightEdge = LEFT + plotW - 8
+    const swatchEnd = rightEdge - label.length * 5.6 - 8
+    const style = series.muted
+      ? `stroke="${ACCENT}" stroke-opacity="0.55" stroke-dasharray="6 4"`
+      : `stroke="${ACCENT}"`
+    parts.push(
+      `<line x1="${(swatchEnd - 18).toFixed(2)}" y1="${(y - 4).toFixed(2)}" x2="${swatchEnd.toFixed(2)}" y2="${(y - 4).toFixed(2)}" ${style} stroke-width="2" stroke-linecap="round"/>`,
+      `<text class="legend" x="${rightEdge.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="end" font-family="${NUMBERS}" font-size="10.5" fill="${MUTED}">${escapeXml(label)}</text>`,
+    )
+  })
 
   for (const point of spec.points ?? []) {
     parts.push(

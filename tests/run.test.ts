@@ -3,6 +3,30 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { coerceChartSpec, interpreterCandidates, RecipeRunner } from '../src/core/runner.ts'
 import type { RunInput } from '../src/core/runner.ts'
 
+/**
+ * A series whose relationship genuinely changes halfway through: slope 2.1 then 2.6. The point of
+ * the changepoint recipe is to find that, and of the no-change series to not invent it.
+ */
+function makeDriftInput(count: number, kind: 'change' | 'stable'): RunInput {
+  const points = Array.from({ length: count }, (_, index) => {
+    const x = 1 + (index % 5)
+    const day = String(1 + (index % 14)).padStart(2, '0')
+    const wobble = index % 2 === 0 ? 0.04 : -0.04
+    const slope = kind === 'change' && index >= count / 2 ? 2.6 : 2.1
+    const y = slope * x + 0.3 + wobble
+    return { id: `p${index}`, t: `2026-10-${day}T09:00:00.000Z`, values: { x, y } }
+  })
+  return {
+    dataset: 'synthetic',
+    shape: 'xy.v1',
+    fields: [
+      { name: 'x', type: 'number' },
+      { name: 'y', type: 'number' },
+    ],
+    points,
+  }
+}
+
 /** Synthetic series with optional tiny alternation so residuals are not exactly zero. */
 function makeInput(count: number, shape: 'linear' | 'quadratic' | 'flat' | 'exact'): RunInput {
   const points = Array.from({ length: count }, (_, index) => {
@@ -212,6 +236,87 @@ describe.skipIf(!venvPresent)('fit recipe (requires the analysis environment)', 
       expect(serialised).not.toContain('Infinity')
       expect(serialised).not.toContain('NaN')
     }
+  })
+
+  it('finds a known changepoint and recovers both slopes', async () => {
+    const outcome = await runner.run('drift', { split: 'auto', permutations: 199 }, makeDriftInput(12, 'change'))
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+
+    expect(outcome.result.verdict).toBe('supported')
+    expect(outcome.result.chart.lines).toHaveLength(2)
+    expect(outcome.result.diagnostics.test).toBe('permutation')
+
+    const segments = outcome.result.data.segments as { label: string; slope: number }[]
+    expect(segments.some((segment) => segment.label.startsWith('before'))).toBe(true)
+    const slopes = segments.map((segment) => segment.slope).sort((a, b) => a - b)
+    expect(slopes[0]).toBeCloseTo(2.1, 1)
+    expect(slopes[1]).toBeCloseTo(2.6, 1)
+  })
+
+  it('does not invent a changepoint in a stable series', async () => {
+    const outcome = await runner.run('drift', { split: 'auto', permutations: 199 }, makeDriftInput(12, 'stable'))
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+
+    expect(outcome.result.verdict).toBe('contradicted')
+    expect(outcome.result.chart.lines).toHaveLength(1)
+    expect(outcome.result.narrative).toContain('One slope describes the whole series')
+  })
+
+  it('uses the textbook test when the caller supplies the split, not a permutation', async () => {
+    const outcome = await runner.run(
+      'drift',
+      { split: '2026-10-07T00:00:00Z' },
+      makeDriftInput(12, 'change'),
+    )
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+
+    expect(outcome.result.verdict).toBe('supported')
+    expect(outcome.result.diagnostics.test).toBe('chow')
+    expect(outcome.result.diagnostics.permutations).toBe(0)
+  })
+
+  it('is deterministic, so a recorded verdict can be reproduced', async () => {
+    const first = await runner.run('drift', { split: 'auto', permutations: 199 }, makeDriftInput(10, 'change'))
+    const second = await runner.run('drift', { split: 'auto', permutations: 199 }, makeDriftInput(10, 'change'))
+    expect(first.ok && second.ok).toBe(true)
+    if (!first.ok || !second.ok) return
+    expect(first.result.diagnostics.p).toBe(second.result.diagnostics.p)
+    expect(first.result.diagnostics.split_index).toBe(second.result.diagnostics.split_index)
+    expect(first.result.diagnostics.permutation_seed).toBe(second.result.diagnostics.permutation_seed)
+  })
+
+  it('refuses when there are too few points to form two identifiable regimes', async () => {
+    const outcome = await runner.run('drift', { split: 'auto' }, makeDriftInput(4, 'change'))
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+
+    expect(outcome.result.verdict).toBe('insufficient')
+    expect(outcome.result.chart.lines).toBeUndefined()
+    expect(outcome.result.diagnostics.more_points_needed).toBeGreaterThan(0)
+  })
+
+  it('reads a split time it cannot honour as a refusal, not a crash', async () => {
+    const outcome = await runner.run(
+      'drift',
+      { split: '2030-01-01T00:00:00Z' },
+      makeDriftInput(10, 'change'),
+    )
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+
+    expect(outcome.result.verdict).toBe('insufficient')
+    expect(outcome.result.chart.lines).toBeUndefined()
+    expect(outcome.result.narrative).toContain('unidentifiable')
+  })
+
+  it('says a changepoint is not a cause', async () => {
+    const outcome = await runner.run('drift', { split: 'auto', permutations: 99 }, makeDriftInput(12, 'change'))
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.result.narrative).toContain('not why')
   })
 
   it('fails cleanly on an unknown recipe instead of throwing', async () => {

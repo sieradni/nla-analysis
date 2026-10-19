@@ -102,6 +102,44 @@ describe('renderChart', () => {
     expect(footerY).toBeGreaterThanOrEqual(subtitleY + 10)
   })
 
+  it('draws several regimes, dashing the secondary one, with a legend', () => {
+    const svg = renderChart({
+      ...base,
+      points: [
+        { x: 1, y: 2 },
+        { x: 2, y: 5 },
+      ],
+      lines: [
+        { points: [{ x: 1, y: 2 }, { x: 2, y: 4 }], label: 'before 2026-10-10' },
+        { points: [{ x: 1, y: 3 }, { x: 2, y: 5 }], label: 'after 2026-10-10', muted: true },
+      ],
+      footer: 'n = 2 · 2 regimes · tentative',
+    })
+
+    expect((svg.match(/<path /g) ?? []).length).toBe(2)
+    expect(svg).toContain('stroke-dasharray="6 4"')
+    expect(svg).toContain('class="legend"')
+    expect(svg).toContain('before 2026-10-10')
+    expect(svg).toContain('after 2026-10-10')
+
+    // One accent hue only: a second colour would claim a ranking that is not there.
+    const allowed = new Set(['#1f6feb', '#71767c', '#ffffff', '#e8eaed'])
+    const strokes = [...svg.matchAll(/stroke="(#[0-9a-f]{6})"/gi)].map((match) => match[1]!.toLowerCase())
+    expect(strokes.length).toBeGreaterThan(0)
+    for (const stroke of strokes) expect(allowed.has(stroke)).toBe(true)
+  })
+
+  it('ignores a series too short to draw, and does not name it in the legend', () => {
+    const svg = renderChart({
+      ...base,
+      points: [{ x: 1, y: 1 }],
+      lines: [{ points: [{ x: 1, y: 1 }], label: 'lonely' }],
+    })
+    expect(svg).not.toContain('<path ')
+    expect(svg).not.toContain('class="legend"')
+    expect(svg).not.toContain('lonely')
+  })
+
   it('draws the interval band before the line', () => {
     const svg = renderChart({
       ...base,

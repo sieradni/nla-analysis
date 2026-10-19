@@ -18,10 +18,11 @@ Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 | 3.1 Python runner | done | JSON over stdio, `uv`-pinned 3.13 env, id echoed, crash contained |
 | 3.2 one honest fit recipe | done | band, DOF, F test, verdict; refuses to draw when DOF ≤ 0 |
 | 3.3 cache / debounce / cancel | **not done** | every run recomputes; fine at this scale, needed for live sliders |
-| 3.4 windowed fit + changepoint | not done | the fixture data is shaped for exactly this |
+| 3.4 changepoint | done | `recipes/drift.py`: Chow test at a given split, permutation test when the data chooses the split |
 | 4.x views / import / UI | not done | deferred per ADR 0002 |
+| windowed / rolling fit | not done | the third item on the time-variation menu |
 
-Verification so far: 62 tests pass and `tsc --noEmit` is clean. `tests/cli.test.ts` runs the actual
+Verification so far: 71 tests pass and `tsc --noEmit` is clean. `tests/cli.test.ts` runs the actual
 binary, which is the only way to catch a difference between what the test runner's transpiler accepts
 and what Node's type stripping accepts — that gap hid a dead CLI behind 38 green tests once already.
 

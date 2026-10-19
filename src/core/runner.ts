@@ -53,6 +53,8 @@ export interface RunResult {
   recipeHash: string
   verdict: Verdict
   narrative: string
+  /** A short form of the conclusion, written on the chart. Falls back to the narrative. */
+  caption?: string
   chart: ChartSpec
   diagnostics: Record<string, unknown>
   data: Record<string, unknown>
@@ -243,6 +245,9 @@ export class RecipeRunner {
         recipeHash: typeof response.recipe_hash === 'string' ? response.recipe_hash : '',
         verdict: asVerdict(response.verdict),
         narrative: typeof response.narrative === 'string' ? response.narrative : '',
+        ...(typeof response.caption === 'string' && response.caption !== ''
+          ? { caption: response.caption }
+          : {}),
         chart: coerceChartSpec(response.chart),
         diagnostics: (response.diagnostics ?? {}) as Record<string, unknown>,
         data: (response.data ?? {}) as Record<string, unknown>,
@@ -332,6 +337,21 @@ export function coerceChartSpec(value: unknown): ChartSpec {
   const points = pairs(source.points, ['x', 'y'])
   const line = pairs(source.line, ['x', 'y'])
 
+  const lines: { points: { x: number; y: number }[]; label?: string; muted?: boolean }[] = []
+  if (Array.isArray(source.lines)) {
+    for (const item of source.lines) {
+      if (typeof item !== 'object' || item === null) continue
+      const record = item as Record<string, unknown>
+      const points = pairs(record.points, ['x', 'y'])
+      if (!points || points.length < 2) continue
+      lines.push({
+        points,
+        ...(typeof record.label === 'string' && record.label !== '' ? { label: record.label } : {}),
+        ...(record.muted === true ? { muted: true } : {}),
+      })
+    }
+  }
+
   return {
     x: axisOf('x'),
     y: axisOf('y'),
@@ -339,6 +359,7 @@ export function coerceChartSpec(value: unknown): ChartSpec {
     ...(typeof source.subtitle === 'string' ? { subtitle: source.subtitle } : {}),
     ...(points ? { points } : {}),
     ...(line ? { line } : {}),
+    ...(lines.length > 0 ? { lines } : {}),
     ...(band.length > 1 ? { band } : {}),
     ...(typeof source.footer === 'string' ? { footer: source.footer } : {}),
   }

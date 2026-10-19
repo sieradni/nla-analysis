@@ -150,8 +150,12 @@ nothing yet. Add a fourth point to constrain it."*
 ### Time-variation menu
 
 - **Parameter vs time** — fit in windows, plot coefficients with error bars. Clearest answer.
-- **Rolling / local fit** — window size and order as live sliders; cancellable refits.
-- **Changepoint detection** — with uncertainty on the changepoint, not a bare vertical line.
+- **Rolling / local fit** — window size and order as live sliders; cancellable refits. *Not built.*
+- **Changepoint detection** — **implemented** as `recipes/drift.py`. It splits the series in time and
+  asks whether two lines beat one. When the split is chosen from the data it reports a permutation
+  p-value, because selecting the split and then testing at it inflates significance; when the caller
+  names the split in advance it uses the textbook Chow test. It reports the split to the day, not a
+  bare vertical line, and it says explicitly that a changepoint is not a cause.
 - **Residual diagnostics** — runs test, CUSUM. Cheap; catches drift a fit masks.
 - **State-space / Kalman** — when parameters should wander smoothly.
 - **Model comparison** — AIC/BIC/LOO, so "it curves more than it used to" is measured.

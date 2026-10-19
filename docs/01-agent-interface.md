@@ -9,6 +9,8 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 |---|---|
 | `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `recipes`, `run`, `decide` | `import`, `dataset *`, `shape *`, `runs`, `rerun`, `view *`, `export` |
 
+Available recipes: `fit` (curve, band, verdict) and `drift` (does the relationship change over time).
+
 Exit codes, `--json`, `--project`, and non-interactive behavior are in place. `--dry-run` and
 `--id` (idempotent retries) are specified but not yet implemented. Everything in the tables below is
 the target contract, not a description of the current binary.

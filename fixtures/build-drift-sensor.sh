@@ -49,6 +49,12 @@ bench correct "$bad" --values '{"y":16.0}' --reason "transcription error" >/dev/
 # time-varying analysis has to answer, and why this data set is shaped the way it is.
 bench run fit --param degree=1 >/dev/null
 
+# The pooled fit above is deliberately the trap: it reports a single confident slope and hides the
+# recalibration. `drift` is what answers the actual question. Its verdict is weaker than the fit's
+# because letting the data choose the split costs a multiple-comparison penalty -- naming the date in
+# advance does not, which is exactly the difference a permutation test exists to expose.
+bench run drift --param split=auto >/dev/null
+
 bench chart >/dev/null
 bench check
 echo "fixture rebuilt at $project"

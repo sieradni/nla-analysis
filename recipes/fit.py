@@ -128,6 +128,7 @@ def _points(x: np.ndarray, y: np.ndarray) -> list[dict[str, float]]:
 def _refusal(
     *,
     narrative: str,
+    caption: str,
     x: np.ndarray,
     y: np.ndarray,
     x_axis: dict[str, str],
@@ -136,6 +137,7 @@ def _refusal(
 ) -> dict[str, Any]:
     """The honest non-answer: points and an explanation, deliberately with no curve."""
     return {
+        "caption": caption,
         "data": {"series": {"x": x.tolist(), "y": y.tolist()}, "coefficients": [], "curve_drawn": False},
         "chart": {
             "x": x_axis,
@@ -194,6 +196,10 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
                 f"Add {needed} more {_plural(needed, 'point')} before a curve means anything, or lower "
                 f"the degree to {max(0, n - 1)}."
             ),
+            caption=(
+                f"{n} {_plural(n, 'point')} cannot determine {parameters} parameters. "
+                f"Add {needed} more {_plural(needed, 'point')}, or lower the degree to {max(0, n - 1)}."
+            ),
             x=x, y=y, x_axis=x_axis, y_axis=y_axis, diagnostics=diagnostics,
         )
 
@@ -211,6 +217,10 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
                 f"{n} {_plural(n, 'point')}, {parameters} parameters, zero degrees of freedom: this fit "
                 f"is exact by construction, so it says nothing about the relationship. Add a "
                 f"{_ordinal(n + 1)} point to constrain it, or lower the degree to {max(0, n - 2)}."
+            ),
+            caption=(
+                f"Exact by construction: {n} points and {parameters} parameters. Add a "
+                f"{_ordinal(n + 1)} point, or lower the degree to {max(0, n - 2)}."
             ),
             x=x, y=y, x_axis=x_axis, y_axis=y_axis, diagnostics=diagnostics,
         )
@@ -326,7 +336,19 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         skipped_text = f"{skipped} {_plural(skipped, 'point')}"
         sentences.append(f"{skipped_text} {_plural(skipped, 'was', 'were')} skipped for missing or non-finite values.")
 
+    if constant_y:
+        caption = "Every y value is identical; there is no variation for a curve to explain."
+    elif verdict == "contradicted":
+        caption = "A mean-only model is not beaten, so these points do not support a trend of this shape."
+    else:
+        leading = coefficients[1] if degree == 1 else coefficients[degree]
+        caption = (
+            f"{leading['name']} = {leading['estimate']:.4g} "
+            f"[{leading['low']:.4g}, {leading['high']:.4g}] at {percent}%."
+        )
+
     return {
+        "caption": caption,
         "data": {
             "series": {"x": x.tolist(), "y": y.tolist(), "fitted": fitted.tolist()},
             "coefficients": coefficients,
