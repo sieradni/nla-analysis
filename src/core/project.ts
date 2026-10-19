@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { access } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { EventLog, newSession } from './log.ts'
 import { makeEvent } from './events.ts'
@@ -36,13 +37,57 @@ export const DEFAULT_SHAPE: Shape = {
   ],
 }
 
-const PROJECT_AGENTS = `# AGENTS.md
+/**
+ * A path as it should be written in a command line. Forward slashes, because a `.cmd` launched by
+ * absolute path runs from cmd, PowerShell and Git Bash alike, while a backslash path is not a
+ * command a POSIX shell can find. Windows accepts them everywhere; only the spelling is unusual.
+ */
+function commandPath(path: string): string {
+  return path.replaceAll('\\', '/')
+}
+
+/**
+ * The invocation a later session needs to reach this CLI. The packaged app does not put its CLI on
+ * PATH, and its folder can be anywhere on the machine, so the launcher is recorded by the absolute
+ * path the running process came from. A checkout records its own `pnpm` script instead. Neither
+ * branch names a path written into this source: both come from where the process actually is, so a
+ * project created by `bench init` from the artifact points at that artifact, and one created in the
+ * repository points at the repository.
+ */
+
+function launcherInvocation(): { command: string; note: string } {
+  const packaged = [join(dirname(process.execPath), 'bench.cmd'), join(APP_ROOT, 'bench.cmd')].find(
+    (candidate) => existsSync(candidate),
+  )
+  if (packaged) {
+    return {
+      command: `"${commandPath(packaged)}"`,
+      note: [
+        '`bench.cmd` sits beside `bench.exe` in the desktop app folder; `bench.exe` opens the window,',
+        "and `bench.cmd` runs this CLI through the app's own runtime. It is not on PATH, so call it",
+        'exactly like this. If the path is gone, the app folder moved — use the `bench.cmd` in its new',
+        'location.',
+      ].join('\n'),
+    }
+  }
+  return {
+    command: `pnpm -C "${commandPath(APP_ROOT)}" bench`,
+    note: [
+      `That is the CLI script of the bench checkout at \`${APP_ROOT}\`, and \`pnpm -C\` runs it from`,
+      'any folder. If `bench` is on PATH, it is the same CLI.',
+    ].join('\n'),
+  }
+}
+
+function projectAgents(dir: string): string {
+  const launcher = launcherInvocation()
+  return `# AGENTS.md
 
 This folder is a **bench data project**. The append-only event log is the truth.
 
 ## Non-negotiables
 
-1. Never edit \`data/events.jsonl\` by hand. Mutate through \`bench\`.
+1. Never edit \`data/events.jsonl\` by hand. Mutate through the CLI below.
 2. Never modify \`data/raw/\`. Imported files are evidence.
 3. Never delete a dataset version. Replacing data creates a version with a diff.
 4. Never mix observed and derived values. Fitted values stay out of datasets.
@@ -51,22 +96,22 @@ This folder is a **bench data project**. The append-only event log is the truth.
 
 ## Running bench
 
-Read and mutate this project through \`bench\`. If \`bench\` is not on PATH, the standalone app folder
-contains \`bench.cmd\` beside \`bench.exe\`; call that launcher by path and point it at this folder:
+This project's CLI is the only way to read or mutate it, and it is not on PATH. It records the
+launcher that created the project, so the next session does not have to find it:
 
-    C:\\path\\to\\bench-win32-x64\\bench.cmd --project C:\\path\\to\\this\\project state
+    ${launcher.command} --project "${commandPath(dir)}" state
 
-\`bench.exe\` is the window; \`bench.cmd\` is the CLI. Do not expect \`bench\` on PATH to resolve to the
-script when both sit in one folder.
+${launcher.note}
 
 ## After changing anything
 
-Run \`bench state\` and read the result. It is the brief the next session inherits.
+Run the \`state\` command the same way and read the result. It is the brief the next session inherits.
 
 ## Before concluding anything
 
-Run \`bench check\`. A clean log is not the same as a supported claim.
+Run the \`check\` command the same way. A clean log is not the same as a supported claim.
 `
+}
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -140,7 +185,7 @@ export async function initProject(
     version: 1,
   }
   await writeFile(join(target, PROJECT_FILE), JSON.stringify(config, null, 2) + '\n')
-  await writeFile(join(target, 'AGENTS.md'), PROJECT_AGENTS)
+  await writeFile(join(target, 'AGENTS.md'), projectAgents(target))
 
   const handle: ProjectHandle = {
     dir: target,

@@ -28,6 +28,6 @@
     "offered": [],
     "problem": "no Python interpreter at \"python\" and none on PATH — recipes need the analysis environment"
   },
-  "elapsedMs": 2145,
-  "artifactBytes": 386815624
+  "elapsedMs": 2348,
+  "artifactBytes": 386817546
 }

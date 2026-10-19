@@ -16,7 +16,7 @@
  * Usage: pnpm app:package:check     (after pnpm app:package and pnpm setup:recipes)
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { cp, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -171,6 +171,33 @@ await writeFile(
     '2026-01-04T00:00:00Z,4,10.4\n',
 )
 runCli(['init', cliProject, '--name', 'cli-demo'])
+
+// The project's own AGENTS.md is how a later session finds this CLI, so follow it literally: take
+// the launcher line the file recorded and run it from a folder that is neither the repository nor
+// the project. The shipped app is not on PATH and the file must not name a placeholder.
+const agents = await readFile(join(cliProject, 'AGENTS.md'), 'utf8')
+const recorded = agents.match(/^ {4}(.+?) --project "(.+?)" state$/m)
+if (!recorded) fail(`the generated AGENTS.md names no launcher:\n${agents}`)
+const [, recordedLauncher, recordedProject] = recorded
+if (!recordedLauncher.includes('bench.cmd')) {
+  fail(`the generated AGENTS.md names ${recordedLauncher}, not the shipped bench.cmd`)
+}
+if (recordedProject !== cliProject.replaceAll('\\', '/')) {
+  fail(`the generated AGENTS.md points at ${recordedProject}, not ${cliProject}`)
+}
+const followed = spawnSync(recorded[0].trim(), {
+  shell: true,
+  cwd: scratch,
+  env: { ...process.env, BENCH_HOME: home, PATH: systemPath },
+  encoding: 'utf8',
+  windowsHide: true,
+})
+if (followed.error) fail(`the launcher AGENTS.md names could not start: ${followed.error.message}`)
+const followedOutput = `${followed.stdout ?? ''}${followed.stderr ?? ''}`
+if (followed.status !== 0) fail(`the launcher AGENTS.md names exited ${followed.status}\n${followedOutput}`)
+if (!/# STATE/.test(followedOutput)) fail(`the launcher AGENTS.md names printed:\n${followedOutput}`)
+console.log('  cli: the project AGENTS.md names a launcher that runs from an unrelated folder')
+
 runCli(['--project', cliProject, 'import', cliCsv, '--time', 't_observed'])
 runCli(['--project', cliProject, 'view', 'new', 'cli tab', '--dataset', 'main'])
 runCli(['--project', cliProject, 'view', 'render', 'cli tab'])

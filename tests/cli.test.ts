@@ -134,6 +134,27 @@ describe('bench CLI, as executed', () => {
     expect(existsSync(join(project, 'artifacts', 'main.svg'))).toBe(true)
   })
 
+  it('records the launcher that created the project, so the next session does not have to find it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bench-agents-'))
+    try {
+      expect((await bench(['init', dir, '--name', 'agents'])).code).toBe(0)
+      const agents = await readFile(join(dir, 'AGENTS.md'), 'utf8')
+      // A placeholder is the old failure: the file named a folder that could not be located.
+      expect(agents).not.toContain('C:\\path\\to')
+      const recorded = agents.match(/^ {4}(.+?) --project "(.+?)" state$/m)
+      expect(recorded).not.toBeNull()
+      const [, command, projectDir] = recorded!
+      // Forward slashes, so the recorded line is runnable from a POSIX shell as well as cmd.
+      expect(projectDir).toBe(dir.replaceAll('\\', '/'))
+      // This run is the checkout's script, so the checkout is what it records — a real folder with the
+      // package.json that defines that script, not a guess at where the app might be.
+      expect(command).toBe(`pnpm -C "${process.cwd().replaceAll('\\', '/')}" bench`)
+      expect(existsSync(join(process.cwd(), 'package.json'))).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('finds the project from a nested working directory', async () => {
     const nested = join(project, 'data', 'raw')
     const result = await bench(['list'], nested)

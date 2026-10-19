@@ -40,6 +40,11 @@ launch with `set BENCH_APP_PROJECT=C:\path\to\project` — useful for shortcuts.
 `LAUNCH.txt` in the artifact root says the same thing, because the folder is what gets handed to
 someone.
 
+Every project records the CLI that created it in its own `AGENTS.md`: a project made from the
+artifact names this folder's `bench.cmd` by absolute path, and a project made from a checkout names
+that checkout's `pnpm bench`. A later session handed only the project folder can therefore find and
+call the CLI without being told where the app lives.
+
 ## The CLI is in the artifact
 
 `bench.cmd` beside `bench.exe` runs the **same CLI** as `pnpm bench`, bundled from `src/cli/index.ts`
@@ -99,6 +104,9 @@ same stripped environment. It fails unless:
   `recipes/runner.py` **are**;
 - the shipped CLI created a fresh project, imported a timed table, made and rendered a view, passed
   `bench check`, and reported version 1 — with no Node install and no Python;
+- that project's generated `AGENTS.md` names this artifact's `bench.cmd` by absolute path and the
+  project by its path, and the check runs that recorded line itself from a folder unrelated to both
+  the repository and the project — so the file an agent reads is the one that was proved;
 - the shipped CLI ran a **recipe-backed** `fit` and a `view new --recipe`, proving the bundled CLI
   resolves `recipes/` through the one `APP_ROOT` in `src/core/analysis.ts` rather than counting its
   way up from the bundle, using the repository's `recipes\.venv` (run `pnpm setup:recipes` first;
