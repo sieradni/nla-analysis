@@ -134,6 +134,21 @@ STATE.md            generated cold-start brief — never edit by hand
 Recipes are **app-level**, not per-project: they are the analysis library bench ships, versioned and
 pinned. A project owns data, shapes, views and decisions. Per-project recipes are a later feature.
 
+## Working on a project from this workspace
+
+A session does not need a new workspace for every project. When the user names a project, or a
+`bench` command targets one, read that project's `AGENTS.md` and `STATE.md` **before the first
+mutation**. If the project is outside this workspace and its files are not readable, run
+`bench --project <dir> state` and use its output as the brief; the project's own `AGENTS.md` names
+the launcher. This repository's `AGENTS.md` governs the application, never the project's data,
+shapes, views, or decisions. Do not infer a project's conventions from this file.
+
+This is a written rule, not a runtime gate: `bench` cannot prove that an agent read the brief. The
+failure it prevents is concrete — a wrong shape, a re-litigated decision, or a mutation against the
+wrong project — and the generated `STATE.md` is the thing that makes the rule cheap to follow.
+Opening the project folder as its own workspace is still the strongest option for a long session;
+this rule covers the convenience case where the agent stays here and reaches the project by path.
+
 ## When in doubt
 
 Prefer the change that makes the next session easier to start. Prefer a visible limitation over a
