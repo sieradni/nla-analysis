@@ -131,6 +131,31 @@ describe('coerceChartSpec', () => {
     expect(spec.x).toEqual({ label: 'time', unit: 's' })
     expect(spec.y).toEqual({ label: 'temp', unit: 'C' })
   })
+
+  it('keeps the identity a recipe puts on a point', () => {
+    const spec = coerceChartSpec({
+      points: [
+        { x: 1, y: 2, id: '01ABC', label: 'first' },
+        { x: 3, y: 4 },
+      ],
+    })
+    expect(spec.points?.[0]?.id).toBe('01ABC')
+    expect(spec.points?.[0]?.label).toBe('first')
+    // A point with no identity is still a point; it simply cannot be traced to a record.
+    expect(spec.points?.[1]).toEqual({ x: 3, y: 4 })
+  })
+
+  it('drops an identity that is not a usable id rather than stringifying it', () => {
+    const spec = coerceChartSpec({
+      points: [
+        { x: 1, y: 2, id: 42 },
+        { x: 3, y: 4, id: '' },
+        { x: 5, y: 6, id: { nested: true } },
+      ],
+    })
+    expect(spec.points?.map((point) => 'id' in point)).toEqual([false, false, false])
+    expect(spec.points).toHaveLength(3)
+  })
 })
 
 describe('interpreterCandidates', () => {
@@ -147,6 +172,19 @@ describe.skipIf(!venvPresent)('fit recipe (requires the analysis environment)', 
     expect(environment?.python).toBeTruthy()
     expect(environment?.numpy).not.toBe('missing')
     expect(environment?.scipy).not.toBe('missing')
+  })
+
+  it('echoes the identity of every point it plotted', async () => {
+    const input = makeInput(6, 'linear')
+    const outcome = await runner.run('fit', { degree: 1 }, input)
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+
+    // The id is what makes a mark on the artifact traceable to a record in the log. Losing it would
+    // leave hover and selection with nothing to resolve against.
+    expect(outcome.result.chart.points?.map((point) => point.id)).toEqual(
+      input.points.map((point) => point.id),
+    )
   })
 
   it('refuses to draw a line through two points', async () => {

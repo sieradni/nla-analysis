@@ -30,7 +30,9 @@ user's behalf, so a fresh session must be able to pick up the project without re
 - **UI work is gated on the user.** Produce a screenshot plus a two-line "what to look at" note at
   100/125/150% scaling, and wait for approval. Never self-approve a visual change. Log the outcome
   in `docs/ui-review-log.md`.
-- **Record irreversible choices** as a short ADR in `docs/adr/` before acting on them.
+- **Record irreversible choices** as a short ADR in `docs/adr/` before acting on them. The load-bearing
+  ones: [0001](docs/adr/0001-stack-choices.md) stack, [0002](docs/adr/0002-agent-only-v1.md) agent-only
+  v1, [0003](docs/adr/0003-in-process-core.md) the write path is in process.
 - **Don't add dependencies silently.** Name the dependency, say why, and note the size cost.
 - **Update `STATE.md`** by running `bench state` after any mutation — never by hand.
 - **Record decisions** the user makes ("we're using Python", "tabs instead of a sidebar") via
@@ -82,7 +84,11 @@ This repository (the app):
 
 ```
 src/core/           log, binder, shapes, chart spec, state, Python runner — no UI imports
-src/cli/            the bench command surface
+src/core/workspace.ts
+                    the one in-process path to a project: every mutation and analysis goes
+                    through it, and the CLI is a wrapper over it (ADR 0003). The app will bind
+                    this directly; it must never learn about windows or drawing.
+src/cli/            the bench command surface — argument parsing, a call, and printing
 recipes/            the Python analysis library, pinned by requirements.lock.txt
 recipes/.venv/      the analysis environment, recreated by `pnpm setup:recipes` (ignored)
 tests/              unit tests, plus CLI tests that run the real binary

@@ -77,7 +77,7 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
 
 def _triples(
     input_data: dict[str, Any], x_field: str, y_field: str
-) -> tuple[np.ndarray, list[str], np.ndarray, np.ndarray, int]:
+) -> tuple[np.ndarray, list[str], np.ndarray, np.ndarray, list[str | None], int]:
     """Points that carry a usable time and two finite numbers, sorted by time.
 
     The stamps come back in the same order as the numbers they belong to. Sorting the raw timestamp
@@ -92,6 +92,7 @@ def _triples(
     stamps: list[str] = []
     xs: list[float] = []
     ys: list[float] = []
+    ids: list[str | None] = []
     skipped = 0
 
     for point in raw:
@@ -116,6 +117,8 @@ def _triples(
         stamps.append(stamp)
         xs.append(float(x))
         ys.append(float(y))
+        identity = point.get("id") if isinstance(point, dict) else None
+        ids.append(identity if isinstance(identity, str) and identity else None)
 
     if len(times) < 2:
         raise ValueError(f'fewer than two points carry a time and numeric "{x_field}" and "{y_field}"')
@@ -123,11 +126,15 @@ def _triples(
     order = np.argsort(np.asarray(times), kind="stable")
     ordered_times = np.asarray(times, dtype=float)[order]
     ordered_stamps = [stamps[index] for index in order]
+    # The ids travel with their point through the same ordering, so a chart mark still names the
+    # record it came from after the series has been sorted by time.
+    ordered_ids = [ids[index] for index in order]
     return (
         ordered_times,
         ordered_stamps,
         np.asarray(xs, dtype=float)[order],
         np.asarray(ys, dtype=float)[order],
+        ordered_ids,
         skipped,
     )
 
@@ -189,7 +196,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         if isinstance(field, dict) and isinstance(field.get("name"), str) and isinstance(field.get("unit"), str):
             units[field["name"]] = field["unit"]
 
-    times, stamps, x, y, skipped = _triples(input_data, x_field, y_field)
+    times, stamps, x, y, ids, skipped = _triples(input_data, x_field, y_field)
     n = int(x.size)
     parameters_per_segment = degree + 1
     extra_parameters = parameters_per_segment
@@ -198,7 +205,10 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
 
     x_axis = _axis(x_field, units)
     y_axis = _axis(y_field, units)
-    points = [{"x": float(a), "y": float(b)} for a, b in zip(x, y)]
+    points = [
+        {"x": float(a), "y": float(b), **({} if identity is None else {"id": identity})}
+        for a, b, identity in zip(x, y, ids)
+    ]
 
     diagnostics: dict[str, Any] = {
         "n": n,

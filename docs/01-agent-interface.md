@@ -20,6 +20,18 @@ the current binary.
 to a data set. `bench run` writes the rendered artifact, appends an `analysis_run` event carrying the
 recipe hash, the input hash, the verdict and the narrative, and refreshes `STATE.md`.
 
+## Where the work happens
+
+Everything a command does to a project goes through one in-process seam, `src/core/workspace.ts`
+([ADR 0003](adr/0003-in-process-core.md)). `bench` parses arguments, calls it, and prints; it holds no
+project logic of its own. Two consequences worth knowing when reading this document:
+
+- A UI binds the same seam directly rather than shelling out, because starting a command costs more
+  than the whole keystroke budget.
+- The seam raises refusals instead of exiting, so the CLI — and only the CLI — turns them into exit
+  codes. A `--dataset` that does not exist is therefore refused by name everywhere, instead of being
+  reported as a dataset that happens to have no points.
+
 ## Contract rules
 
 1. **Non-interactive.** Never prompts, never waits. Missing arguments are an error with a fix hint.

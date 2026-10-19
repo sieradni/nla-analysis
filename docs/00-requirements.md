@@ -333,9 +333,12 @@ Kept below only as the original proposal; the plan is the authority.
 
 Resolved: Svelte 5, Python analysis, repo-agent-only operation, Tauri deferred, agent-only v1 entry.
 
+**Resolved 2026-10-19** by [ADR 0003](adr/0003-in-process-core.md): the UI binds `src/core` in
+process, and `bench` is a thin wrapper over the same `Workspace` seam. Decided on measurement rather
+than preference: a keystroke costs 15.7 ms in process at 10k points, while simply starting a command
+costs 160 ms against a 100 ms budget.
+
 Still open:
 
-1. Does the UI write through the CLI, or call an in-process library the CLI also wraps? Decide before
-   Phase 5, since it shapes the write path.
-2. How much of `STATE.md` is generated versus written by the agent?
-3. When does an in-memory projection stop being enough and SQLite start earning its keep?
+1. How much of `STATE.md` is generated versus written by the agent?
+2. When does an in-memory projection stop being enough and SQLite start earning its keep?

@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: Phases 0-3 largely complete (2026-10-19); the shape registry and dataset versions are next.
+Status: Phases 0-3 largely complete (2026-10-19); the in-process seam landed ([ADR 0003](adr/0003-in-process-core.md)); the shape registry and dataset versions are next.
 Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 
 ## Progress
@@ -21,14 +21,19 @@ Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 | 3.4 changepoint | done | `recipes/drift.py`: Chow test at a given split, permutation test when the data chooses the split |
 | 3.5 analysis freshness + `runs` / `rerun` | done | three states (current / stale / cannot-be-checked) from the recorded input and recipe hashes; `STATE.md` carries it |
 | 4.3 csv / tsv / jsonl import | done | all-or-nothing, content-addressed `data/raw/` copy, hash dedupe; 7 CLI tests |
-| 4.x views / UI | not done | deferred per ADR 0002 |
+| 4.4 in-process seam (`Workspace`) | done | [ADR 0003](adr/0003-in-process-core.md); one append and analysis path for CLI and UI. `rerun` had 52 of its 85 lines identical to `run`; that body now lives in `Workspace.recordAnalysis`, and each command is argument parsing, the call, and printing |
+| 4.5 artifact identity + provenance | done | `ChartSpec.points[].id` and `provenance`; both recipes echo ids; `data-point-id` on every mark, covered by tests |
+| 5.1 UI write path | decided | in process, not through the CLI: 15.7 ms versus 160 ms+ per command (ADR 0003) |
+| 4.x views / UI | not done | deferred per ADR 0002; the seam they will bind to is built |
 | windowed / rolling fit | not done | the third item on the time-variation menu |
 | dataset versions / replace / diff | not done | next; `dataset_version_created` is already a log type |
 | `shape extend` + migrations | not done | next; shape 2.2 is read-only today |
 
-Verification so far: 103 tests pass and `tsc --noEmit` is clean. `tests/cli.test.ts` runs the actual
-binary, which is the only way to catch a difference between what the test runner's transpiler accepts
-and what Node's type stripping accepts — that gap hid a dead CLI behind 38 green tests once already.
+Verification so far: 119 tests pass and `tsc --noEmit` is clean. The entry path is measured, not
+assumed: 15.7 ms keystroke→paint in process at 10k points, against a 100 ms budget (ADR 0003).
+`tests/cli.test.ts` runs the actual binary, which is the only way to catch a difference between what
+the test runner's transpiler accepts and what Node's type stripping accepts — that gap hid a dead CLI
+behind 38 green tests once, and again behind a parameter property in this step.
 
 ### Two layouts, kept separate
 

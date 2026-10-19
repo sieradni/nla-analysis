@@ -5,24 +5,24 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import { assessRuns, buildRunInput, freshnessNote, hashInput } from '../core/analysis.ts'
-import { activePoints, bind, numericValue } from '../core/binder.ts'
-import type { DatasetState, Point, ProjectState } from '../core/binder.ts'
+import { freshnessNote } from '../core/analysis.ts'
+import { numericValue } from '../core/binder.ts'
+import {
+  BenchError,
+  Workspace,
+  type AnalysisOutcome,
+  type ErrorKind,
+  type PointCorrection,
+  type PointRetraction,
+  type RecordedPoint,
+} from '../core/workspace.ts'
 import { makeEvent } from '../core/events.ts'
 import type { BenchEvent, PointValue } from '../core/events.ts'
 import { renderChart } from '../core/chart.ts'
 import type { ChartSpec } from '../core/chart.ts'
 import { validateValues } from '../core/shapes.ts'
-import {
-  DEFAULT_DATASET,
-  findProjectDir,
-  initProject,
-  openProject,
-  refreshState,
-} from '../core/project.ts'
-import type { ProjectHandle } from '../core/project.ts'
+import { initProject } from '../core/project.ts'
 import { RecipeRunner } from '../core/runner.ts'
-import type { RunInput } from '../core/runner.ts'
 import { renderState } from '../core/state.ts'
 import { coerce, parseDelimited, parseJsonl } from '../core/table.ts'
 
@@ -122,23 +122,31 @@ Exit codes
 `)
 }
 
-async function locate(explicit?: string): Promise<ProjectHandle> {
-  const dir = explicit ? resolve(explicit) : await findProjectDir(process.cwd())
-  if (!dir) die('not inside a bench project', EXIT_MISSING, 'run `bench init <dir>` first')
-  return openProject(dir)
+const EXIT_FOR_KIND: Record<ErrorKind, number> = {
+  invalid: EXIT_INVALID,
+  missing: EXIT_MISSING,
+  invariant: EXIT_INVARIANT,
 }
 
-function loadState(handle: ProjectHandle): Promise<ProjectState> {
-  return handle.log.read().then((read) => bind(read.events))
+/**
+ * The CLI owns exit codes and the shape of a refusal; the core throws and never exits, because a GUI
+ * embedding the same library has no exit code to set. See ADR 0003.
+ */
+function fail(error: unknown): never {
+  if (error instanceof BenchError) {
+    for (const problem of error.problems) process.stderr.write(`  error: ${problem}\n`)
+    die(error.message, EXIT_FOR_KIND[error.kind], error.hint)
+  }
+  die(error instanceof Error ? error.message : String(error), EXIT_INVARIANT)
 }
 
-function pickDataset(state: ProjectState, requested?: string): string {
-  if (requested) return requested
-  if (state.datasets.has(DEFAULT_DATASET)) return DEFAULT_DATASET
-  const only = [...state.datasets.keys()]
-  if (only.length === 1) return only[0]!
-  if (only.length === 0) die('project has no datasets', EXIT_MISSING, 'run `bench init` in a new folder')
-  die('project has several datasets', EXIT_INVALID, 'pass --dataset <id>')
+/** Every command opens the project the same way. */
+async function openWorkspace(explicit?: string): Promise<Workspace> {
+  try {
+    return await Workspace.open(explicit ? resolve(explicit) : process.cwd())
+  } catch (error) {
+    fail(error)
+  }
 }
 
 /** Shared by `add` and `correct`: both accept the same field-selection flags. */
@@ -161,14 +169,6 @@ function collectValues(options: { x?: unknown; y?: unknown; values?: unknown }):
   return collected
 }
 
-function findPoint(state: ProjectState, id: string): { dataset: DatasetState; point: Point } | undefined {
-  for (const dataset of state.datasets.values()) {
-    const point = dataset.points.find((candidate) => candidate.id === id)
-    if (point) return { dataset, point }
-  }
-  return undefined
-}
-
 /** Coerce `--param k=v` text into the type the recipe declared. */
 function parseParams(entries: string[] | undefined): Record<string, unknown> {
   const params: Record<string, unknown> = {}
@@ -185,19 +185,16 @@ function parseParams(entries: string[] | undefined): Record<string, unknown> {
   return params
 }
 
-/** The same input the run will hash, or a refusal -- never a silently empty analysis. */
-function requireRunInput(state: ProjectState, datasetId: string): RunInput {
-  const input = buildRunInput(state, datasetId)
-  if (!input) die(`no dataset "${datasetId}"`, EXIT_MISSING)
-  return input
-}
-
 async function withRunner<T>(root: string, use: (runner: RecipeRunner) => Promise<T>): Promise<T> {
   const runner = new RecipeRunner(root)
   try {
     await runner.start()
     return await use(runner)
   } catch (error) {
+    // A refusal is not a runtime failure. Wrapping one would bury its kind — and a mistyped dataset
+    // would surface as "the analysis runtime cannot modify the log", which is a true sentence about
+    // the wrong thing.
+    if (error instanceof BenchError) throw error
     // The interpreter is a separate process with no write access to the log, so a failure here can
     // never damage the data. Say so, because "analysis broke" reads as "data is at risk".
     const message = error instanceof Error ? error.message : String(error)
@@ -263,45 +260,34 @@ async function main(): Promise<void> {
     }
 
     case 'add': {
-      const handle = await locate(values.project)
-      const state = await loadState(handle)
-      const datasetId = pickDataset(state, values.dataset)
-      const dataset = state.datasets.get(datasetId)
-      if (!dataset) die(`no dataset "${datasetId}"`, EXIT_MISSING)
-      const shape = state.shapes.get(dataset.shape)
-      if (!shape) die(`dataset "${datasetId}" references unknown shape "${dataset.shape}"`, EXIT_INVARIANT)
-
+      const workspace = await openWorkspace(values.project)
       const pointValues = collectValues(values)
-      if (Object.keys(pointValues).length === 0) {
-        die('nothing to record', EXIT_INVALID, `pass --x and --y, or --values '{"x":1,"y":2}'`)
-      }
 
       // Normalise to canonical UTC with milliseconds, so that sorting timestamps as strings and
       // sorting them by instant give the same answer. Offsets and shortened forms are accepted on
       // input; only the canonical form is ever stored.
-      const observedInput = values.at ?? new Date().toISOString()
-      const observedMs = Date.parse(observedInput)
-      if (Number.isNaN(observedMs)) {
-        die(`--at is not a parseable time: "${observedInput}"`, EXIT_INVALID, 'use an ISO timestamp')
-      }
-      const observed = new Date(observedMs).toISOString()
-
-      const validation = validateValues(shape, pointValues)
-      if (validation.errors.length > 0) {
-        for (const problem of validation.errors) process.stderr.write(`  error: ${problem}\n`)
-        die('point rejected', EXIT_INVALID)
+      let observed: string | undefined
+      if (values.at !== undefined) {
+        const observedMs = Date.parse(values.at)
+        if (Number.isNaN(observedMs)) {
+          die(`--at is not a parseable time: "${values.at}"`, EXIT_INVALID, 'use an ISO timestamp')
+        }
+        observed = new Date(observedMs).toISOString()
       }
 
-      const event = makeEvent('point_recorded', handle.session, {
-        dataset: datasetId,
-        shape: dataset.shape,
-        values: pointValues,
-        t_observed: observed,
-        ...(values.note === undefined ? {} : { note: values.note }),
-        ...(values.tag === undefined ? {} : { tags: values.tag }),
-      })
-      await handle.log.append(event)
-      const after = await refreshState(handle)
+      let recorded: RecordedPoint
+      try {
+        recorded = await workspace.recordPoint({
+          ...(values.dataset === undefined ? {} : { dataset: values.dataset }),
+          values: pointValues,
+          ...(observed === undefined ? {} : { tObserved: observed }),
+          ...(values.note === undefined ? {} : { note: values.note }),
+          ...(values.tag === undefined ? {} : { tags: values.tag }),
+        })
+      } catch (error) {
+        fail(error)
+      }
+      await workspace.writeStateBrief()
 
       const summary = Object.entries(pointValues)
         .map(([key, value]) => `${key}=${String(value)}`)
@@ -311,26 +297,32 @@ async function main(): Promise<void> {
           JSON.stringify(
             {
               ok: true,
-              data: { id: event.id, dataset: datasetId, values: pointValues, t_observed: observed },
-              warnings: validation.warnings,
+              data: {
+                id: recorded.event.id,
+                dataset: recorded.dataset,
+                values: pointValues,
+                t_observed: recorded.tObserved,
+              },
+              warnings: recorded.warnings,
             },
             null,
             2,
           ) + '\n',
         )
       } else {
-        for (const warning of validation.warnings) process.stderr.write(`  warning: ${warning}\n`)
-        const count = activePoints(after, datasetId).length
-        process.stdout.write(`recorded ${event.id}  ${summary}  at ${observed}  (${count} active in ${datasetId})\n`)
+        for (const warning of recorded.warnings) process.stderr.write(`  warning: ${warning}\n`)
+        const count = workspace.dataset(recorded.dataset).points.length
+        process.stdout.write(
+          `recorded ${recorded.event.id}  ${summary}  at ${recorded.tObserved}  (${count} active in ${recorded.dataset})\n`,
+        )
       }
       return
     }
 
     case 'list': {
-      const handle = await locate(values.project)
-      const state = await loadState(handle)
-      const datasetId = pickDataset(state, values.dataset)
-      const points = activePoints(state, datasetId)
+      const workspace = await openWorkspace(values.project)
+      const datasetId = workspace.resolveDataset(values.dataset)
+      const points = workspace.dataset(datasetId).points
 
       if (asJson) {
         process.stdout.write(
@@ -366,16 +358,17 @@ async function main(): Promise<void> {
     }
 
     case 'state': {
-      const handle = await locate(values.project)
-      const state = await refreshState(handle)
+      const workspace = await openWorkspace(values.project)
+      await workspace.writeStateBrief()
+      const state = workspace.state
       if (asJson) {
         process.stdout.write(
           JSON.stringify(
             {
               ok: true,
               data: {
-                name: handle.config.name,
-                dir: handle.dir,
+                name: workspace.config.name,
+                dir: workspace.dir,
                 datasets: [...state.datasets.values()].map((dataset) => ({
                   id: dataset.id,
                   shape: dataset.shape,
@@ -393,15 +386,15 @@ async function main(): Promise<void> {
         )
         return
       }
-      process.stdout.write(renderState(handle.config, state))
+      process.stdout.write(renderState(workspace.config, state))
       return
     }
 
     case 'check': {
-      const handle = await locate(values.project)
-      const { events, problems } = await handle.log.read()
-      const state = bind(events)
-      const errors: string[] = [...problems, ...state.problems]
+      const workspace = await openWorkspace(values.project)
+      const events = workspace.allEvents
+      const state = workspace.state
+      const errors: string[] = [...workspace.problems, ...state.problems]
       const warnings: string[] = []
       let retracted = 0
 
@@ -448,13 +441,20 @@ async function main(): Promise<void> {
     }
 
     case 'chart': {
-      const handle = await locate(values.project)
-      const state = await loadState(handle)
-      const datasetId = pickDataset(state, values.dataset)
-      const points = activePoints(state, datasetId)
+      const workspace = await openWorkspace(values.project)
+      const datasetId = workspace.resolveDataset(values.dataset)
+      const dataset = workspace.dataset(datasetId)
+      const points = dataset.points
       const plotted = points
-        .map((point) => ({ x: numericValue(point, 'x'), y: numericValue(point, 'y') }))
-        .filter((pair): pair is { x: number; y: number } => pair.x !== undefined && pair.y !== undefined)
+        .map((point) => ({
+          id: point.id,
+          x: numericValue(point, 'x'),
+          y: numericValue(point, 'y'),
+        }))
+        .filter(
+          (pair): pair is { id: string; x: number; y: number } =>
+            pair.x !== undefined && pair.y !== undefined,
+        )
 
       if (plotted.length === 0) {
         die(`dataset "${datasetId}" has no points with numeric x and y`, EXIT_MISSING, 'bench add --x 1 --y 2')
@@ -466,16 +466,17 @@ async function main(): Promise<void> {
       footerParts.push('no fit — unmodelled')
 
       const spec: ChartSpec = {
-        title: handle.config.name,
-        subtitle: `${datasetId} · ${state.shapes.get(state.datasets.get(datasetId)!.shape)?.id ?? 'unknown shape'}`,
+        title: workspace.config.name,
+        subtitle: `${datasetId} · ${dataset.definition?.id ?? 'unknown shape'}`,
+        provenance: { dataset: datasetId, shape: dataset.shape },
         x: { label: 'x' },
         y: { label: 'y' },
         points: plotted,
         footer: footerParts.join(' · '),
       }
 
-      const out = values.out ? resolve(values.out) : join(handle.dir, 'artifacts', `${datasetId}.svg`)
-      await mkdir(join(handle.dir, 'artifacts'), { recursive: true })
+      const out = values.out ? resolve(values.out) : join(workspace.dir, 'artifacts', `${datasetId}.svg`)
+      await mkdir(join(workspace.dir, 'artifacts'), { recursive: true })
       await writeFile(out, renderChart(spec))
 
       if (asJson) {
@@ -489,11 +490,11 @@ async function main(): Promise<void> {
     case 'import': {
       const file = args[0]
       if (!file) die('missing a file to import', EXIT_INVALID, 'bench import readings.csv')
-      const handle = await locate(values.project)
+      const workspace = await openWorkspace(values.project)
 
       // A relative path is looked for where the shell is, then inside the project. Both are what a
       // person means by `import readings.csv`, especially when --project points somewhere else.
-      const candidates = isAbsolute(file) ? [file] : [resolve(file), resolve(handle.dir, file)]
+      const candidates = isAbsolute(file) ? [file] : [resolve(file), resolve(workspace.dir, file)]
       const source = candidates.find((candidate) => existsSync(candidate))
       if (!source) {
         die(`cannot find ${file}`, EXIT_MISSING, `looked in ${candidates.map((c) => dirname(c)).join(' and ')}`)
@@ -506,12 +507,9 @@ async function main(): Promise<void> {
         die(`cannot read ${source}`, EXIT_MISSING)
       }
 
-      const state = await loadState(handle)
-      const datasetId = pickDataset(state, values.dataset)
-      const dataset = state.datasets.get(datasetId)
-      if (!dataset) die(`no dataset "${datasetId}"`, EXIT_MISSING)
-      const shape = state.shapes.get(dataset.shape)
-      if (!shape) die(`dataset "${datasetId}" references unknown shape "${dataset.shape}"`, EXIT_INVARIANT)
+      const datasetId = workspace.resolveDataset(values.dataset)
+      const dataset = workspace.dataset(datasetId)
+      const shape = workspace.shapeOf(datasetId)
 
       const format = (values.format ?? guessFormat(source)).toLowerCase()
       if (!['csv', 'tsv', 'jsonl'].includes(format)) {
@@ -591,7 +589,7 @@ async function main(): Promise<void> {
       }
 
       const hash = createHash('sha256').update(text).digest('hex')
-      const { events: existing } = await handle.log.read()
+      const existing = workspace.allEvents
       const reimport = existing.find(
         (event) => event.type === 'import_completed' && event.hash === hash && event.dataset === datasetId,
       )
@@ -638,12 +636,12 @@ async function main(): Promise<void> {
       // project rebuilt from its own script reproduces the same tree. When it arrived is in the
       // event's `at`, which is where a time belongs.
       const rawName = `${hash.slice(0, 12)}-${basename(source)}`
-      await mkdir(join(handle.dir, 'data', 'raw'), { recursive: true })
-      await copyFile(source, join(handle.dir, 'data', 'raw', rawName))
+      await mkdir(join(workspace.dir, 'data', 'raw'), { recursive: true })
+      await copyFile(source, join(workspace.dir, 'data', 'raw', rawName))
       const rawRef = `data/raw/${rawName}`
 
       const appended: BenchEvent[] = prepared.map((point) =>
-        makeEvent('point_recorded', handle.session, {
+        makeEvent('point_recorded', workspace.session, {
           dataset: datasetId,
           shape: dataset.shape,
           values: point.values,
@@ -652,7 +650,7 @@ async function main(): Promise<void> {
         }),
       )
       appended.push(
-        makeEvent('import_completed', handle.session, {
+        makeEvent('import_completed', workspace.session, {
           dataset: datasetId,
           file: rawRef,
           rows: prepared.length,
@@ -661,8 +659,8 @@ async function main(): Promise<void> {
           mapping: Object.fromEntries(mapping),
         }),
       )
-      await handle.log.appendMany(appended)
-      await refreshState(handle)
+      await workspace.appendAll(appended)
+      await workspace.writeStateBrief()
 
       for (const warning of warnings.slice(0, 5)) process.stderr.write(`  warning: ${warning}\n`)
       if (asJson) {
@@ -685,10 +683,9 @@ async function main(): Promise<void> {
     }
 
     case 'runs': {
-      const handle = await locate(values.project)
-      const state = await loadState(handle)
-      const freshness = await assessRuns(APP_ROOT, state)
-      const runs = [...state.runs].reverse()
+      const workspace = await openWorkspace(values.project)
+      const freshness = await workspace.freshestRuns()
+      const runs = workspace.runsNewestFirst()
 
       if (asJson) {
         process.stdout.write(
@@ -732,61 +729,30 @@ async function main(): Promise<void> {
     case 'rerun': {
       const recipeName = args[0]
       if (!recipeName) die('missing recipe name', EXIT_INVALID, 'bench runs --json, then bench rerun <recipe>')
-      const handle = await locate(values.project)
-      const state = await loadState(handle)
+      const workspace = await openWorkspace(values.project)
       // Re-run the most recent use of this recipe, with the parameters it was asked for. Carrying
       // the parameters forward by hand is how a re-run silently becomes a different analysis.
-      const previous = [...state.runs].reverse().find((run) => run.recipe === recipeName)
+      const previous = workspace.runsNewestFirst().find((run) => run.recipe === recipeName)
       if (!previous) {
         die(`no previous \`${recipeName}\` run to repeat`, EXIT_MISSING, `bench run ${recipeName}`)
       }
-      const datasetId = pickDataset(state, values.dataset ?? previous.dataset)
       const params = { ...(previous.params ?? {}), ...parseParams(values.param) }
-      const input = requireRunInput(state, datasetId)
-      if (input.points.length === 0) {
-        die(`dataset \`${datasetId}\` has no active points`, EXIT_MISSING, 'bench add --x 1 --y 2')
-      }
 
-      const outcome = await withRunner(APP_ROOT, (runner) => runner.run(recipeName, params, input))
-      if (!outcome.ok) {
-        die(outcome.error.message, EXIT_INVARIANT, outcome.error.hint ?? `code: ${outcome.error.code}`)
+      let repeated: AnalysisOutcome
+      try {
+        repeated = await withRunner(APP_ROOT, (runner) =>
+          workspace.recordAnalysis(runner, {
+            recipe: recipeName,
+            params,
+            ...(values.dataset === undefined ? {} : { dataset: values.dataset }),
+            ...(values.chart === undefined ? {} : { chartPath: values.chart }),
+            repeatOf: previous,
+          }),
+        )
+      } catch (error) {
+        fail(error)
       }
-      const result = outcome.result
-      const level = Number(result.diagnostics.level)
-      const bandKind = typeof result.diagnostics.band === 'string' ? result.diagnostics.band : 'confidence'
-      const bandNote =
-        result.chart.band !== undefined && Number.isFinite(level)
-          ? `${Math.round(level * 100)}% ${bandKind} band`
-          : ''
-      const footer = [result.chart.footer ?? '', bandNote].filter((part) => part !== '').join(' · ')
-      const artifactName = `${recipeName}-${datasetId}.svg`
-      const artifactRef = previous.artifact ?? `artifacts/${artifactName}`
-      await mkdir(join(handle.dir, 'artifacts'), { recursive: true })
-      await writeFile(
-        join(handle.dir, artifactRef),
-        renderChart({
-          ...result.chart,
-          title: handle.config.name,
-          subtitle: `${datasetId} · ${recipeName}`,
-          ...(footer === '' ? {} : { footer }),
-          ...((result.caption ?? result.narrative) === ''
-            ? {}
-            : { caption: result.caption ?? result.narrative }),
-        }),
-      )
-
-      const event = makeEvent('analysis_run', handle.session, {
-        recipe: result.recipe,
-        recipe_hash: result.recipeHash,
-        params,
-        dataset: datasetId,
-        input_hash: hashInput(input),
-        verdict: result.verdict,
-        narrative: result.narrative,
-        artifact: artifactRef,
-      })
-      await handle.log.append(event)
-      await refreshState(handle)
+      await workspace.writeStateBrief()
 
       if (asJson) {
         process.stdout.write(
@@ -794,13 +760,13 @@ async function main(): Promise<void> {
             {
               ok: true,
               data: {
-                id: event.id,
+                id: repeated.event.id,
                 repeated: previous.id,
-                params,
-                verdict: result.verdict,
-                narrative: result.narrative,
-                artifact: artifactRef,
-                changed: previous.verdict !== result.verdict,
+                params: repeated.params,
+                verdict: repeated.result.verdict,
+                narrative: repeated.result.narrative,
+                artifact: repeated.artifactRef,
+                changed: repeated.verdictChanged === true,
               },
             },
             null,
@@ -811,12 +777,12 @@ async function main(): Promise<void> {
       }
       // Saying what changed is the whole point of repeating a run: the answer is allowed to differ.
       const change =
-        previous.verdict === result.verdict
-          ? `verdict unchanged (${result.verdict})`
-          : `verdict changed ${previous.verdict} -> ${result.verdict}`
-      process.stdout.write(`${result.verdict.toUpperCase()}  ${result.narrative}\n`)
-      process.stdout.write(`  repeated ${previous.id} with ${JSON.stringify(params)}: ${change}\n`)
-      process.stdout.write(`  wrote ${artifactRef}\n`)
+        previous.verdict === repeated.result.verdict
+          ? `verdict unchanged (${repeated.result.verdict})`
+          : `verdict changed ${previous.verdict} -> ${repeated.result.verdict}`
+      process.stdout.write(`${repeated.result.verdict.toUpperCase()}  ${repeated.result.narrative}\n`)
+      process.stdout.write(`  repeated ${previous.id} with ${JSON.stringify(repeated.params)}: ${change}\n`)
+      process.stdout.write(`  wrote ${repeated.artifactRef}\n`)
       return
     }
 
@@ -856,67 +822,27 @@ async function main(): Promise<void> {
     case 'run': {
       const recipeName = args[0]
       if (!recipeName) die('missing recipe name', EXIT_INVALID, 'run `bench recipes` to see what exists')
-      const handle = await locate(values.project)
-      const state = await loadState(handle)
-      const datasetId = pickDataset(state, values.dataset)
-      const input = requireRunInput(state, datasetId)
-      if (input.points.length === 0) {
-        die(`dataset "${datasetId}" has no active points`, EXIT_MISSING, 'bench add --x 1 --y 2')
-      }
+      const workspace = await openWorkspace(values.project)
       const params = parseParams(values.param)
 
-      const outcome = await withRunner(APP_ROOT, (runner) => runner.run(recipeName, params, input))
-      if (!outcome.ok) {
-        die(outcome.error.message, EXIT_INVARIANT, outcome.error.hint ?? `code: ${outcome.error.code}`)
+      // Everything from here — the spec, the band note, the artifact, the recorded event — is the
+      // same code `bench rerun` runs. See ADR 0003.
+      let outcome: AnalysisOutcome
+      try {
+        outcome = await withRunner(APP_ROOT, (runner) =>
+          workspace.recordAnalysis(runner, {
+            recipe: recipeName,
+            params,
+            ...(values.dataset === undefined ? {} : { dataset: values.dataset }),
+            ...(values.chart === undefined ? {} : { chartPath: values.chart }),
+          }),
+        )
+      } catch (error) {
+        fail(error)
       }
+      await workspace.writeStateBrief()
+
       const result = outcome.result
-
-      // Only mention a band when one was actually drawn. A caption promising a band that is not on
-      // the canvas is the same class of lie as a curve without an interval.
-      const level = Number(result.diagnostics.level)
-      const bandKind = typeof result.diagnostics.band === 'string' ? result.diagnostics.band : 'confidence'
-      const bandNote =
-        result.chart.band !== undefined && Number.isFinite(level)
-          ? `${Math.round(level * 100)}% ${bandKind} band`
-          : ''
-      const footer = [result.chart.footer ?? '', bandNote].filter((part) => part !== '').join(' · ')
-
-      const spec: ChartSpec = {
-        ...result.chart,
-        title: handle.config.name,
-        subtitle: `${datasetId} · ${recipeName}`,
-        ...(footer === '' ? {} : { footer }),
-        // The artifact carries its own conclusion: the terminal scrollback is not durable. Recipes
-        // may supply a shorter form for the canvas; the full argument stays in the log.
-        ...((result.caption ?? result.narrative) === ''
-          ? {}
-          : { caption: result.caption ?? result.narrative }),
-      }
-
-      // The log stores a project-relative path: an absolute one would bake this machine's layout -
-      // and its user name - into a file meant to outlive the machine.
-      const artifactName = `${recipeName}-${datasetId}.svg`
-      const out = values.chart ? resolve(values.chart) : join(handle.dir, 'artifacts', artifactName)
-      // Forward slashes even on Windows: the log is a portable record, and a backslash in it is a
-      // trap for anything that later parses it on another platform.
-      const artifactRef = values.chart ?? `artifacts/${artifactName}`
-      await mkdir(dirname(out), { recursive: true })
-      await writeFile(out, renderChart(spec))
-
-      const event = makeEvent('analysis_run', handle.session, {
-        recipe: result.recipe,
-        recipe_hash: result.recipeHash,
-        params,
-        // Which dataset it read, so a later session can check the result rather than trust it.
-        dataset: datasetId,
-        input_hash: hashInput(input),
-        verdict: result.verdict,
-        narrative: result.narrative,
-        artifact: artifactRef,
-      })
-      await handle.log.append(event)
-      await refreshState(handle)
-
       const coefficients = Array.isArray(result.data.coefficients)
         ? (result.data.coefficients as Record<string, unknown>[])
         : []
@@ -927,10 +853,10 @@ async function main(): Promise<void> {
             {
               ok: true,
               data: {
-                id: event.id,
+                id: outcome.event.id,
                 verdict: result.verdict,
                 narrative: result.narrative,
-                artifact: artifactRef,
+                artifact: outcome.artifactRef,
                 diagnostics: result.diagnostics,
                 coefficients,
               },
@@ -951,7 +877,9 @@ async function main(): Promise<void> {
             `  [${shortNumber(coefficient.low)}, ${shortNumber(coefficient.high)}]\n`,
         )
       }
-      process.stdout.write(`wrote ${out}\n`)
+      process.stdout.write(
+        `wrote ${values.chart ? resolve(values.chart) : join(workspace.dir, outcome.artifactRef)}\n`,
+      )
       return
     }
 
@@ -959,53 +887,38 @@ async function main(): Promise<void> {
     case 'retract': {
       const id = args[0]
       if (!id) die('missing point id', EXIT_INVALID, 'run `bench list --json` to see ids')
-      const handle = await locate(values.project)
-      const state = await loadState(handle)
-      const found = findPoint(state, id)
-      if (!found) die(`no point with id "${id}"`, EXIT_MISSING)
+      const workspace = await openWorkspace(values.project)
 
       if (command === 'retract') {
-        const event = makeEvent('point_retracted', handle.session, {
-          dataset: found.dataset.id,
-          supersedes: id,
-          ...(values.reason === undefined ? {} : { reason: values.reason }),
-        })
-        await handle.log.append(event)
-        const after = await refreshState(handle)
-        const remaining = activePoints(after, found.dataset.id).length
+        let retracted: PointRetraction
+        try {
+          retracted = await workspace.retractPoint(id, values.reason)
+        } catch (error) {
+          fail(error)
+        }
+        await workspace.writeStateBrief()
         if (asJson) {
           process.stdout.write(
-            JSON.stringify({ ok: true, data: { event: event.id, retracted: id, active: remaining } }, null, 2) + '\n',
+            JSON.stringify(
+              { ok: true, data: { event: retracted.event.id, retracted: id, active: retracted.active } },
+              null,
+              2,
+            ) + '\n',
           )
         } else {
-          process.stdout.write(`retracted ${id}  (${remaining} active in ${found.dataset.id})\n`)
+          process.stdout.write(`retracted ${id}  (${retracted.active} active in ${retracted.dataset})\n`)
         }
         return
       }
 
       const patch = collectValues(values)
-      if (Object.keys(patch).length === 0) {
-        die('nothing to correct', EXIT_INVALID, `pass --values '{"y":3.5}'`)
+      let corrected: PointCorrection
+      try {
+        corrected = await workspace.correctPoint(id, patch, values.reason)
+      } catch (error) {
+        fail(error)
       }
-
-      // Validate the merged result, so a correction cannot leave a point malformed.
-      const shape = state.shapes.get(found.dataset.shape)
-      if (shape) {
-        const validation = validateValues(shape, { ...found.point.values, ...patch })
-        if (validation.errors.length > 0) {
-          for (const problem of validation.errors) process.stderr.write(`  error: ${problem}\n`)
-          die('correction rejected', EXIT_INVALID)
-        }
-      }
-
-      const event = makeEvent('point_corrected', handle.session, {
-        dataset: found.dataset.id,
-        supersedes: id,
-        values: patch,
-        ...(values.reason === undefined ? {} : { reason: values.reason }),
-      })
-      await handle.log.append(event)
-      await refreshState(handle)
+      await workspace.writeStateBrief()
 
       const summary = Object.entries(patch)
         .map(([key, value]) => `${key}=${String(value)}`)
@@ -1013,7 +926,10 @@ async function main(): Promise<void> {
       if (asJson) {
         process.stdout.write(
           JSON.stringify(
-            { ok: true, data: { event: event.id, point: id, values: patch, now: { ...found.point.values, ...patch } } },
+            {
+              ok: true,
+              data: { event: corrected.event.id, point: id, values: patch, now: corrected.now },
+            },
             null,
             2,
           ) + '\n',
@@ -1027,13 +943,12 @@ async function main(): Promise<void> {
     case 'decide': {
       const text = args.join(' ').trim()
       if (!text) die('nothing to record', EXIT_INVALID, 'bench decide "we are using Python for analysis"')
-      const handle = await locate(values.project)
-      const event = makeEvent('decision_recorded', handle.session, {
+      const workspace = await openWorkspace(values.project)
+      const event = await workspace.recordDecision(
         text,
-        ...(values.tag === undefined ? {} : { tags: values.tag }),
-      })
-      await handle.log.append(event)
-      await refreshState(handle)
+        values.tag === undefined ? undefined : values.tag,
+      )
+      await workspace.writeStateBrief()
       if (asJson) {
         process.stdout.write(JSON.stringify({ ok: true, data: { id: event.id, text } }, null, 2) + '\n')
       } else {
@@ -1047,6 +962,5 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  die(error instanceof Error ? error.message : String(error), EXIT_INVARIANT)
-})
+// Every refusal reaches the user through the same door, so the exit code always matches the kind.
+main().catch(fail)

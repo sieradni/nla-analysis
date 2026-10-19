@@ -87,14 +87,20 @@ export async function openProject(dir: string, session = newSession()): Promise<
   }
 }
 
-/** Rebuild STATE.md from the log. Called after every mutation so it cannot go stale. */
+/**
+ * The one place STATE.md is written. Freshness is assessed here rather than passed in, so the brief
+ * can never claim an analysis is current when the point that invalidated it was just appended.
+ */
+export async function writeStateBrief(handle: ProjectHandle, state: ProjectState): Promise<void> {
+  const freshness = await assessRuns(APP_ROOT, state)
+  await writeFile(join(handle.dir, 'STATE.md'), renderState(handle.config, state, { freshness }))
+}
+
+/** Read the log, fold it, and write the brief. Used when there is no workspace to keep in step. */
 export async function refreshState(handle: ProjectHandle): Promise<ProjectState> {
   const { events } = await handle.log.read()
   const state = bind(events)
-  // Freshness is assessed on every write, so STATE.md can never claim an analysis is current when
-  // the point that invalidated it was appended by this very command.
-  const freshness = await assessRuns(APP_ROOT, state)
-  await writeFile(join(handle.dir, 'STATE.md'), renderState(handle.config, state, { freshness }))
+  await writeStateBrief(handle, state)
   return state
 }
 

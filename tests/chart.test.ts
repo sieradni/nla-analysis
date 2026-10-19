@@ -164,6 +164,51 @@ describe('renderChart', () => {
     expect(svg).toContain('a &lt; b &amp; &quot;c&quot;')
   })
 
+  it("writes each point's identity onto the mark, so a hover has something to resolve", () => {
+    const svg = renderChart({
+      x: { label: 'x' },
+      y: { label: 'y' },
+      points: [
+        { x: 1, y: 2, id: '01ABC' },
+        { x: 3, y: 4 },
+      ],
+    })
+
+    expect(svg).toContain('data-point-id="01ABC"')
+    // One identified, one anonymous: an anonymous point still draws, it just cannot be traced.
+    expect(svg.match(/data-point-id=/g)).toHaveLength(1)
+    expect(svg.match(/<circle /g)).toHaveLength(2)
+  })
+
+  it('escapes an identity rather than letting it break the markup', () => {
+    const svg = renderChart({
+      x: { label: 'x' },
+      y: { label: 'y' },
+      points: [{ x: 1, y: 2, id: '"><script>alert(1)</script>' }],
+    })
+
+    expect(svg).not.toContain('<script>')
+    expect(svg).toContain('&lt;script&gt;')
+  })
+
+  it('records what the artifact was drawn from, on the root element', () => {
+    const svg = renderChart({
+      x: { label: 'x' },
+      y: { label: 'y' },
+      provenance: { dataset: 'main', shape: 'xy.v1' },
+      points: [{ x: 1, y: 2 }],
+    })
+
+    expect(svg).toContain('data-dataset="main"')
+    expect(svg).toContain('data-shape="xy.v1"')
+  })
+
+  it('omits provenance it was not given rather than inventing a source', () => {
+    const svg = renderChart({ x: { label: 'x' }, y: { label: 'y' }, points: [{ x: 1, y: 2 }] })
+    expect(svg).not.toContain('data-dataset')
+    expect(svg).not.toContain('data-shape')
+  })
+
   it('renders a single point without dividing by zero', () => {
     const svg = renderChart({ ...base, points: [{ x: 5, y: 5 }] })
     expect(svg).toContain('<circle')

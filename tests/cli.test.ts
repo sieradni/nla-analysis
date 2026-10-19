@@ -124,6 +124,15 @@ describe('bench CLI, as executed', () => {
     expect(noProject.stderr).toContain('not inside a bench project')
   })
 
+  it('refuses a dataset that does not exist instead of answering about a different one', async () => {
+    const ghost = await bench(['--project', project, 'list', '--dataset', 'ghost'])
+    expect(ghost.code).toBe(2)
+    expect(ghost.stderr).toContain('no dataset "ghost"')
+
+    const add = await bench(['--project', project, 'add', '--x', '1', '--y', '2', '--dataset', 'ghost'])
+    expect(add.code).toBe(2)
+  })
+
   it('keeps the log append-only across a correction', async () => {
     const before = await readFile(join(project, 'data', 'events.jsonl'), 'utf8')
     await bench(['--project', project, 'add', '--x', '4', '--y', '9.1'])
@@ -372,6 +381,16 @@ describe.skipIf(!analysisReady)('analysis through the CLI', () => {
       expect(svg).toContain('fill-opacity="0.14"')
       expect(svg).toContain('class="caption"')
       expect(svg).toContain('confidence band')
+
+      // The artifact names what it was drawn from, and every mark names the record behind it, so a
+      // reader can hold the picture against the log instead of taking it on trust.
+      expect(svg).toContain('data-dataset="main"')
+      expect(svg).toContain('data-shape="xy.v1"')
+      const marked = [...svg.matchAll(/data-point-id="([^"]+)"/g)].map((match) => match[1]!)
+      expect(marked).toHaveLength(8)
+      const logged = (await bench(['--project', target, 'list', '--json']))
+      const ids = (JSON.parse(logged.stdout) as { data: { id: string }[] }).data.map((point) => point.id)
+      for (const id of marked) expect(ids).toContain(id)
     } finally {
       await rm(target, { recursive: true, force: true })
     }

@@ -3,7 +3,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { ulid } from './ids.ts'
-import type { ChartSpec } from './chart.ts'
+import type { ChartPoint, ChartSpec } from './chart.ts'
 import type { Verdict } from './events.ts'
 
 /**
@@ -289,16 +289,28 @@ function finite(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function pairs(value: unknown, keys: ['x', 'y']): { x: number; y: number }[] | undefined {
+/**
+ * Numeric pairs, carrying the point's identity through when the recipe supplied one. An id that is not
+ * a non-empty string is dropped rather than coerced: a chart mark pointing at "[object 3]" is worse
+ * than a chart mark pointing at nothing.
+ */
+function pairs(value: unknown, keys: ['x', 'y']): ChartPoint[] | undefined {
   if (!Array.isArray(value)) return undefined
-  const out: { x: number; y: number }[] = []
+  const out: ChartPoint[] = []
   for (const item of value) {
     if (typeof item !== 'object' || item === null) continue
     const record = item as Record<string, unknown>
     const x = finite(record[keys[0]])
     const y = finite(record[keys[1]])
     if (x === undefined || y === undefined) continue
-    out.push({ x, y })
+    out.push({
+      ...(keys[0] === 'x' && typeof record.id === 'string' && record.id !== '' ? { id: record.id } : {}),
+      ...(keys[0] === 'x' && typeof record.label === 'string' && record.label !== ''
+        ? { label: record.label }
+        : {}),
+      x,
+      y,
+    })
   }
   return out.length > 0 ? out : undefined
 }
@@ -337,7 +349,7 @@ export function coerceChartSpec(value: unknown): ChartSpec {
   const points = pairs(source.points, ['x', 'y'])
   const line = pairs(source.line, ['x', 'y'])
 
-  const lines: { points: { x: number; y: number }[]; label?: string; muted?: boolean }[] = []
+  const lines: { points: ChartPoint[]; label?: string; muted?: boolean }[] = []
   if (Array.isArray(source.lines)) {
     for (const item of source.lines) {
       if (typeof item !== 'object' || item === null) continue

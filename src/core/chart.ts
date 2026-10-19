@@ -14,9 +14,31 @@ export interface Axis {
  * which part of the picture matters.
  */
 export interface ChartSeries {
-  points: { x: number; y: number }[]
+  points: ChartPoint[]
   label?: string
   muted?: boolean
+}
+
+/**
+ * A plotted observation. `id` is the identity of the log event this came from, when the caller knows
+ * it: without it a mark cannot be traced back to a record, so hover, selection and a saved view that
+ * highlights a point are all guesses. Recipes echo the ids they were given rather than the renderer
+ * trying to match points by value.
+ */
+export interface ChartPoint {
+  x: number
+  y: number
+  id?: string
+  label?: string
+}
+
+/**
+ * What the artifact was drawn from, recorded structurally rather than only in the subtitle: a client
+ * that wants to pin a view to a dataset needs to read it, not parse it out of prose.
+ */
+export interface ChartProvenance {
+  dataset?: string
+  shape?: string
 }
 
 export interface ChartSpec {
@@ -24,7 +46,8 @@ export interface ChartSpec {
   subtitle?: string
   x: Axis
   y: Axis
-  points?: { x: number; y: number; label?: string }[]
+  points?: ChartPoint[]
+  provenance?: ChartProvenance
   line?: { x: number; y: number }[]
   /** Several fitted lines at once, e.g. one per time regime. */
   lines?: ChartSeries[]
@@ -183,8 +206,15 @@ export function renderChart(spec: ChartSpec): string {
   const yLabel = spec.y.unit ? `${spec.y.label} (${spec.y.unit})` : spec.y.label
   const accessibleName = spec.title ?? `${yLabel} against ${xLabel}`
 
+  // Provenance rides on the root element as data attributes: invisible on the canvas, present for
+  // anything that reads the file later and needs to know what it is looking at.
+  const provenance = [
+    spec.provenance?.dataset === undefined ? '' : ` data-dataset="${escapeXml(spec.provenance.dataset)}"`,
+    spec.provenance?.shape === undefined ? '' : ` data-shape="${escapeXml(spec.provenance.shape)}"`,
+  ].join('')
+
   parts.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" role="img" aria-label="${escapeXml(accessibleName)}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" role="img" aria-label="${escapeXml(accessibleName)}"${provenance}>`,
     `<title>${escapeXml(accessibleName)}</title>`,
     `<desc>${escapeXml(spec.footer ?? `${(spec.points ?? []).length} points plotted`)}</desc>`,
     `<rect width="${WIDTH}" height="${HEIGHT}" fill="${PAPER}"/>`,
@@ -280,8 +310,9 @@ export function renderChart(spec: ChartSpec): string {
   })
 
   for (const point of spec.points ?? []) {
+    const identity = point.id === undefined ? '' : ` data-point-id="${escapeXml(point.id)}"`
     parts.push(
-      `<circle cx="${sx(point.x).toFixed(2)}" cy="${sy(point.y).toFixed(2)}" r="3.4" fill="${ACCENT}" stroke="${PAPER}" stroke-width="1.5"/>`,
+      `<circle cx="${sx(point.x).toFixed(2)}" cy="${sy(point.y).toFixed(2)}" r="3.4" fill="${ACCENT}" stroke="${PAPER}" stroke-width="1.5"${identity}/>`,
     )
   }
 

@@ -63,14 +63,22 @@ def _ordinal(value: int) -> str:
     return f"{value}{suffix}"
 
 
-def _series(input_data: dict[str, Any], x_field: str, y_field: str) -> tuple[np.ndarray, np.ndarray, int]:
-    """Pull the two numeric columns, skipping anything that is not a finite number."""
+def _series(
+    input_data: dict[str, Any], x_field: str, y_field: str
+) -> tuple[np.ndarray, np.ndarray, list[str | None], int]:
+    """Pull the two numeric columns, skipping anything that is not a finite number.
+
+    Ids come back in the same order as the numbers they belong to. They exist so a plotted mark can
+    be traced to the record it came from; a point that arrives without one keeps its place with
+    `None` rather than shifting the others.
+    """
     raw = input_data.get("points")
     if not isinstance(raw, list) or not raw:
         raise ValueError("no points were supplied")
 
     xs: list[float] = []
     ys: list[float] = []
+    ids: list[str | None] = []
     skipped = 0
     for point in raw:
         values = point.get("values") if isinstance(point, dict) else None
@@ -90,10 +98,12 @@ def _series(input_data: dict[str, Any], x_field: str, y_field: str) -> tuple[np.
             continue
         xs.append(float(x))
         ys.append(float(y))
+        identity = point.get("id") if isinstance(point, dict) else None
+        ids.append(identity if isinstance(identity, str) and identity else None)
 
     if not xs:
         raise ValueError(f'no points carry numeric "{x_field}" and "{y_field}"')
-    return np.asarray(xs, dtype=float), np.asarray(ys, dtype=float), skipped
+    return np.asarray(xs, dtype=float), np.asarray(ys, dtype=float), ids, skipped
 
 
 def _metadata(input_data: dict[str, Any], x_field: str, y_field: str) -> tuple[dict[str, str], str, str]:
@@ -131,8 +141,12 @@ def _names(degree: int) -> list[str]:
     return ["intercept"] + [f"x^{power}" if power > 1 else "x" for power in range(1, degree + 1)]
 
 
-def _points(x: np.ndarray, y: np.ndarray) -> list[dict[str, float]]:
-    return [{"x": float(a), "y": float(b)} for a, b in zip(x, y)]
+def _points(x: np.ndarray, y: np.ndarray, ids: list[str | None]) -> list[dict[str, Any]]:
+    """Chart points, each carrying the id of the record it came from when there is one."""
+    return [
+        {"x": float(a), "y": float(b), **({} if identity is None else {"id": identity})}
+        for a, b, identity in zip(x, y, ids)
+    ]
 
 
 def _refusal(
@@ -141,6 +155,7 @@ def _refusal(
     caption: str,
     x: np.ndarray,
     y: np.ndarray,
+    ids: list[str | None],
     x_axis: dict[str, str],
     y_axis: dict[str, str],
     diagnostics: dict[str, Any],
@@ -152,7 +167,7 @@ def _refusal(
         "chart": {
             "x": x_axis,
             "y": y_axis,
-            "points": _points(x, y),
+            "points": _points(x, y, ids),
             "footer": (
                 f"n = {diagnostics['n']} · {diagnostics['parameters']} parameters · "
                 f"DOF {diagnostics['dof']} · insufficient · no curve drawn"
@@ -176,7 +191,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
     if not 0.5 <= level < 1.0:
         raise ValueError("level must be at least 0.5 and below 1")
 
-    x, y, skipped = _series(input_data, x_field, y_field)
+    x, y, ids, skipped = _series(input_data, x_field, y_field)
     n = int(x.size)
     parameters = degree + 1
     dof = n - parameters
@@ -210,7 +225,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
                 f"{n} {_plural(n, 'point')} cannot determine {parameters} parameters. "
                 f"Add {needed} more {_plural(needed, 'point')}, or lower the degree to {max(0, n - 1)}."
             ),
-            x=x, y=y, x_axis=x_axis, y_axis=y_axis, diagnostics=diagnostics,
+            x=x, y=y, ids=ids, x_axis=x_axis, y_axis=y_axis, diagnostics=diagnostics,
         )
 
     design = np.vander(x, parameters, increasing=True)
@@ -232,7 +247,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
                 f"Exact by construction: {n} points and {parameters} parameters. Add a "
                 f"{_ordinal(n + 1)} point, or lower the degree to {max(0, n - 2)}."
             ),
-            x=x, y=y, x_axis=x_axis, y_axis=y_axis, diagnostics=diagnostics,
+            x=x, y=y, ids=ids, x_axis=x_axis, y_axis=y_axis, diagnostics=diagnostics,
         )
 
     # --- Identifiable: quantify, then judge. --------------------------------------------
@@ -382,7 +397,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         "chart": {
             "x": x_axis,
             "y": y_axis,
-            "points": _points(x, y),
+            "points": _points(x, y, ids),
             "line": [{"x": float(a), "y": float(b)} for a, b in zip(grid, mean)],
             "band": [
                 {"x": float(a), "y0": float(b - c), "y1": float(b + c)}
