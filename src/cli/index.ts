@@ -16,7 +16,12 @@ import {
 import type { PointValue } from '../core/events.ts'
 import { renderChart } from '../core/chart.ts'
 import { validateValues } from '../core/shapes.ts'
-import { findProjectDir, initProject } from '../core/project.ts'
+import {
+  findProjectDir,
+  initProject,
+  launcherCommand,
+  launcherProjectPath,
+} from '../core/project.ts'
 import {
   listProjects,
   rememberProject,
@@ -447,7 +452,11 @@ async function main(): Promise<void> {
           process.stdout.write(
             `  shape ${shape ? 'declared from ' + values.shape : 'xy.v1 (x, y)'} · dataset main\n`,
           )
-          process.stdout.write(`  next: bench add --x 1.2 --y 3.4\n`)
+          // The next command names the launcher this process was started from: a packaged user has
+          // no `bench` on PATH, and a hint that cannot run is worse than none.
+          process.stdout.write(
+            `  next: ${launcherCommand()} --project "${launcherProjectPath(handle.dir)}" add --x 1.2 --y 3.4\n`,
+          )
         }
       } catch (error) {
         // `fail` maps a BenchError to its own kind, so a bad shape file exits 1 (invalid input)

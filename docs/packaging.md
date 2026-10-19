@@ -43,7 +43,9 @@ someone.
 Every project records the CLI that created it in its own `AGENTS.md`: a project made from the
 artifact names this folder's `bench.cmd` by absolute path, and a project made from a checkout names
 that checkout's `pnpm bench`. A later session handed only the project folder can therefore find and
-call the CLI without being told where the app lives.
+call the CLI without being told where the app lives. The CLI refreshes that line whenever it writes
+the project brief (`state`, and every mutation), so a project made by an older build, or one whose
+folder moved, is healed by ordinary use rather than left pointing at a path that is gone.
 
 ## The CLI is in the artifact
 

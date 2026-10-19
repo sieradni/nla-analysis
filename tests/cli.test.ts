@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -137,7 +137,13 @@ describe('bench CLI, as executed', () => {
   it('records the launcher that created the project, so the next session does not have to find it', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'bench-agents-'))
     try {
-      expect((await bench(['init', dir, '--name', 'agents'])).code).toBe(0)
+      const init = await bench(['init', dir, '--name', 'agents'])
+      expect(init.code).toBe(0)
+      // The hint is the first command a session is told to run; it has to be one that runs here,
+      // where `bench` is not on PATH any more than it is for a packaged user.
+      const hint = init.stdout.split('\n').find((line) => line.trimStart().startsWith('next:'))
+      expect(hint).toContain('--project')
+      expect(hint).not.toMatch(/next: bench\b/)
       const agents = await readFile(join(dir, 'AGENTS.md'), 'utf8')
       // A placeholder is the old failure: the file named a folder that could not be located.
       expect(agents).not.toContain('C:\\path\\to')
@@ -152,6 +158,37 @@ describe('bench CLI, as executed', () => {
       expect(existsSync(join(process.cwd(), 'package.json'))).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('heals a launcher line written by an older build, and after the folder moves', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bench-heal-'))
+    const moved = `${dir}-moved`
+    try {
+      expect((await bench(['init', dir, '--name', 'heal'])).code).toBe(0)
+      // Exactly the placeholder the previous generator wrote.
+      await writeFile(
+        join(dir, 'AGENTS.md'),
+        '# AGENTS.md\n\n## Running bench\n\n' +
+          '    C:\\path\\to\\bench-win32-x64\\bench.cmd --project C:\\path\\to\\this\\project state\n',
+      )
+      const healedState = await bench(['--project', dir, 'state'])
+      expect(healedState.code).toBe(0)
+      const healed = await readFile(join(dir, 'AGENTS.md'), 'utf8')
+      expect(healed).not.toContain('C:\\path\\to')
+      const launcher = `pnpm -C "${process.cwd().replaceAll('\\', '/')}" bench`
+      expect(healed).toContain(`${launcher} --project "${dir.replaceAll('\\', '/')}" state`)
+      expect(healed).toContain('has moved')
+
+      // The recorded path was resolved when it was written, so a rename has to be healed the same
+      // way — and running `state` against the folder is exactly the recovery the file describes.
+      await rename(dir, moved)
+      expect((await bench(['--project', moved, 'state'])).code).toBe(0)
+      const afterMove = await readFile(join(moved, 'AGENTS.md'), 'utf8')
+      expect(afterMove).toContain(`${launcher} --project "${moved.replaceAll('\\', '/')}" state`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(moved, { recursive: true, force: true })
     }
   })
 

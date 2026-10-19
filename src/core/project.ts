@@ -54,7 +54,6 @@ function commandPath(path: string): string {
  * project created by `bench init` from the artifact points at that artifact, and one created in the
  * repository points at the repository.
  */
-
 function launcherInvocation(): { command: string; note: string } {
   const packaged = [join(dirname(process.execPath), 'bench.cmd'), join(APP_ROOT, 'bench.cmd')].find(
     (candidate) => existsSync(candidate),
@@ -63,20 +62,29 @@ function launcherInvocation(): { command: string; note: string } {
     return {
       command: `"${commandPath(packaged)}"`,
       note: [
-        '`bench.cmd` sits beside `bench.exe` in the desktop app folder; `bench.exe` opens the window,',
-        "and `bench.cmd` runs this CLI through the app's own runtime. It is not on PATH, so call it",
-        'exactly like this. If the path is gone, the app folder moved — use the `bench.cmd` in its new',
-        'location.',
+        'The desktop app does not put its CLI on PATH: `bench.cmd` sits beside `bench.exe`, which',
+        "opens the window, and the line above calls it by absolute path. If that path is gone, the app",
+        'folder moved — use the `bench.cmd` in its new location.',
       ].join('\n'),
     }
   }
   return {
     command: `pnpm -C "${commandPath(APP_ROOT)}" bench`,
     note: [
-      `That is the CLI script of the bench checkout at \`${APP_ROOT}\`, and \`pnpm -C\` runs it from`,
-      'any folder. If `bench` is on PATH, it is the same CLI.',
+      `That is the CLI script of the bench checkout at \`${APP_ROOT}\`; \`pnpm -C\` runs it from any`,
+      'folder. If `bench` is on PATH it is the same CLI.',
     ].join('\n'),
   }
+}
+
+/** The launcher this process was started from, as a command line. For hints that must actually run. */
+export function launcherCommand(): string {
+  return launcherInvocation().command
+}
+
+/** A project folder as it should appear in a command line. */
+export function launcherProjectPath(dir: string): string {
+  return commandPath(dir)
 }
 
 function projectAgents(dir: string): string {
@@ -96,12 +104,15 @@ This folder is a **bench data project**. The append-only event log is the truth.
 
 ## Running bench
 
-This project's CLI is the only way to read or mutate it, and it is not on PATH. It records the
-launcher that created the project, so the next session does not have to find it:
+The CLI is the only way to read or mutate this project. This file records the launcher that created
+it, refreshed to whichever CLI last wrote the brief, so the next session does not have to find it:
 
     ${launcher.command} --project "${commandPath(dir)}" state
 
 ${launcher.note}
+
+If this folder has moved since that line was written, run the same launcher with \`--project\`
+pointing at the folder's current path and run \`state\`: that rewrites this line.
 
 ## After changing anything
 
@@ -111,6 +122,16 @@ Run the \`state\` command the same way and read the result. It is the brief the 
 
 Run the \`check\` command the same way. A clean log is not the same as a supported claim.
 `
+}
+
+/** Write a generated file only when it differs, so ordinary use does not churn its timestamp. */
+async function writeIfChanged(path: string, content: string): Promise<void> {
+  try {
+    if ((await readFile(path, 'utf8')) === content) return
+  } catch {
+    // Missing is ordinary: a project created before the launcher was recorded had no line to heal.
+  }
+  await writeFile(path, content)
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -150,6 +171,11 @@ export async function openProject(dir: string, session = newSession()): Promise<
 export async function writeStateBrief(handle: ProjectHandle, state: ProjectState): Promise<void> {
   const freshness = await assessRuns(APP_ROOT, state)
   await writeFile(join(handle.dir, 'STATE.md'), renderState(handle.config, state, { freshness }))
+  // The launcher is a fact about this machine, not about creation day, so it is refreshed wherever
+  // the brief is written: `state`, every mutation, and the window's own writes. A project made from
+  // the older placeholder — or one opened after its folder moved — is healed by ordinary use, and
+  // an unchanged file is not rewritten, so nothing churns.
+  await writeIfChanged(join(handle.dir, 'AGENTS.md'), projectAgents(handle.dir))
 }
 
 /** Read the log, fold it, and write the brief. Used when there is no workspace to keep in step. */
