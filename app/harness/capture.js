@@ -125,10 +125,25 @@ export async function capture() {
         emptyDisplay: getComputedStyle(document.getElementById('empty')).display,
         emptyText: (document.getElementById('empty').textContent || '').trim().slice(0, 90),
         panels: document.querySelectorAll('.panel').length,
+        // The grid drops to one column below 980 px of viewport; the number has to come from the
+        // computed style, because the breakpoint lives in CSS and an inline custom property can win.
+        columns: grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length : null,
+        // What the tab asked for, so the assertion is about the breakpoint rather than a guess.
+        asked: grid ? getComputedStyle(grid).getPropertyValue('--columns').trim() : null,
         marks: Array.prototype.reduce.call(document.querySelectorAll('.panel-chart'), (total, host) => total + Number(host.dataset.marks || 0), 0),
       })
     })()`)
     console.log(`[bench] layout ${label}% ${layout}`)
+    const seenLayout = JSON.parse(layout)
+    if (seenLayout.panels > 1) {
+      const asked = Number(seenLayout.asked) || 2
+      const expected = seenLayout.viewport.w <= 980 ? 1 : Math.min(asked, seenLayout.panels)
+      if (seenLayout.columns !== expected) {
+        throw new Error(
+          `at ${label}% the grid drew ${seenLayout.columns} column(s) in a ${seenLayout.viewport.w} px viewport, expected ${expected}`,
+        )
+      }
+    }
   }
 
   // Interaction proof: a still frame cannot show that hover, wheel zoom or panning work, and a claim

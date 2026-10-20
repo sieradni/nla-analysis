@@ -523,6 +523,16 @@ button {
   align-content: start;
 }
 
+/* Two panels side by side is the comparison the window exists for, so the columns are not dropped
+   on a whim. At 150% a 1280 px window is ~853 CSS px of viewport, which leaves each panel ~170 px
+   and ellipsizes its title; below 980 px one panel per row is the honest layout. 125% (~1024 px)
+   keeps its two, so the comparison only goes away once it has stopped being legible. */
+@media (max-width: 980px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .panel {
   margin: 0;
   background: var(--surface);

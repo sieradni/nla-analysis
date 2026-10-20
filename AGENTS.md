@@ -41,7 +41,9 @@ without re-litigating it.
   fetched on demand (Electron 44 dropped its postinstall) and then copied from `node_modules/electron/dist`.
   The artifact also carries `bench.cmd`, the same CLI run by its Electron binary in Node mode; it is
   the way an agent operates a project without this repository. `pnpm app:package:check` launches the
-  artifact and its CLI with Python removed from `PATH`, and fails unless both work.
+  artifact and its CLI with Python removed from `PATH`, and fails unless both work. It compares the
+  run against the committed receipt (`docs/ui-review/app-packaged.json`) and writes that file only
+  with `--record`, so a plain run leaves the tree clean.
 - **Everything else**: `pnpm verify` (typecheck, bundle, tests), `pnpm fixture`, `pnpm review`.
 
 ## How work gets done

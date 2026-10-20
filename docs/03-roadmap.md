@@ -1,9 +1,11 @@
 # Roadmap — the open work, in one place
 
 Status: **landed 2026-10-20.** Commit `cb681b2` holds the code, tests, harness and gate scripts, and
-was green on that tree (`pnpm verify`, 264 tests; `pnpm app:measure`; `pnpm app:package:check`); this
-commit holds the documentation it left out. It landed as **one** commit rather than the slices step 0
-asks for, and the visual gate is still open — both are recorded in the step 0 row.
+was green on that tree (`pnpm verify`, 264 tests; `pnpm app:measure`; `pnpm app:package:check`); the
+docs commit after it holds the documentation, and a third commit carries the two follow-ups decided
+on the same day: one column below 980 px of viewport, and a packaged check that compares against its
+receipt instead of rewriting it. The code landed as **one** commit rather than the slices step 0 asks
+for, and the visual gate is still open — both are recorded in the step 0 row.
 Open work only; completed steps stay in the
 [implementation plan](02-implementation-plan.md) progress table. Requirements remain the authority on
 *what* ([00-requirements.md](00-requirements.md)); this file is the live, itemised answer to "what is
@@ -46,8 +48,8 @@ The rescale row is **one sample per run**, and the frame wait is part of the fig
 that stops producing frames (an occluded window) the sample measures the compositor, so the gate is
 meaningful on a visible window. A missing full-redraw sample, a sample the window patched instead of
 redrawing, and an entry submitted programmatically are each a failure, not an annotated pass. The
-packaged check rewrites the tracked `docs/ui-review/app-packaged.json`; restore it afterwards if the
-tree must stay clean.
+packaged check **compares** against the tracked `docs/ui-review/app-packaged.json` and writes it only
+with `--record`, so a plain run leaves the tree clean; its frame is git-ignored.
 
 ## How this stays current
 
@@ -87,11 +89,12 @@ limit of each:
 | paste a TSV block with preview, auto-advance, stream mode | — | missing | requirements §6; plan 5.8 |
 | keyboard map / shortcut help | — | missing | `Ctrl+Z`, `Esc`, `Shift+Arrow` exist; nothing lists them |
 | **resize the rail** | — | missing | fixed `--rail-width: 268px` (`tokens.css`), no pointer handler, no persisted width |
+| one column below 980 px of viewport | `.grid` media query (`app.css`) | done | two panels side by side stop being legible at 150% (~170 px each); below 980 px the grid is one column and 150% draws a 519 px panel, while 125% (~1013 px) keeps its two. `pnpm app:capture` computes the column count per scaling and throws when it disagrees with the viewport |
 | canvas renderer for a rescale | chart painter | **done** | `src/core/chart.ts` splits the drawing and packs the marks; `app/renderer/chart.js` paints them on a canvas. 10k rescale **35.1–47.4 ms** (was 147.0–173.6); `pnpm app:measure` gates on 50 ms and refuses a missing or patched redraw sample, and `pnpm app:capture` asserts the canvas covers the drawing and has 3,589 painted pixels. plan 5.6 |
 
 ### The visual gate is still open
 
-`docs/ui-review-log.md` has **24 rows, 23 of them still `pending`** (the first row approved the design
+`docs/ui-review-log.md` has **25 rows, 24 of them still `pending`** (the first row approved the design
 direction, not a frame). The captures exist and the assertions behind them run in
 `pnpm app:capture`, but no frame has a verdict. Any UI slice below should be reviewed together with
 the frames already waiting, or the log stops being a gate and becomes a diary.
@@ -103,7 +106,7 @@ decision below waits for it. Sizes are relative — S is a sitting, M is a day o
 
 | # | slice | size | done means | depends on |
 |---|---|---|---|---|
-| 0 | **Land the tree; close the review gate** | S | **partial 2026-10-20** — committed (`cb681b2` plus this docs commit) and `pnpm verify` is green on it, but as **one** code commit, not slices: `src/core/chart.ts`, the panels moving out of `views.ts`, `app/core.entry.ts` and the renderer share a compile boundary, so a split leaves every intermediate commit failing `tsc` (probe: the new chart alone at the old tree → `app/core.entry.ts(475)` type errors). The review gate is **open**: 24 rows, 23 `pending` | — |
+| 0 | **Land the tree; close the review gate** | S | **partial 2026-10-20** — committed (`cb681b2` plus this docs commit) and `pnpm verify` is green on it, but as **one** code commit, not slices: `src/core/chart.ts`, the panels moving out of `views.ts`, `app/core.entry.ts` and the renderer share a compile boundary, so a split leaves every intermediate commit failing `tsc` (probe: the new chart alone at the old tree → `app/core.entry.ts(475)` type errors). The review gate is **open**: 25 rows, 24 `pending` | — |
 | 1 | **Canvas renderer** | M | **done 2026-10-19** — a rescale measures 35.1–47.4 ms at 10k (was 147–174), `pnpm app:measure` exits non-zero over 50 ms and when no full-redraw sample arrived or a submit was programmatic, and `pnpm app:capture` checks the canvas's coverage and painted pixels | — |
 | 2 | **Resizable rail** | S | drag handle plus `ArrowLeft`/`ArrowRight` when focused; width in `$BENCH_HOME/ui.json`, restored on launch; no reflow jitter; three-scaling screenshot | decision 2 |
 | 3 | **Point actions** | M | selecting a mark offers Correct / Retract… / Copy id; retraction requires a reason and writes the same event the CLI writes; a retracted point stays visible as retracted | decision 4 |
@@ -111,7 +114,7 @@ decision below waits for it. Sizes are relative — S is a sitting, M is a day o
 | 5 | **Dataset versions panel** | M | a tab or sheet listing every version with rows and `+n −n ~n`, a diff between any two, and which panels are pinned to which version; reads `Workspace`, runs nothing | — |
 | 6 | **Entry extras** | M | paste a TSV block → preview against the shape → commit; auto-advance after Enter; stream mode; requirements §6's targets still hold | `add --stdin` |
 | 7 | **Shape extension and designation in the window** | S–M | a flow that says which points lack a field, records the same `shape_extended` / `shape_time_designated` events the CLI does, and shows the new declaration | — |
-| 8 | **Delivery hardening** | S–M | README, LICENSE, a first `v*` tag that produces a downloadable release; the packaging check leaves the tree clean and runs in CI; the signing/installer decision is recorded | user decision on signing |
+| 8 | **Delivery hardening** | S–M | README, LICENSE, a first `v*` tag that produces a downloadable release; the packaging check leaves the tree clean (**done 2026-10-20** — it compares against its receipt and needs `--record` to write it) and runs in CI (**open**); the signing/installer decision is recorded | user decision on signing |
 | 9 | **CI depth** | S | `pnpm setup:recipes` in the job so the 25 analysis-dependent tests run, and `app:package:check` as its own Windows step | 8 |
 
 ### How to check this plan
@@ -125,9 +128,12 @@ pnpm app:package:check      # launch it, type into a custom shape, then run its 
                             # removed from PATH
 ```
 
-`pnpm app:measure` needs a display and a focused OS window. `pnpm app:package:check` rewrites the
-tracked `docs/ui-review/app-packaged.json` (timing, byte counts and the custom-axis facts), so a
-clean-tree gate needs that side effect removed first.
+`pnpm app:measure` needs a display and a focused OS window. `pnpm app:package:check` compares the
+run against the tracked `docs/ui-review/app-packaged.json` and fails on any changed fact; pass
+`--record` once, deliberately, to accept a new report. The frame it writes is git-ignored, so a plain
+run leaves the tree clean and the check can be a CI step as it stands. A run that prints no report
+within 90 s is a failure — the window blocks when it cannot take focus, and a gate that hangs hides
+that behind the runner's own timeout.
 
 ## 3. Core and CLI gaps
 
@@ -167,7 +173,7 @@ Creating a custom-shaped project (`QP Stats`, 2026-10-19) also found gaps that a
 | fixture matrix (plan 2.5) | partial | drift-sensor, duplicate-time, re-export exist; 2-point, 1e5-point, unicode, missing-value, garbage-paste, post-migration do not |
 | golden chart snapshots | missing | fits are checked numerically; nothing catches a chart that regresses visually |
 | analysis tests in CI | skipped | 25 analysis-dependent tests skip without `recipes/.venv` (20 in `run.test.ts`, 4 in `cli.test.ts`, 1 in `shell.test.ts`); the release job packages code those tests never exercise |
-| `app:package:check` in CI | skipped | the check itself passes locally (2026-10-19, exit 0) and proves the packaged window, a typed custom-axis tab to `n = 3` with hover and selection, the Python-absent degradation and `bench.cmd`; it is still absent from `release.yml`, and it rewrites the tracked `docs/ui-review/app-packaged.json`, so a clean-tree gate fails until that side effect is removed |
+| `app:package:check` in CI | partial | the check passes locally (2026-10-20, exit 0) and proves the packaged window, a typed custom-axis tab to `n = 3` with hover and selection, the Python-absent degradation and `bench.cmd`; it compares against its receipt and writes it only with `--record`, so it is clean-tree safe, but it is still absent from `release.yml` and has never run on a Windows runner |
 | README | missing | a fresh clone lands on a bare GitHub page; `AGENTS.md` is a rulebook for agents, not a front door. Needs install, run, and where the `.exe` comes from |
 | first Release | not cut | the workflow is green through the 147.4 MB zip upload, but no `v*` tag has been pushed, so there is nothing to download; the `gh release create` step has never run |
 | LICENSE | missing | a public repo with no license is not usable by anyone else |

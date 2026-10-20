@@ -42,7 +42,9 @@ Two constraints shaped the answer:
 5. **Proof is the artifact running, not the build succeeding.** `scripts/check-packaged.mjs` launches
    `bench.exe` with the analysis runtime removed from `PATH`, has the app report `app.isPackaged`, the
    panels and marks it drew, and what the tab dialog offered; then it inspects the artifact for the
-   things that must not be in it. It writes the frame and a committed receipt.
+   things that must not be in it. It writes the frame and compares the run against a committed
+   receipt, comparing facts rather than this machine's timing; only `--record` rewrites it, so the
+   check can gate a clean tree.
 6. **No signing, no installer, no auto-update.** Out of scope as asked. The artifact is a folder;
    SmartScreen will warn because it is unsigned, and the documentation says so.
 
