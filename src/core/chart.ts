@@ -6,6 +6,8 @@
 export interface Axis {
   label: string
   unit?: string
+  /** `time` means values are epoch milliseconds and tick labels are instants, not numbers. */
+  format?: 'time'
 }
 
 /**
@@ -30,6 +32,19 @@ export interface ChartPoint {
   y: number
   id?: string
   label?: string
+}
+
+/**
+ * One point, already projected into the chart's own 760×440 units. The window paints these on a
+ * canvas instead of building a DOM node per observation, so a rescale does not pay for ten thousand
+ * elements. They come from the same `geometry` the SVG uses, so the two can never disagree about
+ * where a mark belongs.
+ */
+export interface ChartMark {
+  /** The log record this mark stands for, when the caller knew it. */
+  id?: string
+  cx: number
+  cy: number
 }
 
 /**
@@ -58,6 +73,12 @@ export interface ChartSpec {
   /** Evidence line, e.g. "n = 14 · 2 parameters · DOF 12 · tentative". Always shown when present. */
   footer?: string
   /**
+   * A chart with nothing to draw says so in the plot area and draws no tick numbers: an empty
+   * frame with a `0 … 1` axis would look like data, and a fresh project has to be able to save a
+   * real tab that explains what to do next.
+   */
+  empty?: string
+  /**
    * The conclusion, in words, wrapped under the axes. An artifact outlives the terminal session that
    * produced it, so it has to explain itself to whoever opens the file later.
    */
@@ -76,6 +97,21 @@ const LEFT = 72
 const RIGHT = 26
 const BOTTOM = 62
 const POINT_RADIUS = 3.4
+
+/** How a mark is painted. The core owns it so the SVG artifact and the window's canvas agree. */
+export interface ChartMarkStyle {
+  radius: number
+  fill: string
+  stroke: string
+  strokeWidth: number
+}
+
+const MARK_STYLE: ChartMarkStyle = {
+  radius: POINT_RADIUS,
+  fill: ACCENT,
+  stroke: PAPER,
+  strokeWidth: 1.5,
+}
 
 // Single quotes inside these stacks, deliberately: they are interpolated into a double-quoted XML
 // attribute, and `font-family="ui-monospace, "Cascadia Mono"…"` is not well-formed XML. A browser
@@ -147,7 +183,10 @@ export function ticks(min: number, max: number, target = 5): number[] {
   return out
 }
 
-function domain(values: number[]): [number, number] {
+const HOUR = 60 * 60 * 1000
+const DAY = 24 * HOUR
+
+function domain(values: number[], time = false): [number, number] {
   if (values.length === 0) return [0, 1]
   let min = Infinity
   let max = -Infinity
@@ -156,11 +195,60 @@ function domain(values: number[]): [number, number] {
     if (value > max) max = value
   }
   if (min === max) {
-    const pad = Math.abs(min) > 0 ? Math.abs(min) * 0.1 : 1
+    // Epoch milliseconds are enormous, so the numeric 10% pad would turn one observation into a
+    // multi-year axis. A single instant gets half a day on each side instead: still a real domain,
+    // and the mark is visible rather than a dot at the edge of a decade.
+    const pad = time ? 12 * HOUR : Math.abs(min) > 0 ? Math.abs(min) * 0.1 : 1
     return [min - pad, max + pad]
   }
   const pad = (max - min) * 0.06
   return [min - pad, max + pad]
+}
+
+const TIME_STEPS = [
+  1000,
+  5000,
+  15_000,
+  30_000,
+  60_000,
+  5 * 60_000,
+  15 * 60_000,
+  30 * 60_000,
+  HOUR,
+  3 * HOUR,
+  6 * HOUR,
+  12 * HOUR,
+  DAY,
+  7 * DAY,
+  30 * DAY,
+  365 * DAY,
+]
+
+/** Ticks on a clock, aligned to whole seconds, minutes, hours or days rather than to raw numbers. */
+function timeTicks(min: number, max: number, target = 5): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return []
+  if (min === max) return [min]
+  const rough = (max - min) / Math.max(1, target - 1)
+  const step = TIME_STEPS.find((candidate) => candidate >= rough) ?? TIME_STEPS.at(-1)!
+  const first = Math.ceil(min / step) * step
+  const out: number[] = []
+  for (let value = first; value <= max + step * 1e-9; value += step) out.push(value)
+  return out
+}
+
+function formatTime(value: number, range: number): string {
+  const iso = new Date(value).toISOString()
+  if (range < 2 * DAY) return iso.slice(0, 16).replace('T', ' ')
+  if (range < 90 * DAY) return iso.slice(0, 10)
+  return iso.slice(0, 7)
+}
+
+function axisTicks(axis: Axis, min: number, max: number): number[] {
+  return axis.format === 'time' ? timeTicks(min, max) : ticks(min, max)
+}
+
+function formatTick(value: number, axis: Axis, range: number): string {
+  return axis.format === 'time' ? formatTime(value, range) : formatNumber(value)
 }
 
 /** The canvas size a single chart occupies, exported so a view can lay panels out in a grid. */
@@ -168,14 +256,17 @@ export const CHART_WIDTH = WIDTH
 export const CHART_HEIGHT = HEIGHT
 
 /**
- * One chart's contents, without the `<svg>` wrapper. `parts` already includes the background plate,
- * so it can be dropped into a group as-is — which is how a view composes panels without duplicating
- * any of the drawing.
+ * One chart's contents, split at the marks and without the `<svg>` wrapper. `under` already includes
+ * the background plate, so a view can compose panels without duplicating any of the drawing.
  */
 interface ChartFrame {
   accessibleName: string
   desc: string
-  parts: string[]
+  /** Everything drawn before the observations: plate, header, grid, fits, legend. */
+  under: string[]
+  /** Everything drawn after them: the empty-state sentence, axes, labels, caption. */
+  over: string[]
+  marks: ChartMark[]
 }
 
 /** Where one value sits on the canvas, and the axes it was placed against. */
@@ -226,7 +317,7 @@ function geometry(spec: ChartSpec): Geometry {
     }
   }
 
-  const [x0, x1] = domain(xs)
+  const [x0, x1] = domain(xs, spec.x.format === 'time')
   const [y0, y1] = domain(ys)
 
   // Headers are stacked from a cursor so title, subtitle, and the evidence line can never overlap.
@@ -267,24 +358,32 @@ function geometry(spec: ChartSpec): Geometry {
 }
 
 /** One mark's markup, from the same code that draws a whole chart. */
-function pointMark(sx: (value: number) => number, sy: (value: number) => number, point: ChartPoint): string {
-  const identity = point.id === undefined ? '' : ` data-point-id="${escapeXml(point.id)}"`
-  return `<circle cx="${sx(point.x).toFixed(2)}" cy="${sy(point.y).toFixed(2)}" r="${POINT_RADIUS}" fill="${ACCENT}" stroke="${PAPER}" stroke-width="1.5"${identity}/>`
+function pointMark(mark: ChartMark): string {
+  const identity = mark.id === undefined ? '' : ` data-point-id="${escapeXml(mark.id)}"`
+  return `<circle cx="${mark.cx.toFixed(2)}" cy="${mark.cy.toFixed(2)}" r="${MARK_STYLE.radius}" fill="${MARK_STYLE.fill}" stroke="${MARK_STYLE.stroke}" stroke-width="${MARK_STYLE.strokeWidth}"${identity}/>`
 }
 
 /**
- * A mark for one more observation, drawn against the scales a chart already has — or `null` when the
+ * Where one more observation belongs on a chart that already has its scales — or `null` when the
  * point would move them.
  *
- * This exists so a typed point can appear without redrawing ten thousand of them: the window appends
- * this markup to the SVG it already has. `null` is the important half of the contract: a point
+ * This exists so a typed point can appear without redrawing ten thousand of them: the window paints
+ * this mark onto the canvas it already has. `null` is the important half of the contract: a point
  * outside the drawn domain would rescale the axes, and a rescale is a different picture, not an
- * extra mark, so the caller has to redraw instead of patching.
+ * extra mark, so the caller has to redraw instead of patching. The projection is the same one
+ * `renderChart` uses, so the patched mark and a redrawn one land in the same place.
  */
-export function incrementalMark(spec: ChartSpec, point: ChartPoint): string | null {
+export function incrementalMark(spec: ChartSpec, point: ChartPoint): ChartMark | null {
+  // An empty chart has no scale to place a mark against; its first point is a redraw, which is
+  // where real ticks appear. Patching one in would leave a mark on an unlabeled 0 … 1 frame.
+  if (spec.empty) return null
   const { x0, x1, y0, y1, sx, sy } = geometry(spec)
   if (point.x < x0 || point.x > x1 || point.y < y0 || point.y > y1) return null
-  return pointMark(sx, sy, point)
+  return {
+    ...(point.id === undefined ? {} : { id: point.id }),
+    cx: Number(sx(point.x).toFixed(2)),
+    cy: Number(sy(point.y).toFixed(2)),
+  }
 }
 
 function frame(spec: ChartSpec): ChartFrame {
@@ -307,55 +406,56 @@ function frame(spec: ChartSpec): ChartFrame {
     yLabel,
   } = geometry(spec)
 
-  const parts: string[] = [`<rect width="${WIDTH}" height="${HEIGHT}" fill="${PAPER}"/>`]
+  const under: string[] = [`<rect width="${WIDTH}" height="${HEIGHT}" fill="${PAPER}"/>`]
+  const over: string[] = []
   const accessibleName = spec.title ?? `${yLabel} against ${xLabel}`
-  const desc = spec.footer ?? `${(spec.points ?? []).length} points plotted`
+  const desc = spec.empty ?? spec.footer ?? `${(spec.points ?? []).length} points plotted`
 
   if (spec.title) {
-    parts.push(
+    under.push(
       `<text x="${LEFT}" y="${titleY}" font-family="${LABELS}" font-size="15" font-weight="600" fill="${INK}">${escapeXml(spec.title)}</text>`,
     )
   }
   if (spec.subtitle) {
-    parts.push(
+    under.push(
       `<text x="${LEFT}" y="${subtitleY}" font-family="${LABELS}" font-size="11.5" fill="${MUTED}">${escapeXml(spec.subtitle)}</text>`,
     )
   }
   if (spec.footer) {
     // `class="footer"` so the window can rewrite this one line when it appends a point without a
     // redraw: the count in it is the honest n, and it may not fall behind the marks.
-    parts.push(
+    under.push(
       `<text class="footer" x="${LEFT}" y="${footerY}" font-family="${NUMBERS}" font-size="10.5" fill="${MUTED}" style="font-variant-numeric:tabular-nums">${escapeXml(spec.footer)}</text>`,
     )
   }
 
-  for (const tick of ticks(y0, y1)) {
+  for (const tick of spec.empty ? [] : ticks(y0, y1)) {
     const y = sy(tick)
-    parts.push(
+    under.push(
       `<line x1="${LEFT}" y1="${y.toFixed(2)}" x2="${(LEFT + plotW).toFixed(2)}" y2="${y.toFixed(2)}" stroke="${GRID}" stroke-width="1"/>`,
       `<text x="${LEFT - 10}" y="${(y + 4).toFixed(2)}" text-anchor="end" font-family="${NUMBERS}" font-size="11" fill="${MUTED}" style="font-variant-numeric:tabular-nums">${formatNumber(tick)}</text>`,
     )
   }
 
-  for (const tick of ticks(x0, x1)) {
+  for (const tick of spec.empty ? [] : axisTicks(spec.x, x0, x1)) {
     const x = sx(tick)
-    parts.push(
+    under.push(
       `<line x1="${x.toFixed(2)}" y1="${top}" x2="${x.toFixed(2)}" y2="${bottomEdge.toFixed(2)}" stroke="${GRID}" stroke-width="1"/>`,
-      `<text x="${x.toFixed(2)}" y="${(bottomEdge + 20).toFixed(2)}" text-anchor="middle" font-family="${NUMBERS}" font-size="11" fill="${MUTED}" style="font-variant-numeric:tabular-nums">${formatNumber(tick)}</text>`,
+      `<text x="${x.toFixed(2)}" y="${(bottomEdge + 20).toFixed(2)}" text-anchor="middle" font-family="${NUMBERS}" font-size="11" fill="${MUTED}" style="font-variant-numeric:tabular-nums">${formatTick(tick, spec.x, x1 - x0)}</text>`,
     )
   }
 
   if (spec.band && spec.band.length > 1) {
     const upper = spec.band.map((b) => `${sx(b.x).toFixed(2)},${sy(b.y1).toFixed(2)}`)
     const lower = [...spec.band].reverse().map((b) => `${sx(b.x).toFixed(2)},${sy(b.y0).toFixed(2)}`)
-    parts.push(
+    under.push(
       `<path d="M${upper.join(' L')} L${lower.join(' L')} Z" fill="${ACCENT}" fill-opacity="0.14" stroke="none"/>`,
     )
   }
 
   if (spec.line && spec.line.length > 1) {
     const path = spec.line.map((p) => `${sx(p.x).toFixed(2)},${sy(p.y).toFixed(2)}`).join(' L')
-    parts.push(
+    under.push(
       `<path d="M${path}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`,
     )
   }
@@ -366,7 +466,7 @@ function frame(spec: ChartSpec): ChartFrame {
     const style = series.muted
       ? `stroke="${ACCENT}" stroke-opacity="0.55" stroke-dasharray="6 4"`
       : `stroke="${ACCENT}"`
-    parts.push(
+    under.push(
       `<path d="M${path}" fill="none" ${style} stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`,
     )
   }
@@ -383,7 +483,7 @@ function frame(spec: ChartSpec): ChartFrame {
     const labels = named.map((series) => series.label as string)
     const widest = Math.max(...labels.map((label) => label.length)) * 5.6 + 30
     const plateRight = LEFT + plotW - 8
-    parts.push(
+    under.push(
       `<rect x="${(plateRight - widest).toFixed(2)}" y="${(top + 3).toFixed(2)}" width="${widest.toFixed(2)}" height="${(named.length * 15 + 6).toFixed(2)}" rx="3" fill="${PAPER}" fill-opacity="0.96" stroke="${GRID}" stroke-width="1"/>`,
     )
   }
@@ -396,17 +496,29 @@ function frame(spec: ChartSpec): ChartFrame {
     const style = series.muted
       ? `stroke="${ACCENT}" stroke-opacity="0.55" stroke-dasharray="6 4"`
       : `stroke="${ACCENT}"`
-    parts.push(
+    under.push(
       `<line x1="${(swatchEnd - 18).toFixed(2)}" y1="${(y - 4).toFixed(2)}" x2="${swatchEnd.toFixed(2)}" y2="${(y - 4).toFixed(2)}" ${style} stroke-width="2" stroke-linecap="round"/>`,
       `<text class="legend" x="${rightEdge.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="end" font-family="${NUMBERS}" font-size="10.5" fill="${MUTED}">${escapeXml(label)}</text>`,
     )
   })
 
-  for (const point of spec.points ?? []) {
-    parts.push(pointMark(sx, sy, point))
+  const marks: ChartMark[] = (spec.points ?? []).map((point) => ({
+    ...(point.id === undefined ? {} : { id: point.id }),
+    cx: Number(sx(point.x).toFixed(2)),
+    cy: Number(sy(point.y).toFixed(2)),
+  }))
+
+  if (spec.empty) {
+    const lines = wrapCaption(spec.empty, 88, 3)
+    const first = top + plotH / 2 - ((lines.length - 1) * 15) / 2 + 4
+    lines.forEach((line, index) => {
+      over.push(
+        `<text x="${(LEFT + plotW / 2).toFixed(2)}" y="${(first + index * 15).toFixed(2)}" text-anchor="middle" font-family="${LABELS}" font-size="12" fill="${MUTED}">${escapeXml(line)}</text>`,
+      )
+    })
   }
 
-  parts.push(
+  over.push(
     `<line x1="${LEFT}" y1="${bottomEdge.toFixed(2)}" x2="${(LEFT + plotW).toFixed(2)}" y2="${bottomEdge.toFixed(2)}" stroke="${MUTED}" stroke-width="1"/>`,
     `<line x1="${LEFT}" y1="${top}" x2="${LEFT}" y2="${bottomEdge.toFixed(2)}" stroke="${MUTED}" stroke-width="1"/>`,
     `<text x="${(LEFT + plotW / 2).toFixed(2)}" y="${(bottomEdge + 40).toFixed(2)}" text-anchor="middle" font-family="${LABELS}" font-size="11.5" fill="${INK}">${escapeXml(xLabel)}</text>`,
@@ -414,12 +526,12 @@ function frame(spec: ChartSpec): ChartFrame {
   )
 
   captionLines.forEach((line, index) => {
-    parts.push(
+    over.push(
       `<text class="caption" x="${LEFT}" y="${(bottomEdge + 59 + index * 15).toFixed(2)}" font-family="${LABELS}" font-size="11" fill="${MUTED}">${escapeXml(line)}</text>`,
     )
   })
 
-  return { accessibleName, desc, parts }
+  return { accessibleName, desc, under, over, marks }
 }
 
 // Provenance rides on the root element as data attributes: invisible on the canvas, present for
@@ -432,8 +544,7 @@ function provenanceAttributes(spec: ChartSpec): string {
   ].join('')
 }
 
-export function renderChart(spec: ChartSpec): string {
-  const { accessibleName, desc, parts } = frame(spec)
+function svgDocument(accessibleName: string, desc: string, parts: string[], spec: ChartSpec): string {
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" role="img" aria-label="${escapeXml(accessibleName)}"${provenanceAttributes(spec)}>`,
     `<title>${escapeXml(accessibleName)}</title>`,
@@ -441,6 +552,65 @@ export function renderChart(spec: ChartSpec): string {
     ...parts,
     '</svg>',
   ].join('\n')
+}
+
+export function renderChart(spec: ChartSpec): string {
+  const { accessibleName, desc, under, over, marks } = frame(spec)
+  return svgDocument(accessibleName, desc, [...under, ...marks.map(pointMark), ...over], spec)
+}
+
+/**
+ * The window's drawing, split around the marks.
+ *
+ * The SVG file is one document; the window paints the observations on a canvas between two halves
+ * of it. That keeps the file and the window from having two renderers while letting ten thousand
+ * marks cost one canvas draw rather than ten thousand DOM nodes. Layer order is the artifact's own:
+ * `under` holds the plate, header, grid, fitted lines and legend; `over` holds the empty-state
+ * sentence, axes, labels and caption.
+ */
+export interface ChartLayers {
+  under: string
+  over: string
+  /**
+   * Projected positions packed as `[cx0, cy0, cx1, cy1, …]`, in `spec.points` order. The window
+   * needs the position, the id and the two values for each point; ten thousand objects would clone
+   * across the process boundary more slowly than the paint this split exists to save, so the three
+   * parallel arrays travel instead.
+   */
+  marks: Float32Array
+  /** The same points' data values, for the tooltip; packed arrays rather than objects. */
+  xs: Float64Array
+  ys: Float64Array
+  /** Record ids in point order, newline-joined; an empty entry where a point had none. */
+  ids: string
+  style: ChartMarkStyle
+}
+
+export function renderChartLayers(spec: ChartSpec): ChartLayers {
+  const { accessibleName, desc, under, over, marks } = frame(spec)
+  const points = spec.points ?? []
+  const packed = new Float32Array(marks.length * 2)
+  const xs = new Float64Array(points.length)
+  const ys = new Float64Array(points.length)
+  const ids: string[] = []
+  marks.forEach((mark, index) => {
+    packed[index * 2] = mark.cx
+    packed[index * 2 + 1] = mark.cy
+  })
+  points.forEach((point, index) => {
+    xs[index] = point.x
+    ys[index] = point.y
+    ids.push(point.id ?? '')
+  })
+  return {
+    under: svgDocument(accessibleName, desc, under, spec),
+    over: svgDocument(accessibleName, desc, over, spec),
+    marks: packed,
+    xs,
+    ys,
+    ids: ids.join('\n'),
+    style: MARK_STYLE,
+  }
 }
 
 /**
@@ -451,13 +621,15 @@ export function renderChartGroup(
   spec: ChartSpec,
   at: { x: number; y: number; panel?: number },
 ): string {
-  const { accessibleName, desc, parts } = frame(spec)
+  const { accessibleName, desc, under, over, marks } = frame(spec)
   const identity = at.panel === undefined ? '' : ` data-panel="${at.panel}"`
   return [
     `<g transform="translate(${at.x} ${at.y})"${identity}${provenanceAttributes(spec)}>`,
     `<title>${escapeXml(accessibleName)}</title>`,
     `<desc>${escapeXml(desc)}</desc>`,
-    ...parts,
+    ...under,
+    ...marks.map(pointMark),
+    ...over,
     '</g>',
   ].join('\n')
 }

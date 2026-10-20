@@ -13,12 +13,8 @@
  */
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { APP_ROOT, buildRunInput, chartSpecFor, hashInput, hashRecipeFile } from './analysis.ts'
-import type { ProjectState } from './binder.ts'
 import { CHART_HEIGHT, CHART_WIDTH, renderChartGroup, type ChartSpec } from './chart.ts'
 import { BenchError } from './errors.ts'
-import type { RunInput, RecipeRunner, RunResult } from './runner.ts'
-import type { Workspace } from './workspace.ts'
 
 export type QueryOp = '>' | '>=' | '<' | '<=' | '==' | '!='
 
@@ -49,6 +45,9 @@ export interface ViewPanel {
    */
   version: number | 'latest'
   query?: ViewQuery
+  /** Named axes for a plain plot. Absent means the historical x/y pair. */
+  x_field?: string
+  y_field?: string
   recipe?: string
   params?: Record<string, unknown>
   /** The materialized spec: what renders without Python. */
@@ -225,6 +224,8 @@ function checkPanel(value: unknown, index: number): string[] {
       'dataset',
       'version',
       'query',
+      'x_field',
+      'y_field',
       'recipe',
       'params',
       'chart',
@@ -242,6 +243,8 @@ function checkPanel(value: unknown, index: number): string[] {
     problems.push(`${where}.version must be "latest" or a version number (1, 2, …)`)
   }
   if (value.title !== undefined && typeof value.title !== 'string') problems.push(`${where}.title must be a string`)
+  if (value.x_field !== undefined && !str(value.x_field)) problems.push(`${where}.x_field must be a field name`)
+  if (value.y_field !== undefined && !str(value.y_field)) problems.push(`${where}.y_field must be a field name`)
   if (value.recipe !== undefined && !str(value.recipe)) problems.push(`${where}.recipe must be a non-empty string`)
   if (value.params !== undefined && !isRecord(value.params)) problems.push(`${where}.params must be an object`)
   if (value.verdict !== undefined && typeof value.verdict !== 'string') {
@@ -398,267 +401,12 @@ export async function requireFreeName(dir: string, name: string, overwrite: bool
   }
 }
 
-// --- selection ------------------------------------------------------------------------------
-
-function matches(values: Record<string, unknown>, clause: QueryClause): boolean {
-  const actual = values[clause.field]
-  if (actual === undefined) return false
-  if (clause.op === '==' || clause.op === '!=') {
-    const equal = typeof actual === 'number' && typeof clause.value === 'number'
-      ? actual === clause.value
-      : String(actual) === String(clause.value)
-    return clause.op === '==' ? equal : !equal
-  }
-  if (typeof actual !== 'number' || typeof clause.value !== 'number') {
-    throw new BenchError(
-      'invalid',
-      `query compares "${clause.field}" (${typeof actual}) with ${clause.op} ${String(clause.value)}`,
-      { hint: 'ordering comparisons need a numeric field and a numeric value' },
-    )
-  }
-  switch (clause.op) {
-    case '>':
-      return actual > clause.value
-    case '>=':
-      return actual >= clause.value
-    case '<':
-      return actual < clause.value
-    case '<=':
-      return actual <= clause.value
-  }
-}
-
-/**
- * The rows a panel reads: the dataset's active points, narrowed by the panel's query, in the same
- * shape a recipe is given. The hash covers exactly this set, so a filter that changes is a change.
- */
-export function selectInput(
-  state: ProjectState,
-  datasetId: string,
-  query?: ViewQuery,
-): RunInput | null {
-  const input = buildRunInput(state, datasetId)
-  if (!input) return null
-  const clauses = query?.where ?? []
-  if (clauses.length === 0) return input
-  return {
-    ...input,
-    points: input.points.filter((point) => clauses.every((clause) => matches(point.values, clause))),
-  }
-}
-
-// --- materialization ------------------------------------------------------------------------
-
-export interface PanelRequest {
-  dataset?: string
-  recipe?: string
-  params?: Record<string, unknown>
-  query?: ViewQuery
-  title?: string
-}
-
-export interface PlottedDataset {
-  spec: ChartSpec
-  plotted: number
-  skipped: number
-}
-
-/**
- * A dataset drawn without a model: points only, and a footer that says so. This is the one place the
- * unmodelled spec is built, so `bench chart` and a panel without a recipe cannot disagree.
- */
-export function plotDataset(
-  workspace: Workspace,
-  datasetId: string,
-  /** The rows a query selected. Omitted means every active point. */
-  input?: RunInput,
-  /** Heading for the canvas; defaults to the project's name, as `bench chart` has always done. */
-  title?: string,
-  /** The version those rows came from. Names it on the artifact rather than only in the tab. */
-  version?: number,
-): PlottedDataset {
-  const dataset = workspace.dataset(datasetId)
-  const rows = input === undefined ? dataset.points : input.points
-  const plotted = rows
-    .map((point) => ({ id: point.id, x: numericIn(point.values, 'x'), y: numericIn(point.values, 'y') }))
-    .filter((pair): pair is { id: string; x: number; y: number } => pair.x !== undefined && pair.y !== undefined)
-
-  const skipped = rows.length - plotted.length
-  const footerParts = [`n = ${plotted.length}`]
-  if (skipped > 0) footerParts.push(`${skipped} point(s) without x/y not plotted`)
-  footerParts.push('no fit — unmodelled')
-
-  return {
-    spec: {
-      title: title ?? workspace.config.name,
-      subtitle: `${datasetId} · ${dataset.definition?.id ?? 'unknown shape'}`,
-      provenance: {
-        dataset: datasetId,
-        shape: dataset.shape,
-        ...(version === undefined ? {} : { version }),
-      },
-      x: { label: 'x' },
-      y: { label: 'y' },
-      points: plotted,
-      footer: footerParts.join(' · '),
-    },
-    plotted: plotted.length,
-    skipped,
-  }
-}
-
-export interface MaterializedPanel {
-  panel: ViewPanel
-  /** Set when the panel came from a recipe, so the caller can report what the run said. */
-  result?: RunResult
-}
-
-/**
- * Build one panel from the project as it stands. A recipe panel runs the recipe; a plain panel plots
- * the dataset. Neither records a log event: a view is a saved question, and re-materializing one is
- * not an analysis anyone needs to read later. `bench run` remains the way to record a run.
- */
-export async function materializePanel(
-  workspace: Workspace,
-  request: PanelRequest,
-  runner?: RecipeRunner,
-): Promise<MaterializedPanel> {
-  const datasetId = workspace.resolveDataset(request.dataset)
-  const shape = workspace.shapeOf(datasetId)
-  const input = selectInput(workspace.state, datasetId, request.query)
-  if (!input) throw new BenchError('missing', `no dataset "${datasetId}"`)
-  if (input.points.length === 0) {
-    throw new BenchError(
-      'missing',
-      `dataset "${datasetId}" has no active points${request.query ? ' matching the query' : ''}`,
-      { hint: 'bench add --x 1 --y 2' },
-    )
-  }
-
-  const title = request.title ?? workspace.config.name
-  // Pinned here, once: every panel records the version it actually read.
-  const version = workspace.currentVersion(datasetId)
-
-  if (request.recipe === undefined) {
-    const { spec, plotted } = plotDataset(workspace, datasetId, input, title, version)
-    return {
-      panel: {
-        dataset: datasetId,
-        version,
-        ...(request.title === undefined ? {} : { title: request.title }),
-        ...(request.query === undefined ? {} : { query: request.query }),
-        chart: spec,
-        n: plotted,
-        input_hash: hashInput(input),
-      },
-    }
-  }
-
-  if (!runner) {
-    throw new BenchError('invariant', `a panel for recipe "${request.recipe}" needs the analysis runtime`)
-  }
-  const params = request.params ?? {}
-  const outcome = await runner.run(request.recipe, params, input)
-  if (!outcome.ok) {
-    throw new BenchError('invariant', outcome.error.message, {
-      hint: outcome.error.hint ?? `code: ${outcome.error.code}`,
-    })
-  }
-  const result = outcome.result
-  return {
-    panel: {
-      dataset: datasetId,
-      version,
-      ...(request.title === undefined ? {} : { title: request.title }),
-      ...(request.query === undefined ? {} : { query: request.query }),
-      recipe: result.recipe,
-      params,
-      chart: chartSpecFor(result, {
-        title,
-        dataset: datasetId,
-        shape: shape.id,
-        version,
-        recipe: result.recipe,
-      }),
-      verdict: result.verdict,
-      n: Number(result.diagnostics.n),
-      recipe_hash: result.recipeHash,
-      input_hash: hashInput(input),
-    },
-    result,
-  }
-}
-
-// --- staleness ------------------------------------------------------------------------------
-
-/**
- * Whether a panel still describes the project. Three answers, for the same reason a run has three:
- * a panel saved before fingerprints existed cannot be checked, and calling that current is a guess.
- */
-export async function panelStatus(
-  workspace: Workspace,
-  panel: ViewPanel,
-  index: number,
-): Promise<PanelStatus> {
-  const dataset = workspace.state.datasets.get(panel.dataset)
-  if (!dataset) return { index, state: 'missing', detail: `dataset "${panel.dataset}" is gone` }
-
-  // The version pin: a panel drawn from version 1 is stale the moment version 2 exists, even when a
-  // row happens to read the same. This is the answer to "what did this rest on", and it is checked
-  // before the fingerprint because it is the coarser, more certain fact.
-  if (panel.version !== 'latest' && dataset.version > panel.version) {
-    return {
-      index,
-      state: 'stale',
-      detail: `the dataset is at version ${dataset.version}; this panel was drawn from version ${panel.version}`,
-    }
-  }
-
-  // A recipe can change without the data moving, and a panel drawn by the old one would still look
-  // authoritative. Same check recorded runs get, for the same reason.
-  if (panel.recipe !== undefined && panel.recipe_hash !== undefined) {
-    const current = await hashRecipeFile(APP_ROOT, panel.recipe)
-    if (current === null) {
-      return { index, state: 'missing', detail: `recipes/${panel.recipe}.py is gone` }
-    }
-    if (current !== panel.recipe_hash) {
-      return { index, state: 'stale', detail: 'the recipe has changed since this panel was saved' }
-    }
-  }
-
-  if (panel.input_hash === undefined || panel.input_hash === '') {
-    return { index, state: 'unchecked', detail: 'this panel recorded no fingerprint' }
-  }
-  let input: RunInput | null
-  try {
-    input = selectInput(workspace.state, panel.dataset, panel.query)
-  } catch (error) {
-    return { index, state: 'stale', detail: error instanceof Error ? error.message : String(error) }
-  }
-  if (!input) return { index, state: 'missing', detail: `dataset "${panel.dataset}" is gone` }
-  if (hashInput(input) === panel.input_hash) return { index, state: 'current' }
-  return { index, state: 'stale', detail: 'the data changed since this panel was saved' }
-}
-
-export async function panelStatuses(workspace: Workspace, view: ViewFile): Promise<PanelStatus[]> {
-  const statuses: PanelStatus[] = []
-  for (const [index, panel] of view.panels.entries()) {
-    statuses.push(await panelStatus(workspace, panel, index))
-  }
-  return statuses
-}
-
 // --- rendering ------------------------------------------------------------------------------
 
 /**
  * Compose a view into one SVG, without Python and without reading the log. Panels keep their own
  * coordinates inside a nested group, so the grid is the only thing this function decides.
  */
-function numericIn(values: Record<string, unknown>, field: string): number | undefined {
-  const value = values[field]
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
 export function renderView(view: ViewFile): string {
   const columns = Math.min(MAX_COLUMNS, Math.max(1, view.layout.columns))
   const rows = Math.ceil(view.panels.length / columns)

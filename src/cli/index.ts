@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { APP_ROOT, freshnessNote } from '../core/analysis.ts'
 import {
@@ -15,8 +15,10 @@ import {
 } from '../core/workspace.ts'
 import type { PointValue } from '../core/events.ts'
 import { renderChart } from '../core/chart.ts'
+import { addHint } from '../core/hints.ts'
 import { validateValues } from '../core/shapes.ts'
 import {
+  DEFAULT_SHAPE,
   findProjectDir,
   initProject,
   launcherCommand,
@@ -28,27 +30,15 @@ import {
   resolveProjectName,
   type KnownProject,
 } from '../core/registry.ts'
-import {
-  listViews,
-  loadView,
-  materializePanel,
-  panelStatuses,
-  plotDataset,
-  renderView,
-  requireFreeName,
-  saveView,
-  slugFor,
-  validateView,
-  validateQuery,
-  viewPath,
-  type PanelRequest,
-  type ViewFile,
-  type ViewPanel,
-} from '../core/views.ts'
-import { RecipeRunner } from '../core/runner.ts'
+import { plotDataset } from '../core/panels.ts'
 import { renderState } from '../core/state.ts'
-import { commitImport, planImport } from '../core/import.ts'
-import { diffCounts, diffRows, type RowDiff } from '../core/versions.ts'
+import { diffCounts, diffRows } from '../core/versions.ts'
+import { runShapeCommand } from './shape.ts'
+import { runImportCommand } from './import.ts'
+import { runViewCommand } from './view.ts'
+import { printDiffDetails, shortNumber } from './diff-output.ts'
+import { parseParams } from './params.ts'
+import { withRunner } from './runner.ts'
 
 const EXIT_OK = 0
 const EXIT_INVALID = 1
@@ -67,17 +57,25 @@ const OPTIONS = {
   tag: { type: 'string', multiple: true },
   param: { type: 'string', multiple: true },
   chart: { type: 'string' },
+  'x-field': { type: 'string' },
+  'y-field': { type: 'string' },
   recipe: { type: 'string' },
   title: { type: 'string' },
   query: { type: 'string' },
   columns: { type: 'string' },
   shape: { type: 'string' },
+  field: { type: 'string' },
+  'time-field': { type: 'string' },
+  type: { type: 'string' },
+  unit: { type: 'string' },
+  optional: { type: 'boolean' },
   file: { type: 'string' },
   scan: { type: 'string' },
   refresh: { type: 'boolean' },
   format: { type: 'string' },
   map: { type: 'string', multiple: true },
   time: { type: 'string' },
+  'ignore-unmapped': { type: 'string', multiple: true },
   force: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
   out: { type: 'string' },
@@ -104,13 +102,18 @@ function printHelp(): void {
 Usage
   bench init [dir] [--name <name>]      create a project folder
   bench projects [--scan <dir>]         projects on this machine, most recent first
-  bench add --x 1 --y 2 [options]       record a point
+  bench add --values '{...}' [options]   record a point
+  bench shape extend <id> --field <name> --type <type>
+                                        append a field as the shape's next version
+  bench shape designate <id> --time-field <name>
+                                        make one instant field the observation time
   bench correct <id> --values '{"y":3}'  supersede a point (never overwrites)
   bench retract <id> [--reason text]    withdraw a point from analysis
   bench list [--dataset id] [--json]    list active points
   bench state [--json]                  regenerate and print STATE.md
   bench check [--json]                  validate the log and shapes
-  bench chart [--out file.svg]          render the dataset to an SVG artifact
+  bench chart [--x-field a] [--y-field b] [--out file.svg]
+                                        render the dataset to an SVG artifact
   bench dataset list                    datasets, with the version each is at
   bench dataset versions <id>           every version of a dataset, and what it replaced
   bench dataset diff <id> [v1] [v2]     row-level diff between two versions
@@ -131,7 +134,8 @@ Views (a tab is a view file in the project)
 
 Options for add
   --values '{"x":1,"y":2}'   explicit field values
-  --at <iso time>            when the value was observed; stored as canonical UTC
+  --at <iso time>            when the value was observed; must match a shape's designated
+                             time field, and is stored as canonical UTC
   --note <text>              context attached to the point
   --reason <text>            why a point was corrected or retracted
   --tag <tag>                repeatable
@@ -147,6 +151,20 @@ Options for view new / add
   --title <text>             panel heading
   --columns <1-4>            grid columns for the tab (view new only)
 
+Options for chart / view plot panels
+  --x-field <field>          horizontal field; a number or instant (default x)
+  --y-field <field>          vertical field; a number (default y)
+
+Options for shape extend
+  --field <name>            the field to append, e.g. b2b
+  --type <type>             required: number, integer, string, instant, or boolean
+  --unit <unit>             optional physical unit, e.g. C or s
+  --optional                the field may be absent on a point
+
+Options for shape designate
+  --time-field <name>       a required instant field; add, correct and import derive
+                            t_observed from it and refuse a value that disagrees
+
 Options for init
   --shape <file>            declare the point shape from a JSON file instead of xy.v1
 
@@ -155,6 +173,8 @@ Options for import
   --time <column>            read the observation time from a column (required: a row is its
                              instant, so a file without one is refused rather than stamped now)
   --format csv|tsv|jsonl     override detection from the file extension
+  --ignore-unmapped <column>  leave out an undeclared column, repeatable; required for every
+                             column the shape has no field for
   --dry-run                  report what would be imported and change nothing
   --force                    import a file whose exact contents were imported before
 
@@ -259,160 +279,6 @@ function collectValues(options: { x?: unknown; y?: unknown; values?: unknown }):
   return collected
 }
 
-/** Coerce `--param k=v` text into the type the recipe declared. */
-function parseParams(entries: string[] | undefined): Record<string, unknown> {
-  const params: Record<string, unknown> = {}
-  for (const entry of entries ?? []) {
-    const separator = entry.indexOf('=')
-    if (separator <= 0) die(`--param must look like name=value, got "${entry}"`)
-    const name = entry.slice(0, separator).trim()
-    const raw = entry.slice(separator + 1).trim()
-    if (raw === 'true') params[name] = true
-    else if (raw === 'false') params[name] = false
-    else if (raw !== '' && Number.isFinite(Number(raw))) params[name] = Number(raw)
-    else params[name] = raw
-  }
-  return params
-}
-
-async function withRunner<T>(root: string, use: (runner: RecipeRunner) => Promise<T>): Promise<T> {
-  const runner = new RecipeRunner(root)
-  try {
-    await runner.start()
-    return await use(runner)
-  } catch (error) {
-    // A refusal is not a runtime failure. Wrapping one would bury its kind — and a mistyped dataset
-    // would surface as "the analysis runtime cannot modify the log", which is a true sentence about
-    // the wrong thing.
-    if (error instanceof BenchError) throw error
-    // The interpreter is a separate process with no write access to the log, so a failure here can
-    // never damage the data. Say so, because "analysis broke" reads as "data is at risk".
-    const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`${message} — the analysis runtime cannot modify the log, so nothing was lost`)
-  } finally {
-    await runner.dispose()
-  }
-}
-
-/** Compact display for a coefficient; six significant figures is more than a reader can use. */
-function shortNumber(value: unknown): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
-  return String(Number(value.toPrecision(6)))
-}
-
-/** One row of a table, on one line: the fields it carries, in a stable order. */
-function formatValues(values: Record<string, PointValue>): string {
-  return Object.keys(values)
-    .sort()
-    .map((field) => `${field} ${typeof values[field] === 'number' ? shortNumber(values[field]) : JSON.stringify(values[field])}`)
-    .join('  ')
-}
-
-/** What an import does to the rows that are already there, in one sentence. */
-function versionSentence(plan: {
-  dataset: string
-  version: number
-  parent: number | null
-  diff: { added: number; removed: number; changed: number }
-  rows: number
-}): string {
-  if (plan.parent === null) return `first version of ${plan.dataset} · ${plan.rows} row(s)`
-  return `replaces version ${plan.parent} · ${diffCounts(plan.diff)}`
-}
-
-/** The rows behind a diff, so a bare `+1 −1 ~1` is never the whole story. */
-function printDiffDetails(diff: RowDiff, limit: number): void {
-  const show = (label: string, lines: string[]): void => {
-    if (lines.length === 0) return
-    process.stdout.write(`  ${label}:\n`)
-    for (const line of lines.slice(0, limit)) process.stdout.write(`    ${line}\n`)
-    if (lines.length > limit) process.stdout.write(`    … and ${lines.length - limit} more\n`)
-  }
-  show(`added ${diff.added}`, diff.addedRows.map((row) => `${row.t}  ${formatValues(row.values)}`))
-  show(
-    `changed ${diff.changed}`,
-    diff.changedRows.map((row) => `${row.t}  ${formatValues(row.before)}  →  ${formatValues(row.after)}`),
-  )
-  show(`removed ${diff.removed}`, diff.removedRows.map((row) => `${row.t}  ${formatValues(row.values)}`))
-}
-
-
-interface PanelOptions {
-  dataset?: string
-  recipe?: string
-  param?: string[]
-  query?: string
-  title?: string
-}
-
-/** The flags `view new` and `view add` share: everything that describes one panel. */
-function panelRequestFrom(options: PanelOptions): PanelRequest {
-  let query
-  if (typeof options.query === 'string') {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(options.query)
-    } catch {
-      die('--query is not valid JSON', EXIT_INVALID, `--query '{"where":[{"field":"y","op":">","value":0}]}'`)
-    }
-    try {
-      query = validateQuery(parsed)
-    } catch (error) {
-      fail(error)
-    }
-  }
-
-  return {
-    ...(options.dataset === undefined ? {} : { dataset: options.dataset }),
-    ...(options.recipe === undefined ? {} : { recipe: options.recipe }),
-    ...(options.param === undefined ? {} : { params: parseParams(options.param) }),
-    ...(query === undefined ? {} : { query }),
-    ...(options.title === undefined ? {} : { title: options.title }),
-  }
-}
-
-/** A panel that needs a recipe gets the Python runtime; a plot of the dataset never does. */
-async function materializeOne(workspace: Workspace, request: PanelRequest): Promise<ViewPanel> {
-  try {
-    if (request.recipe === undefined) {
-      return (await materializePanel(workspace, request)).panel
-    }
-    return (await withRunner(APP_ROOT, (runner) => materializePanel(workspace, request, runner))).panel
-  } catch (error) {
-    fail(error)
-  }
-}
-
-function columnCount(raw: string | undefined): number {
-  if (raw === undefined) return 2
-  const columns = Number(raw)
-  if (!Number.isInteger(columns) || columns < 1 || columns > 4) {
-    die(`--columns must be a whole number from 1 to 4, got "${raw}"`, EXIT_INVALID)
-  }
-  return columns
-}
-
-async function readStream(stream: NodeJS.ReadableStream): Promise<string> {
-  const chunks: Buffer[] = []
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk as string | Uint8Array))
-  return Buffer.concat(chunks).toString('utf8')
-}
-
-/** One line per panel for a person: what it reads, what produced it, and whether it still holds. */
-function describePanel(panel: ViewPanel, status: { state: string; detail?: string }): string {
-  const source = panel.recipe
-    ? `${panel.recipe} ${JSON.stringify(panel.params ?? {})}`
-    : 'plot'
-  const facts = [
-    panel.version === 'latest' ? `${panel.dataset} @latest` : `${panel.dataset} v${panel.version}`,
-    source,
-    panel.verdict ?? '',
-    panel.n === undefined ? '' : `n = ${panel.n}`,
-    status.state,
-  ].filter((fact) => fact !== '')
-  return `${facts.join(' · ')}${status.detail ? ` — ${status.detail}` : ''}`
-}
-
 function parse(argv: string[]) {
   try {
     return parseArgs({ args: argv, allowPositionals: true, options: OPTIONS, strict: true })
@@ -465,14 +331,17 @@ async function main(): Promise<void> {
             JSON.stringify({ ok: true, data: { dir: handle.dir, name: handle.config.name } }, null, 2) + '\n',
           )
         } else {
+          const declared = handle.shape ?? DEFAULT_SHAPE
+          const fields = declared.fields.map((field) => field.name).join(', ')
           process.stdout.write(`created project "${handle.config.name}" at ${handle.dir}\n`)
           process.stdout.write(
-            `  shape ${shape ? 'declared from ' + values.shape : 'xy.v1 (x, y)'} · dataset main\n`,
+            `  shape ${shape ? 'declared from ' + values.shape + ' · ' : ''}${declared.id} (${fields}) · dataset main\n`,
           )
           // The next command names the launcher this process was started from: a packaged user has
-          // no `bench` on PATH, and a hint that cannot run is worse than none.
+          // no `bench` on PATH, and a hint that cannot run is worse than none. The values come from
+          // the shape that was just declared, so a custom shape is not taught `--x`/`--y`.
           process.stdout.write(
-            `  next: ${launcherCommand()} --project "${launcherProjectPath(handle.dir)}" add --x 1.2 --y 3.4\n`,
+            `  next: ${launcherCommand()} --project "${launcherProjectPath(handle.dir)}" ${addHint(declared)}\n`,
           )
         }
       } catch (error) {
@@ -532,6 +401,16 @@ async function main(): Promise<void> {
       return
     }
 
+    case 'shape': {
+      await runShapeCommand(args, values, {
+        json: asJson,
+        open: openWorkspace,
+        die,
+        fail,
+      })
+      return
+    }
+
     case 'add': {
       const workspace = await openWorkspace(values.project)
       const pointValues = collectValues(values)
@@ -562,7 +441,10 @@ async function main(): Promise<void> {
       }
       await workspace.writeStateBrief()
 
-      const summary = Object.entries(pointValues)
+      // The values that were written, not the ones passed: a designated time field is canonicalised,
+      // and printing the raw input would describe a log entry that does not exist.
+      const stored = recorded.event.type === 'point_recorded' ? recorded.event.values : pointValues
+      const summary = Object.entries(stored)
         .map(([key, value]) => `${key}=${String(value)}`)
         .join(' ')
       if (asJson) {
@@ -576,7 +458,7 @@ async function main(): Promise<void> {
                 // The version the event names, not the dataset's current one guessed afterwards:
                 // a reader of this JSON should be able to say which rows the point joined.
                 version: recorded.event.type === 'point_recorded' ? (recorded.event.version ?? 1) : 1,
-                values: pointValues,
+                values: stored,
                 t_observed: recorded.tObserved,
               },
               warnings: recorded.warnings,
@@ -681,13 +563,20 @@ async function main(): Promise<void> {
           continue
         }
         // Only the active set is validated: retracting a bad record is the documented remedy for one,
-        // and check reports on the dataset as it stands, not on every entry ever made.
+        // and check reports on the dataset as it stands, not on every entry ever made. Each point is
+        // read against the declaration it was recorded with, so a later extension cannot make an
+        // older row fail for a field that did not exist when it was measured.
         for (const point of dataset.points) {
           if (point.status === 'retracted') {
             retracted += 1
             continue
           }
-          const validation = validateValues(shape, point.values)
+          const recordedShape = state.shapes.get(point.shape)
+          if (!recordedShape) {
+            errors.push(`${dataset.id}/${point.id}: references unknown shape "${point.shape}"`)
+            continue
+          }
+          const validation = validateValues(recordedShape, point.values)
           errors.push(...validation.errors.map((problem) => `${dataset.id}/${point.id}: ${problem}`))
           warnings.push(...validation.warnings.map((problem) => `${dataset.id}/${point.id}: ${problem}`))
         }
@@ -894,15 +783,16 @@ async function main(): Promise<void> {
       let plotted: ReturnType<typeof plotDataset>
       try {
         // The artifact names the version it drew, so a file on someone's desk answers "which rows".
-        plotted = plotDataset(workspace, datasetId, undefined, undefined, workspace.currentVersion(datasetId))
+        plotted = plotDataset(workspace, datasetId, undefined, undefined, workspace.currentVersion(datasetId), {
+          ...(values['x-field'] === undefined ? {} : { x: values['x-field'] }),
+          ...(values['y-field'] === undefined ? {} : { y: values['y-field'] }),
+        })
       } catch (error) {
         fail(error)
       }
 
-      if (plotted.plotted === 0) {
-        die(`dataset "${datasetId}" has no points with numeric x and y`, EXIT_MISSING, 'bench add --x 1 --y 2')
-      }
-
+      // No rows is still a drawing: the spec carries the empty sentence, so an agent can ask for the
+      // chart of a fresh project and get an artifact that says what to add rather than a bare refusal.
       const out = values.out ? resolve(values.out) : join(workspace.dir, 'artifacts', `${datasetId}.svg`)
       await mkdir(join(workspace.dir, 'artifacts'), { recursive: true })
       await writeFile(out, renderChart(plotted.spec))
@@ -918,115 +808,12 @@ async function main(): Promise<void> {
     }
 
     case 'import': {
-      const file = args[0]
-      if (!file) die('missing a file to import', EXIT_INVALID, 'bench import readings.csv')
-      const workspace = await openWorkspace(values.project)
-
-      // A relative path is looked for where the shell is, then inside the project. Both are what a
-      // person means by `import readings.csv`, especially when --project points somewhere else.
-      const candidates = isAbsolute(file) ? [file] : [resolve(file), resolve(workspace.dir, file)]
-      const source = candidates.find((candidate) => existsSync(candidate))
-      if (!source) {
-        die(`cannot find ${file}`, EXIT_MISSING, `looked in ${candidates.map((c) => dirname(c)).join(' and ')}`)
-      }
-
-      const format = values.format?.toLowerCase()
-      if (format !== undefined && !['csv', 'tsv', 'jsonl'].includes(format)) {
-        die(`unknown format "${format}"`, EXIT_INVALID, 'use csv, tsv, or jsonl')
-      }
-
-      const mapping: Record<string, string> = {}
-      for (const entry of values.map ?? []) {
-        const separator = entry.indexOf('=')
-        if (separator <= 0) die(`--map must look like field=column, got "${entry}"`)
-        mapping[entry.slice(0, separator).trim()] = entry.slice(separator + 1).trim()
-      }
-
-      // One plan answers every question before anything is written; `commitImport` is the only part
-      // that touches the disk, so a refusal cannot leave half a file behind.
-      let plan
-      try {
-        plan = await planImport(workspace, source, {
-          ...(values.dataset === undefined ? {} : { dataset: values.dataset }),
-          mapping,
-          ...(values.time === undefined ? {} : { time: values.time }),
-          ...(values.force === true ? { force: true } : {}),
-          ...(format === undefined ? {} : { format: format as 'csv' | 'tsv' | 'jsonl' }),
-        })
-      } catch (error) {
-        fail(error)
-      }
-
-      const summary = {
-        dataset: plan.dataset,
-        shape: plan.shape,
-        format: plan.format,
-        rows: plan.rows,
-        columns: plan.columns,
-        mapping: plan.mapping,
-        timeColumn: plan.timeColumn,
-        sourceHash: plan.sourceHash,
-        raggedRows: plan.raggedRows,
-        comments: plan.comments,
-        version: plan.version,
-        parent: plan.parent,
-        diff: { added: plan.diff.added, removed: plan.diff.removed, changed: plan.diff.changed },
-      }
-
-      if (values['dry-run'] === true) {
-        if (asJson) {
-          process.stdout.write(
-            JSON.stringify({ ok: true, data: { ...summary, dryRun: true, sample: plan.sample } }, null, 2) + '\n',
-          )
-        } else {
-          process.stdout.write(`would import ${plan.rows} row(s) into ${plan.dataset} (${plan.shape})\n`)
-          process.stdout.write(`  ${versionSentence(plan)}\n`)
-          for (const [field, column] of Object.entries(plan.mapping)) {
-            process.stdout.write(`  ${field} <= ${column}\n`)
-          }
-          if (plan.timeColumn) process.stdout.write(`  t_observed <= ${plan.timeColumn}\n`)
-          printDiffDetails(plan.diff, 5)
-          process.stdout.write(`  nothing was written\n`)
-        }
-        return
-      }
-
-      // The original is copied before anything is recorded: an import is evidence, and the file that
-      // produced it must outlive whatever is done to the working copy. It is never read again.
-      try {
-        await commitImport(workspace, plan)
-      } catch (error) {
-        fail(error)
-      }
-
-      for (const warning of plan.warnings.slice(0, 5)) process.stderr.write(`  warning: ${warning}\n`)
-      if (asJson) {
-        process.stdout.write(
-          JSON.stringify({ ok: true, data: { ...summary, preserved: plan.preserved, warnings: plan.warnings } }, null, 2) +
-            '\n',
-        )
-      } else {
-        process.stdout.write(
-          `imported ${plan.rows} row(s) into ${plan.dataset} as version ${plan.version} from ${basename(source)}\n`,
-        )
-        process.stdout.write(`  ${versionSentence(plan)}\n`)
-        process.stdout.write(`  preserved as ${plan.preserved}\n`)
-        for (const [field, column] of Object.entries(plan.mapping)) {
-          process.stdout.write(`  ${field} <= ${column}\n`)
-        }
-        if (plan.timeColumn) process.stdout.write(`  t_observed <= ${plan.timeColumn}\n`)
-        printDiffDetails(plan.diff, 5)
-        if (plan.parent !== null) {
-          const rows = workspace.rowsOfVersion(plan.dataset, plan.parent).length
-          process.stdout.write(`  version ${plan.parent} is untouched: still ${rows} row(s)\n`)
-        }
-        if (plan.raggedRows > 0) {
-          process.stdout.write(`  ${plan.raggedRows} row(s) had a different number of fields than the header\n`)
-        }
-        if (plan.comments > 0) {
-          process.stdout.write(`  ${plan.comments} comment line(s) skipped\n`)
-        }
-      }
+      await runImportCommand(args, values, {
+        json: asJson,
+        open: openWorkspace,
+        die,
+        fail,
+      })
       return
     }
 
@@ -1089,7 +876,7 @@ async function main(): Promise<void> {
       if (!previous) {
         die(`no previous \`${recipeName}\` run to repeat`, EXIT_MISSING, `bench run ${recipeName}`)
       }
-      const params = { ...(previous.params ?? {}), ...parseParams(values.param) }
+      const params = { ...(previous.params ?? {}), ...parseParams(values.param, die) }
 
       let repeated: AnalysisOutcome
       try {
@@ -1176,7 +963,7 @@ async function main(): Promise<void> {
       const recipeName = args[0]
       if (!recipeName) die('missing recipe name', EXIT_INVALID, 'run `bench recipes` to see what exists')
       const workspace = await openWorkspace(values.project)
-      const params = parseParams(values.param)
+      const params = parseParams(values.param, die)
 
       // Everything from here — the spec, the band note, the artifact, the recorded event — is the
       // same code `bench rerun` runs. See ADR 0003.
@@ -1273,7 +1060,9 @@ async function main(): Promise<void> {
       }
       await workspace.writeStateBrief()
 
-      const summary = Object.entries(patch)
+      // As with `add`, report the event's values: a designated field is canonicalised, and the raw
+      // argument would name text the log does not contain.
+      const summary = Object.entries(corrected.values)
         .map(([key, value]) => `${key}=${String(value)}`)
         .join(' ')
       if (asJson) {
@@ -1281,14 +1070,22 @@ async function main(): Promise<void> {
           JSON.stringify(
             {
               ok: true,
-              data: { event: corrected.event.id, point: id, values: patch, now: corrected.now },
+              data: {
+                event: corrected.event.id,
+                point: id,
+                values: corrected.values,
+                now: corrected.now,
+                ...(corrected.tObserved === undefined ? {} : { t_observed: corrected.tObserved }),
+              },
             },
             null,
             2,
           ) + '\n',
         )
       } else {
-        process.stdout.write(`corrected ${id}  ${summary}  (original record preserved)\n`)
+        process.stdout.write(
+          `corrected ${id}  ${summary}${corrected.tObserved === undefined ? '' : `  at ${corrected.tObserved}`}  (original record preserved)\n`,
+        )
       }
       return
     }
@@ -1311,235 +1108,13 @@ async function main(): Promise<void> {
     }
 
     case 'view': {
-      const [sub, viewName] = args
-      if (!sub) {
-        die('missing a view subcommand', EXIT_INVALID, 'bench view list | show | new | add | save | render')
-      }
-
-      if (sub === 'list') {
-        const workspace = await openWorkspace(values.project)
-        const { views, problems } = await listViews(workspace.dir)
-        for (const problem of problems) process.stderr.write(`  warning: ${problem}\n`)
-        if (asJson) {
-          process.stdout.write(
-            JSON.stringify(
-              { ok: true, data: { views, dir: join(workspace.dir, 'views') }, ...(problems.length === 0 ? {} : { warnings: problems }) },
-              null,
-              2,
-            ) + '\n',
-          )
-          return
-        }
-        if (views.length === 0) {
-          process.stdout.write('no views yet\n  next: bench view new drift --dataset main --recipe drift\n')
-          return
-        }
-        process.stdout.write(`${views.length} view(s) in ${join(workspace.dir, 'views')}\n`)
-        for (const view of views) {
-          const recipes = view.recipes.length === 0 ? '' : ` · ${view.recipes.join(', ')}`
-          process.stdout.write(
-            `  ${view.name}  ·  ${view.panels} panel(s) · ${view.columns} column(s)${recipes}\n`,
-          )
-          process.stdout.write(`      ${view.file}\n`)
-        }
-        return
-      }
-
-      if (sub === 'show' || sub === 'render') {
-        if (!viewName) die(`missing a view name`, EXIT_INVALID, `bench view ${sub} <name>`)
-        const workspace = await openWorkspace(values.project)
-
-        let view: ViewFile
-        try {
-          view = await loadView(workspace.dir, viewName)
-        } catch (error) {
-          fail(error)
-        }
-
-        let statuses = await panelStatuses(workspace, view)
-
-        if (sub === 'show') {
-          if (asJson) {
-            process.stdout.write(
-              JSON.stringify(
-                { ok: true, data: { file: viewPath(workspace.dir, view.name), view, status: statuses } },
-                null,
-                2,
-              ) + '\n',
-            )
-            return
-          }
-          process.stdout.write(
-            `${view.name} · ${view.panels.length} panel(s) · ${view.layout.columns} column(s) · views/${slugFor(view.name)}.json\n`,
-          )
-          view.panels.forEach((panel, index) => {
-            const status = statuses[index]!
-            const heading = panel.title ? `${panel.title} — ` : ''
-            process.stdout.write(`  ${index + 1}. ${heading}${describePanel(panel, status)}\n`)
-          })
-          if (statuses.some((status) => status.state !== 'current' && status.state !== 'unchecked')) {
-            process.stdout.write('  next: bench view render --refresh to re-read the data\n')
-          }
-          return
-        }
-
-        // Rendering is the one path that must never need Python: it draws what the file says.
-        if (values.refresh === true && statuses.some((status) => status.state !== 'current')) {
-          for (const status of statuses) {
-            if (status.state === 'current') continue
-            const panel = view.panels[status.index]!
-            view.panels[status.index] = await materializeOne(workspace, {
-              dataset: panel.dataset,
-              ...(panel.recipe === undefined ? {} : { recipe: panel.recipe }),
-              ...(panel.params === undefined ? {} : { params: panel.params }),
-              ...(panel.query === undefined ? {} : { query: panel.query }),
-              ...(panel.title === undefined ? {} : { title: panel.title }),
-            })
-          }
-          try {
-            await saveView(workspace.dir, view)
-          } catch (error) {
-            fail(error)
-          }
-          statuses = await panelStatuses(workspace, view)
-        }
-
-        const out = values.out
-          ? resolve(values.out)
-          : join(workspace.dir, 'artifacts', `view-${slugFor(view.name)}.svg`)
-        await mkdir(dirname(out), { recursive: true })
-        await writeFile(out, renderView(view))
-
-        if (asJson) {
-          process.stdout.write(
-            JSON.stringify(
-              { ok: true, data: { path: out, panels: view.panels.length, status: statuses } },
-              null,
-              2,
-            ) + '\n',
-          )
-        } else {
-          process.stdout.write(`wrote ${out}  (${view.panels.length} panel(s))\n`)
-          for (const status of statuses) {
-            if (status.state === 'current') continue
-            process.stdout.write(
-              `  panel ${status.index + 1}: ${status.state}${status.detail ? ` — ${status.detail}` : ''}\n`,
-            )
-          }
-        }
-        return
-      }
-
-      if (sub === 'new' || sub === 'add') {
-        if (!viewName) die('missing a view name', EXIT_INVALID, `bench view ${sub} <name> --dataset main`)
-        const workspace = await openWorkspace(values.project)
-
-        let view: ViewFile
-        if (sub === 'new') {
-          try {
-            await requireFreeName(workspace.dir, viewName, values.force === true)
-          } catch (error) {
-            fail(error)
-          }
-          view = { v: 1, name: viewName, layout: { columns: columnCount(values.columns) }, panels: [] }
-        } else {
-          try {
-            view = await loadView(workspace.dir, viewName)
-          } catch (error) {
-            fail(error)
-          }
-        }
-
-        const panel = await materializeOne(workspace, panelRequestFrom(values))
-        view.panels.push(panel)
-        try {
-          await saveView(workspace.dir, view)
-        } catch (error) {
-          fail(error)
-        }
-
-        const status = describePanel(panel, { state: 'current' })
-        if (asJson) {
-          process.stdout.write(
-            JSON.stringify(
-              {
-                ok: true,
-                data: { file: viewPath(workspace.dir, view.name), panels: view.panels.length, panel },
-              },
-              null,
-              2,
-            ) + '\n',
-          )
-        } else {
-          process.stdout.write(
-            `${sub === 'new' ? 'created' : 'added a panel to'} views/${slugFor(view.name)}.json  (${view.panels.length} panel(s))\n`,
-          )
-          process.stdout.write(`  ${status}\n`)
-        }
-        return
-      }
-
-      if (sub === 'save') {
-        const file = values.file
-        if (file === undefined) {
-          die('missing a file to save', EXIT_INVALID, `bench view save --file view.json (or - for stdin)`)
-        }
-
-        let text: string
-        if (file === '-') {
-          text = await readStream(process.stdin)
-        } else {
-          try {
-            text = await readFile(resolve(file), 'utf8')
-          } catch {
-            die(`cannot read ${file}`, EXIT_MISSING)
-          }
-        }
-
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(text)
-        } catch {
-          die(`${file} is not valid JSON`, EXIT_INVALID)
-        }
-
-        let view: ViewFile
-        try {
-          view = validateView(parsed)
-        } catch (error) {
-          fail(error)
-        }
-        if (viewName !== undefined && slugFor(viewName) !== slugFor(view.name)) {
-          die(
-            `the file is named "${view.name}", but the command asked for "${viewName}"`,
-            EXIT_INVALID,
-            'rename the view in the file, or the file on disk',
-          )
-        }
-
-        const workspace = await openWorkspace(values.project)
-        try {
-          await saveView(workspace.dir, view)
-        } catch (error) {
-          fail(error)
-        }
-        if (asJson) {
-          process.stdout.write(
-            JSON.stringify(
-              { ok: true, data: { file: viewPath(workspace.dir, view.name), panels: view.panels.length } },
-              null,
-              2,
-            ) + '\n',
-          )
-        } else {
-          process.stdout.write(
-            `saved views/${slugFor(view.name)}.json  (${view.panels.length} panel(s))\n`,
-          )
-        }
-        return
-      }
-
-      die(`unknown view subcommand "${sub}"`, EXIT_INVALID, 'bench view list | show | new | add | save | render')
+      await runViewCommand(args, values, {
+        json: asJson,
+        open: openWorkspace,
+        die,
+        fail,
+      })
+      return
     }
 
     default:

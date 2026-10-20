@@ -8,7 +8,8 @@ import type { BenchEvent } from '../src/core/events.ts'
 import { commitImport, planImport, previewImport } from '../src/core/import.ts'
 import { initProject } from '../src/core/project.ts'
 import { diffRows } from '../src/core/versions.ts'
-import { materializePanel, panelStatus, saveView } from '../src/core/views.ts'
+import { saveView } from '../src/core/views.ts'
+import { materializePanel, panelStatus } from '../src/core/panels.ts'
 import { Workspace } from '../src/core/workspace.ts'
 
 const row = (t: string, x: number, y: number) => ({ t, values: { x, y } })

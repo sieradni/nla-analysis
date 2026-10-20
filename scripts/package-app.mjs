@@ -34,8 +34,22 @@ const APP_FILES = [
   join('renderer', 'index.html'),
   join('renderer', 'app.js'),
   join('renderer', 'chart.js'),
+  join('renderer', 'state.js'),
+  join('renderer', 'format.js'),
+  join('renderer', 'navigation.js'),
+  join('renderer', 'rail.js'),
+  join('renderer', 'panels.js'),
+  join('renderer', 'entry.js'),
+  join('renderer', 'tabs.js'),
+  join('renderer', 'projects.js'),
+  join('renderer', 'import.js'),
   join('renderer', 'app.css'),
   join('renderer', 'tokens.css'),
+  join('harness', 'context.js'),
+  join('harness', 'driver.js'),
+  join('harness', 'smoke.js'),
+  join('harness', 'capture.js'),
+  join('harness', 'measure.js'),
 ]
 
 /**

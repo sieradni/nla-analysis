@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { interpreterCandidates } from '../src/core/runner.ts'
 import { Workspace } from '../src/core/workspace.ts'
-import { materializePanel, saveView, viewPath } from '../src/core/views.ts'
+import { saveView, viewPath } from '../src/core/views.ts'
+import { materializePanel } from '../src/core/panels.ts'
 
 /**
  * The desktop shell does not import `src/core`; it imports the bundle that `pnpm app:build` produces,
@@ -25,19 +26,37 @@ const built = existsSync(bundlePath)
 const analysisReady = existsSync(interpreterCandidates(process.cwd())[0]!)
 const fixture = join(process.cwd(), 'fixtures', 'projects', 'drift-sensor')
 
+/**
+ * Every door that opens a project registers a recent. These tests open dozens of scratch copies and
+ * create projects in temp folders, so the registry has to point at a throwaway home: without this,
+ * a `pnpm test` rearranges the list a real user switches projects with and leaves entries whose
+ * folders are deleted on cleanup.
+ */
+let benchHome: string
+
+beforeAll(async () => {
+  benchHome = await mkdtemp(join(tmpdir(), 'bench-shell-home-'))
+  process.env.BENCH_HOME = benchHome
+})
+
+afterAll(async () => {
+  delete process.env.BENCH_HOME
+  await rm(benchHome, { recursive: true, force: true })
+})
+
 describe.skipIf(!built)('bundled core, as the desktop shell loads it', () => {
   const shell = () => import(pathToFileURL(bundlePath).href) as Promise<Record<string, Function>>
 
   it('opens a committed view and says every panel is current', async () => {
     const api = await shell()
     const opened = (await api.openView!(fixture, 'drift over time')) as {
-      view: { name: string; panels: unknown[] }
+      view: { name: string; panels: { chart: { points?: unknown } }[] }
       statuses: { state: string }[]
-      svgs: string[]
+      drawings: unknown[]
     }
 
     expect(opened.view.name).toBe('drift over time')
-    expect(opened.svgs).toHaveLength(opened.view.panels.length)
+    expect(opened.drawings).toHaveLength(opened.view.panels.length)
     // The bundled copy must find its own `recipes/`: when it looked two levels up from `app/`, every
     // recipe read as missing. Covered here because `src` cannot reproduce that mistake.
     expect(opened.statuses.map((status) => status.state)).toEqual(
@@ -45,14 +64,39 @@ describe.skipIf(!built)('bundled core, as the desktop shell loads it', () => {
     )
   })
 
-  it('hands the window drawable SVG with identity and provenance intact', async () => {
+  it('hands the window a split drawing with identity and provenance intact', async () => {
     const api = await shell()
-    const opened = (await api.openView!(fixture, 'drift over time')) as { svgs: string[] }
-    const svg = opened.svgs[0]!
-    expect(svg.startsWith('<svg')).toBe(true)
-    expect(svg).toContain('data-dataset="main"')
-    expect(svg).toMatch(/data-point-id="[^"]+"/)
-    expect(svg).toContain('</svg>')
+    const opened = (await api.openView!(fixture, 'drift over time')) as {
+      view: { panels: { chart: { points?: unknown } }[] }
+      drawings: {
+        under: string
+        over: string
+        marks: Float32Array
+        xs: Float64Array
+        ys: Float64Array
+        ids: string
+      }[]
+    }
+    const drawing = opened.drawings[0]!
+    const ids = drawing.ids.split('\n')
+    expect(drawing.under.startsWith('<svg')).toBe(true)
+    expect(drawing.under).toContain('data-dataset="main"')
+    expect(drawing.under).toContain('</svg>')
+    expect(drawing.over).toContain('</svg>')
+    // The marks are not DOM nodes any more: they arrive projected in the spec's own point order, and
+    // the SVG halves deliberately do not carry a duplicate. Ids and values travel once, beside them.
+    expect(drawing.under).not.toContain('data-point-id')
+    expect(drawing.over).not.toContain('data-point-id')
+    expect(drawing.marks).toHaveLength(ids.length * 2)
+    expect(ids.every((id) => id !== '')).toBe(true)
+    expect(Array.prototype.every.call(drawing.marks, Number.isFinite)).toBe(true)
+    expect(Array.prototype.every.call(drawing.xs, Number.isFinite)).toBe(true)
+    // The payload is trimmed; the file it was drawn from still carries the full materialized spec.
+    expect(opened.view.panels[0]!.chart.points).toBeUndefined()
+    const saved = JSON.parse(
+      await readFile(join(fixture, 'views', 'drift-over-time.json'), 'utf8'),
+    ) as { panels: { chart: { points?: unknown[] } }[] }
+    expect(saved.panels[0]!.chart.points).toHaveLength(ids.length)
   })
 
   it('refuses a view that does not exist, with the hint the window shows', async () => {
@@ -111,7 +155,6 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(recorded.marks).toHaveLength(1)
     expect(recorded.marks[0].index).toBe(1)
     expect(recorded.marks[0].id).toBe(recorded.id)
-    expect(recorded.marks[0].markup).toContain(`data-point-id="${recorded.id}"`)
     expect(recorded.marks[0].cx).toBeGreaterThan(0)
     expect(recorded.marks[0].cy).toBeGreaterThan(0)
 
@@ -161,7 +204,8 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     const api = await shell()
     const dir = await scratchProject()
     const opened = (await api.openView!(dir, 'drift over time')) as Window
-    const drawn = opened.view.panels[1].chart.points[0] as { id: string; x: number; y: number }
+    const drawing = opened.drawings[1]
+    const drawn = { id: drawing.ids.split('\n')[0], x: drawing.xs[0], y: drawing.ys[0] }
 
     // What the strip is filled from: the log's own number, not the tooltip's rounded one.
     const detail = (await api.point!(dir, drawn.id, 'drift over time')) as Window
@@ -217,23 +261,36 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
 
     // A mapping that leaves a required field out is a refusal that names the field.
     await expect(api.importFile!(dir, file, { x: 'temp_c' })).rejects.toThrow(/no column for the required field "y"/)
+    // The window door has the same default as the CLI: extra columns are refused, not dropped.
+    await expect(api.importPlan!(dir, file, { x: 'temp_c', y: 'volts' })).rejects.toThrow(
+      /2 columns have no shape field: note, operator/,
+    )
+    await expect(api.importFile!(dir, file, { x: 'temp_c', y: 'volts' })).rejects.toThrow(
+      /no shape field/,
+    )
 
     // What the sheet shows before the button is pressed is the same computation the write performs:
     // the version, the rows that leave, and the parent they stay in. Nothing is written here.
     const beforePlan = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
-    const planned = (await api.importPlan!(dir, file, { x: 'temp_c', y: 'volts' })) as Window
+    const ignored = { ignoreColumns: ['note', 'operator'] }
+    const planned = (await api.importPlan!(dir, file, { x: 'temp_c', y: 'volts' }, ignored)) as Window
     expect(planned).toMatchObject({
       version: 3,
       parent: 2,
       rows: 5,
+      ignoredColumns: ['note', 'operator'],
       diff: { added: 5, removed: 14, changed: 0 },
     })
     expect(planned.removedRows).toHaveLength(14)
     expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(beforePlan)
 
     const logBefore = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
-    const imported = (await api.importFile!(dir, file, { x: 'temp_c', y: 'volts' }, { viewName: 'drift over time' })) as Window
+    const imported = (await api.importFile!(dir, file, { x: 'temp_c', y: 'volts' }, {
+      ...ignored,
+      viewName: 'drift over time',
+    })) as Window
     expect(imported.rows).toBe(5)
+    expect(imported.ignoredColumns).toEqual(['note', 'operator'])
     expect(imported.preserved).toMatch(/^data\/raw\/[0-9a-f]{12}-lab-export\.csv$/)
     // The fixture is at version 2, and none of its rows are in this file: the export is now the
     // dataset, as version 3, and the fourteen rows it does not have are withdrawn rather than lost.
@@ -265,7 +322,9 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(await readFile(join(dir, imported.preserved), 'utf8')).toBe(await readFile(file, 'utf8'))
 
     // And the same bytes twice is refused until it is asked for explicitly.
-    await expect(api.importFile!(dir, file, { x: 'temp_c', y: 'volts' })).rejects.toThrow(/already imported/)
+    await expect(
+      api.importFile!(dir, file, { x: 'temp_c', y: 'volts' }, ignored),
+    ).rejects.toThrow(/already imported/)
   })
 
   it('refuses an untimed file through the window door, and reads a named time column when given one', async () => {
@@ -377,7 +436,7 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     await api.recordPoint!(dir, { values: { x: 6.5, y: 16.4 } }, 'drift over time')
 
     const settled = (await api.refreshView!(dir, 'drift over time', { draw: false })) as Window
-    expect(settled.svgs).toBeNull()
+    expect(settled.drawings).toBeNull()
     expect(settled.counts[1]).toBe(15)
     expect(settled.footers[1]).toContain('n = 15')
     expect(settled.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
@@ -404,6 +463,9 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     // A project with no tabs still has somewhere to type: that is what makes the door usable.
     expect(created.entry).toMatchObject({ dataset: 'main', shape: 'load.v1', active: 0 })
     expect(created.entry.fields.map((field: Window) => field.name)).toEqual(['mass', 'extension'])
+    // The tab dialog reads these candidates from the core, not from its own type list.
+    expect(created.datasets[0].axes.x.map((field: Window) => field.name)).toEqual(['mass', 'extension'])
+    expect(created.datasets[0].axes.y.map((field: Window) => field.name)).toEqual(['mass', 'extension'])
 
     // The shape is declared in the log, not in a side file that could drift from it.
     const events = (await readFile(join(created.dir, 'data', 'events.jsonl'), 'utf8'))
@@ -438,7 +500,7 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(created.view.panels[0].recipe).toBeUndefined()
     expect(created.view.panels[0].n).toBe(14)
     expect(created.statuses.map((status: Window) => status.state)).toEqual(['current'])
-    expect(created.svgs).toHaveLength(1)
+    expect(created.drawings).toHaveLength(1)
 
     const file = JSON.parse(await readFile(join(dir, 'views', 'slope-check.json'), 'utf8')) as Window
     expect(file.panels[0].n).toBe(14)
@@ -449,6 +511,244 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     )
     // And a dataset that is not there is a refusal, not an empty chart.
     await expect(api.writeView!(dir, { name: 'other', dataset: 'nope' })).rejects.toThrow(/no dataset/)
+  })
+
+  it('writes a field-pair tab for a custom shape through the same core the window calls', async () => {
+    const api = await shell()
+    const parent = await mkdtemp(join(tmpdir(), 'bench-shell-axes-'))
+    scratch.push(parent)
+    const created = (await api.createProject!(parent, 'axes window', {
+      id: 'flight.v1',
+      fields: [
+        { name: 'date', type: 'instant' },
+        { name: 'altitude', type: 'number' },
+        { name: 'app', type: 'number' },
+      ],
+    })) as Window
+    await api.recordPoint!(created.dir, {
+      values: { date: '2026-10-19T12:41:32.498Z', altitude: 992.4, app: 0.675 },
+      tObserved: '2026-10-19T12:41:32.498Z',
+    })
+
+    const opened = (await api.writeView!(created.dir, {
+      name: 'altitude over time',
+      dataset: 'main',
+      xField: 'date',
+      yField: 'altitude',
+    })) as Window
+    expect(opened.view.panels[0].x_field).toBe('date')
+    expect(opened.view.panels[0].y_field).toBe('altitude')
+    expect(opened.view.panels[0].chart.x).toEqual({ label: 'date', format: 'time' })
+    const ids = opened.drawings[0].ids.split('\n')
+    expect(ids).toHaveLength(1)
+    expect(ids[0]).toBeTruthy()
+    expect(opened.drawings[0].marks).toHaveLength(2)
+    expect(opened.drawings[0].xs[0]).toBe(Date.parse('2026-10-19T12:41:32.498Z'))
+    expect(opened.drawings[0].ys[0]).toBe(992.4)
+
+    // An instant axis is projected through the same path: the incremental mark carries epoch millis
+    // on x and the numeric value on y, not the raw ISO string or the wrong field pair.
+    const later = (await api.recordPoint!(
+      created.dir,
+      {
+        values: {
+          date: '2026-10-19T13:41:32.498Z',
+          altitude: 990,
+          app: 0.7,
+        },
+      },
+      'altitude over time',
+    )) as Window
+    expect(later.redraw).toBe(false)
+    expect(later.marks).toHaveLength(1)
+    expect(later.marks[0]).toMatchObject({
+      x: Date.parse('2026-10-19T13:41:32.498Z'),
+      y: 990,
+    })
+
+    const saved = JSON.parse(await readFile(join(created.dir, 'views', 'altitude-over-time.json'), 'utf8')) as Window
+    expect(saved.panels[0].x_field).toBe('date')
+    expect(saved.panels[0].chart.x.format).toBe('time')
+  })
+
+  it('projects a point onto a custom-axis tab and refreshes with the axes it already had', async () => {
+    const api = await shell()
+    const parent = await mkdtemp(join(tmpdir(), 'bench-shell-axes-write-'))
+    scratch.push(parent)
+    const created = (await api.createProject!(parent, 'custom axes', {
+      id: 'load.v1',
+      fields: [
+        { name: 'mass', type: 'number' },
+        { name: 'extension', type: 'number' },
+      ],
+    })) as Window
+    await api.writeView!(created.dir, {
+      name: 'mass vs extension',
+      dataset: 'main',
+      xField: 'mass',
+      yField: 'extension',
+    })
+
+    // The first point has no scale to land against, so it must ask for a redraw rather than
+    // patching a mark onto the empty frame. The redraw is the bug this test pins: before the fix it
+    // returned no marks and no redraw, and the following refresh reverted to x/y.
+    const first = (await api.recordPoint!(
+      created.dir,
+      { values: { mass: 2.5, extension: 12 } },
+      'mass vs extension',
+    )) as Window
+    expect(first.redraw).toBe(true)
+    expect(first.marks).toEqual([])
+
+    const rebuilt = (await api.refreshView!(created.dir, 'mass vs extension', { draw: true })) as Window
+    expect(rebuilt.kept).toEqual([])
+    expect(rebuilt.view.panels[0].x_field).toBe('mass')
+    expect(rebuilt.view.panels[0].y_field).toBe('extension')
+    expect(rebuilt.view.panels[0].chart.x.label).toBe('mass')
+    expect(rebuilt.view.panels[0].n).toBe(1)
+    expect(rebuilt.drawings[0].marks).toHaveLength(2)
+    expect(Array.from(rebuilt.drawings[0].xs)).toEqual([2.5])
+    expect(Array.from(rebuilt.drawings[0].ys)).toEqual([12])
+
+    // A point inside the drawn domain is one mark on this panel's axes, not one on x/y.
+    const second = (await api.recordPoint!(
+      created.dir,
+      { values: { mass: 2.6, extension: 12.2 } },
+      'mass vs extension',
+    )) as Window
+    expect(second.redraw).toBe(false)
+    expect(second.untouched).toEqual([])
+    expect(second.marks).toHaveLength(1)
+    expect(second.marks[0]).toMatchObject({ index: 0, id: second.id, x: 2.6, y: 12.2 })
+    expect(second.marks[0].cx).toBeGreaterThan(0)
+    expect(second.marks[0].cy).toBeGreaterThan(0)
+
+    // A point that moves the axes asks for a redraw, and the refresh still reads the panel's own
+    // fields rather than falling back to x/y.
+    const moved = (await api.recordPoint!(
+      created.dir,
+      { values: { mass: 1000, extension: 5000 } },
+      'mass vs extension',
+    )) as Window
+    expect(moved.redraw).toBe(true)
+    const afterMove = (await api.refreshView!(created.dir, 'mass vs extension', {
+      draw: true,
+    })) as Window
+    expect(afterMove.kept).toEqual([])
+    expect(afterMove.view.panels[0].x_field).toBe('mass')
+    expect(afterMove.view.panels[0].y_field).toBe('extension')
+    expect(afterMove.view.panels[0].n).toBe(3)
+    expect(afterMove.drawings[0].marks).toHaveLength(6)
+
+    const saved = JSON.parse(
+      await readFile(join(created.dir, 'views', 'mass-vs-extension.json'), 'utf8'),
+    ) as Window
+    expect(saved.panels[0].x_field).toBe('mass')
+    expect(saved.panels[0].n).toBe(3)
+  })
+
+  it('saves the rebuilt tab that was painted even after another tab is opened', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    await api.openView!(dir, 'drift over time')
+    await api.writeView!(dir, { name: 'second tab', dataset: 'main' })
+    await api.openView!(dir, 'drift over time')
+
+    // A point outside the axes forces the deferred-save path: refresh with `persist:false` leaves
+    // the rebuilt view staged, exactly as the window does before it paints.
+    const recorded = (await api.recordPoint!(
+      dir,
+      { values: { x: 1000, y: 1000 } },
+      'drift over time',
+    )) as Window
+    expect(recorded.redraw).toBe(true)
+    const rebuilt = (await api.refreshView!(dir, 'drift over time', {
+      draw: true,
+      persist: false,
+    })) as Window
+    expect(rebuilt.view.panels[1].n).toBe(15)
+
+    // Reopening the same tab before the save runs must show the drawing that was painted, not the
+    // old file, and must leave the staged view for the save.
+    const reopened = (await api.openView!(dir, 'drift over time')) as Window
+    expect(reopened.view.panels[1].n).toBe(15)
+    // A read that finds nothing stale must not discard the pending view: it is still what was
+    // painted, and the save is still owed.
+    const noop = (await api.refreshView!(dir, 'drift over time', { draw: true })) as Window
+    expect(noop.refreshed).toEqual([])
+
+    // The user opens the other tab before the paint's save runs. The save must write the staged
+    // drawing for "drift over time", not reload that name from disk (which still says n = 14).
+    await api.openView!(dir, 'second tab')
+    const persisted = (await api.persistView!(dir, 'drift over time')) as Window
+    expect(persisted).toMatchObject({ reread: false, saved: true })
+    const saved = JSON.parse(
+      await readFile(join(dir, 'views', 'drift-over-time.json'), 'utf8'),
+    ) as Window
+    expect(saved.panels[1].n).toBe(15)
+
+    // There is no staged view for the tab now on screen. Refusing to write is the honest answer;
+    // reloading by name here would have written a stale file over it.
+    const missing = (await api.persistView!(dir, 'second tab')) as Window
+    expect(missing.saved).toBe(false)
+  })
+
+  it('catches a staged tab up when another point is painted before its save', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    await api.openView!(dir, 'drift over time')
+
+    // The first point moves the axes, so the window redraws and stages the rebuilt tab.
+    const moved = (await api.recordPoint!(dir, { values: { x: 1000, y: 1000 } }, 'drift over time')) as Window
+    expect(moved.redraw).toBe(true)
+    const rebuilt = (await api.refreshView!(dir, 'drift over time', {
+      draw: true,
+      persist: false,
+    })) as Window
+    expect(rebuilt.view.panels[1].n).toBe(15)
+
+    // A second point inside the new axes is painted as one mark, without another refresh or stage.
+    // The staged view still says n = 15; saving it unchanged would lose the point that is on screen.
+    const inside = (await api.recordPoint!(
+      dir,
+      { values: { x: 6.5, y: 16.4 } },
+      'drift over time',
+    )) as Window
+    expect(inside.redraw).toBe(false)
+    expect(inside.marks).toHaveLength(1)
+
+    const persisted = (await api.persistView!(dir, 'drift over time')) as Window
+    expect(persisted).toMatchObject({ reread: false, saved: true })
+    const saved = JSON.parse(
+      await readFile(join(dir, 'views', 'drift-over-time.json'), 'utf8'),
+    ) as Window
+    expect(saved.panels[1].n).toBe(16)
+    expect(saved.panels[1].chart.points).toHaveLength(16)
+  })
+
+  it('writes a first tab before the project has any points, through the window\'s own call', async () => {
+    const api = await shell()
+    const parent = await mkdtemp(join(tmpdir(), 'bench-shell-first-'))
+    scratch.push(parent)
+    const created = (await api.createProject!(parent, 'first tab', {
+      id: 'flight.v1',
+      fields: [
+        { name: 'altitude', type: 'number' },
+        { name: 'app', type: 'number' },
+        { name: 'date', type: 'instant' },
+      ],
+    })) as Window
+
+    const opened = (await api.writeView!(created.dir, {
+      name: 'first tab',
+      dataset: 'main',
+      xField: 'app',
+      yField: 'altitude',
+    })) as Window
+    expect(opened.view.panels[0].n).toBe(0)
+    expect(opened.view.panels[0].chart.empty).toContain('No observations')
+    expect(opened.drawings[0].over).toContain('No observations')
+    expect(opened.drawings[0].marks).toHaveLength(0)
   })
 
   // Three interpreter starts (catalog, build, rebuild), each ~1.5–4 s on a cold cache: the 5 s
@@ -509,16 +809,7 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
  */
 describe.skipIf(!built)('the bundled core, with the CLI writing beside it', () => {
   const scratch: string[] = []
-  let benchHome: string
   const cli = join(process.cwd(), 'src', 'cli', 'index.ts')
-
-  beforeAll(async () => {
-    // Every CLI command records a recent. Point the registry at a throwaway home so this harness
-    // cannot leave scratch projects in the operator's list, and so the bundle's own writes land there
-    // too.
-    benchHome = await mkdtemp(join(tmpdir(), 'bench-shell-cli-home-'))
-    process.env.BENCH_HOME = benchHome
-  })
 
   async function scratchProject(): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'bench-shell-cli-'))

@@ -1,10 +1,13 @@
 /*
  * Interaction for one rendered panel.
  *
- * The SVG is drawn by the core renderer and handed over as markup, so the window never re-implements
- * scales, ticks or the honesty lines. Interaction moves the SVG's own `viewBox`: zooming is a crop of
- * the same drawing, which keeps every coordinate, label and `data-point-id` exactly where the core
- * put it. Hover finds the nearest point in the crop and names it by id.
+ * The core returns the chart in two halves around its marks: the plate, grid and fits below, the
+ * axes, labels and caption above. The window paints every observation on a canvas between them, so a
+ * rescale costs one draw instead of ten thousand DOM nodes, while the artifact on disk keeps the same
+ * SVG. Both halves share one `viewBox`, so zooming is still a crop of the same drawing.
+ *
+ * The scale is the core's. Marks arrive already projected into the chart's 760×440 units; this file
+ * only maps those units onto the canvas. Hover finds the nearest mark in the crop and names it by id.
  */
 ;(function () {
   'use strict'
@@ -24,32 +27,55 @@
     return value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
   }
 
+  /** A tooltip reads the same quantity the axis does: an instant as a clock, not as epoch millis. */
+  function formatAxis(value, axis) {
+    if (axis && axis.format === 'time' && typeof value === 'number' && isFinite(value)) {
+      return new Date(value).toISOString().slice(0, 19).replace('T', ' ')
+    }
+    return format(value)
+  }
+
   /**
-   * Parse the core's markup into a live SVG.
-   *
-   * `DOMParser` + `importNode` is the obvious way and is what this did first; at 10k points it was
-   * the single largest cost of typing a point — a whole second document parsed and then deep-copied
-   * into this one. The HTML parser builds SVG content in place, in the foreign-content namespace,
-   * and the markup is well-formed XML by construction (the core's own test asserts it), so the
-   * faster path cannot accept something the slower one would reject.
+   * Build one of the drawing's halves. The HTML parser builds SVG content in place, in the
+   * foreign-content namespace, and the markup is well-formed XML by construction (the core's own
+   * test asserts it), so this fast path cannot accept something a stricter parser would reject.
    */
-  function parse(host, text) {
-    host.innerHTML = text
-    var node = host.firstElementChild
+  function insertSvg(host, text, where) {
+    host.insertAdjacentHTML(where, text)
+    var node = where === 'afterbegin' ? host.firstElementChild : host.lastElementChild
     if (!node || node.nodeName.toLowerCase() !== 'svg') {
       host.textContent = ''
       throw new Error('the core returned something that is not an SVG')
     }
+    node.removeAttribute('width')
+    node.removeAttribute('height')
     return node
   }
 
-  function mount(host, panel, svgText, options) {
-    var svg = parse(host, svgText)
-    // The host owns the size; the SVG keeps its own coordinate system.
-    svg.removeAttribute('width')
-    svg.removeAttribute('height')
+  /**
+   * `drawing` is `{ under, over, marks, style }` from the core: two SVG halves and the projected
+   * marks that belong between them.
+   */
+  function mount(host, panel, drawing, options) {
+    host.textContent = ''
+    var under = insertSvg(host, drawing.under, 'afterbegin')
+    under.classList.add('layer-under')
+    // The host carries the accessible name and the drawing is a picture of it. Two SVGs, a canvas
+    // and a host with a role would otherwise announce the same chart three times; the host's label
+    // is the one that also names the figures and the panel's state.
+    under.setAttribute('aria-hidden', 'true')
 
-    var viewBox = svg.viewBox.baseVal
+    var canvas = document.createElement('canvas')
+    canvas.className = 'marks'
+    canvas.setAttribute('aria-hidden', 'true')
+    host.appendChild(canvas)
+    var context = canvas.getContext('2d')
+
+    var over = insertSvg(host, drawing.over, 'beforeend')
+    over.classList.add('layer-over')
+    over.setAttribute('aria-hidden', 'true')
+
+    var viewBox = under.viewBox.baseVal
     var base = { x: viewBox.x, y: viewBox.y, w: viewBox.width, h: viewBox.height }
     var box = { x: base.x, y: base.y, w: base.w, h: base.h }
     var drag = null
@@ -64,44 +90,110 @@
       }
     }
 
-    // Hit-testing works on what was actually drawn, not on the data. The core draws each point at a
-    // projected pixel position inside the canvas, so a pointer maps back to *canvas* coordinates —
-    // comparing those against `point.x` (the data value, maybe 7 or 18.62) finds nothing every time.
-    // The drawn marks carry both the position and, through `data-point-id`, the record they came from.
+    // Positions, ids and data values arrive as parallel arrays in the spec's own point order. Tooltip
+    // values are data values, not projected positions: `cx`/`cy` say where a mark is drawn, `xs`/`ys`
+    // say what it measured.
+    var packed = drawing.marks || []
+    var xs = drawing.xs || []
+    var ys = drawing.ys || []
+    var ids =
+      typeof drawing.ids === 'string' && drawing.ids !== '' ? drawing.ids.split('\n') : []
     var values = {}
-    ;(panel.chart.points || []).forEach(function (point) {
-      if (point && typeof point.id === 'string') values[point.id] = point
-    })
-
     var marks = []
-    Array.prototype.forEach.call(svg.querySelectorAll('circle[data-point-id]'), function (circle) {
-      var cx = Number(circle.getAttribute('cx'))
-      var cy = Number(circle.getAttribute('cy'))
-      if (isFinite(cx) && isFinite(cy)) {
-        marks.push({ id: circle.getAttribute('data-point-id'), cx: cx, cy: cy })
-      }
-    })
+    for (var slot = 0; slot * 2 + 1 < packed.length; slot += 1) {
+      var id = ids[slot] || undefined
+      marks.push({ id: id, cx: packed[slot * 2], cy: packed[slot * 2 + 1] })
+      if (id) values[id] = { id: id, x: xs[slot], y: ys[slot] }
+    }
+    var style = drawing.style || { radius: 3.4, fill: '#1f6feb', stroke: '#ffffff', strokeWidth: 1.5 }
+
+    function count() {
+      host.dataset.marks = String(marks.length)
+    }
+    count()
 
     var dot = document.createElementNS(SVG_NS, 'circle')
     dot.setAttribute('class', 'hover-dot')
     dot.setAttribute('visibility', 'hidden')
-    svg.appendChild(dot)
+    over.appendChild(dot)
 
     // Selection is a second, larger ring: hover answers "which record is this?", selection says
     // "this is the one being edited", and they can be different marks at the same time.
     var selection = document.createElementNS(SVG_NS, 'circle')
     selection.setAttribute('class', 'select-dot')
     selection.setAttribute('visibility', 'hidden')
-    svg.appendChild(selection)
+    over.appendChild(selection)
     var selected = null
 
     function zoomFactor() {
       return base.w / box.w
     }
 
+    /** The live drawing area, in CSS pixels, and the conversion the canvas and pointer share. */
+    function view() {
+      var rect = under.getBoundingClientRect()
+      return { rect: rect, scale: rect.width > 0 ? rect.width / box.w : 0 }
+    }
+
+    /**
+     * Paint every mark inside the crop. One path for all of them, filled and stroked once: ten
+     * thousand individual `fill`/`stroke` calls would spend the budget on state changes.
+     */
+    function draw() {
+      var at = view()
+      var rect = at.rect
+      if (!context || rect.width <= 0 || rect.height <= 0) return
+      var dpr = window.devicePixelRatio || 1
+      var width = Math.max(1, Math.round(rect.width * dpr))
+      var height = Math.max(1, Math.round(rect.height * dpr))
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width
+        canvas.height = height
+      }
+      context.setTransform(dpr, 0, 0, dpr, 0, 0)
+      context.clearRect(0, 0, rect.width, rect.height)
+      if (at.scale <= 0 || marks.length === 0) return
+
+      var radius = style.radius * at.scale
+      var right = box.x + box.w
+      var bottom = box.y + box.h
+      context.beginPath()
+      for (var index = 0; index < marks.length; index += 1) {
+        var mark = marks[index]
+        if (mark.cx < box.x || mark.cx > right || mark.cy < box.y || mark.cy > bottom) continue
+        var px = (mark.cx - box.x) * at.scale
+        var py = (mark.cy - box.y) * at.scale
+        context.moveTo(px + radius, py)
+        context.arc(px, py, radius, 0, Math.PI * 2)
+      }
+      context.fillStyle = style.fill
+      context.fill()
+      context.lineWidth = style.strokeWidth * at.scale
+      context.strokeStyle = style.stroke
+      context.stroke()
+    }
+
+    /** One more mark, drawn onto the canvas without repainting the ten thousand already there. */
+    function drawMark(mark) {
+      var at = view()
+      if (!context || at.scale <= 0) return
+      if (mark.cx < box.x || mark.cx > box.x + box.w || mark.cy < box.y || mark.cy > box.y + box.h) return
+      var radius = style.radius * at.scale
+      context.beginPath()
+      context.arc((mark.cx - box.x) * at.scale, (mark.cy - box.y) * at.scale, radius, 0, Math.PI * 2)
+      context.fillStyle = style.fill
+      context.fill()
+      context.lineWidth = style.strokeWidth * at.scale
+      context.strokeStyle = style.stroke
+      context.stroke()
+    }
+
     function apply() {
-      svg.setAttribute('viewBox', box.x + ' ' + box.y + ' ' + box.w + ' ' + box.h)
+      var value = box.x + ' ' + box.y + ' ' + box.w + ' ' + box.h
+      under.setAttribute('viewBox', value)
+      over.setAttribute('viewBox', value)
       if (options.zoomLabel) options.zoomLabel.textContent = zoomFactor().toFixed(1) + '×'
+      draw()
     }
 
     function constrain() {
@@ -119,11 +211,20 @@
 
     /** Client coordinates to the drawing's own units, at the current crop. */
     function toBox(clientX, clientY) {
-      var rect = svg.getBoundingClientRect()
+      var rect = under.getBoundingClientRect()
       return {
         x: box.x + ((clientX - rect.left) / rect.width) * box.w,
         y: box.y + ((clientY - rect.top) / rect.height) * box.h,
         rect: rect,
+      }
+    }
+
+    /** The inverse, for the capture harness: where a mark actually sits on screen. */
+    function toClient(cx, cy) {
+      var rect = under.getBoundingClientRect()
+      return {
+        x: rect.left + ((cx - box.x) / box.w) * rect.width,
+        y: rect.top + ((cy - box.y) / box.h) * rect.height,
       }
     }
 
@@ -141,6 +242,7 @@
     function hideHover() {
       dot.setAttribute('visibility', 'hidden')
       options.tooltip.hidden = true
+      host.classList.remove('over-mark')
     }
 
     /** What was drawn at these client coordinates, or null. Hover and click want the same answer. */
@@ -165,6 +267,8 @@
 
     /** Put the selection ring on one mark and tell the window which record it is. */
     function showSelection(mark) {
+      // Only a mark with a record can be selected: there is nothing to correct otherwise.
+      if (!mark || !mark.id) return
       selected = mark
       var at = toBox(0, 0)
       var perPixel = box.w / at.rect.width
@@ -184,6 +288,7 @@
     }
 
     function showHover(mark, clientX, clientY) {
+      if (!mark || !mark.id) return
       var rect = toBox(clientX, clientY).rect
       var perPixel = box.w / rect.width
       var point = values[mark.id]
@@ -192,6 +297,7 @@
       dot.setAttribute('r', String(6 * perPixel))
       dot.setAttribute('stroke-width', String(1.5 * perPixel))
       dot.setAttribute('visibility', 'visible')
+      host.classList.add('over-mark')
 
       var tooltip = options.tooltip
       tooltip.textContent = ''
@@ -202,7 +308,14 @@
       if (point) {
         var numbers = document.createElement('div')
         numbers.className = 't-values'
-        numbers.textContent = 'x ' + format(point.x) + '   y ' + format(point.y)
+        numbers.textContent =
+          (panel.chart.x && panel.chart.x.label ? panel.chart.x.label : 'x') +
+          ' ' +
+          formatAxis(point.x, panel.chart.x) +
+          '   ' +
+          (panel.chart.y && panel.chart.y.label ? panel.chart.y.label : 'y') +
+          ' ' +
+          formatAxis(point.y, panel.chart.y)
         tooltip.appendChild(numbers)
       }
       var hint = document.createElement('div')
@@ -239,7 +352,7 @@
 
     host.addEventListener('pointermove', function (event) {
       if (drag && drag.id === event.pointerId) {
-        var rect = svg.getBoundingClientRect()
+        var rect = under.getBoundingClientRect()
         box.x -= (event.clientX - drag.x) * (box.w / rect.width)
         box.y -= (event.clientY - drag.y) * (box.h / rect.height)
         drag.moved += Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y)
@@ -338,26 +451,67 @@
       hideHover()
     })
 
+    // The chart's height follows its own viewBox ratio; the host can still change width with the
+    // window, so the bitmap has to follow it rather than stretch. The observer is kept so a repaint
+    // can disconnect it: it holds the host (and through this closure, every mark) alive otherwise.
+    var observer = null
+    if (typeof ResizeObserver === 'function') {
+      observer = new ResizeObserver(function () {
+        draw()
+      })
+      observer.observe(host)
+    }
+
     apply()
 
     /**
-     * Register a mark that was appended to the drawing after this mount. The panel's hit-testing
-     * works off the marks it knows about, so a point that arrived without a redraw has to be added
-     * here too — otherwise it is on screen and unreachable by hover.
+     * Register a mark that arrived after this mount. The panel's hit-testing works off the marks it
+     * knows about, so a point appended without a redraw is drawn and reachable here too.
      */
     function addMark(id, cx, cy, point) {
-      marks.push({ id: id, cx: cx, cy: cy })
+      var mark = { id: id, cx: cx, cy: cy }
+      marks.push(mark)
       if (point) values[id] = point
+      count()
+      drawMark(mark)
     }
 
-    return {
+    var handle = {
       reset: reset,
-      zoom: zoomFactor,
       addMark: addMark,
       clearSelection: function () {
         clearSelection(false)
       },
+      destroy: function () {
+        if (observer) {
+          observer.disconnect()
+          observer = null
+        }
+      },
+      /**
+       * Visible marks in client coordinates, left to right. The capture harness uses this where it
+       * used to read `circle` elements: the canvas has no DOM nodes to query.
+       */
+      marks: function () {
+        var right = box.x + box.w
+        var bottom = box.y + box.h
+        return marks
+          .filter(function (mark) {
+            return mark.cx >= box.x && mark.cx <= right && mark.cy >= box.y && mark.cy <= bottom
+          })
+          .sort(function (left, right) {
+            return left.cx - right.cx
+          })
+          .map(function (mark) {
+            var at = toClient(mark.cx, mark.cy)
+            return { id: mark.id, x: at.x, y: at.y, cx: mark.cx, cy: mark.cy }
+          })
+      },
     }
+    // The only inspection surface the renderer offers; the harness is a separate process and
+    // cannot import this module.
+    host.__benchChart = handle
+    return handle
   }
 
   window.BenchCharts = { mount: mount }

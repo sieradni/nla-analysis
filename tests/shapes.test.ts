@@ -56,6 +56,31 @@ describe('validateShapeDefinition', () => {
       /unusable name/,
     )
   })
+
+  it('accepts a designated observation-time field at declaration', () => {
+    const declared = validateShapeDefinition({
+      id: 'visit.v1',
+      fields: [
+        { name: 'date', type: 'instant' },
+        { name: 'value', type: 'number' },
+      ],
+      time_field: 'date',
+    })
+    expect(declared.time_field).toBe('date')
+  })
+
+  it('refuses a time designation that names a non-instant field', () => {
+    expect(() =>
+      validateShapeDefinition({
+        id: 'visit.v1',
+        fields: [
+          { name: 'date', type: 'instant' },
+          { name: 'value', type: 'number' },
+        ],
+        time_field: 'value',
+      }),
+    ).toThrow(/because it is number/)
+  })
 })
 
 const shape: Shape = {

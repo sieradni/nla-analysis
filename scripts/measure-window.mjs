@@ -127,8 +127,35 @@ const code = await new Promise((done) => {
 await rm(scratch, { recursive: true, force: true })
 await rm(home, { recursive: true, force: true })
 
-if (code !== 0 || samples.length === 0) {
-  console.error(`measurement failed (electron exited ${code}, ${samples.length} samples)`)
+if (code !== 0) {
+  console.error(`measurement failed (electron exited ${code})`)
+  process.exit(1)
+}
+if (samples.length === 0) {
+  console.error('measurement failed: the window reported no typed entry')
+  process.exit(1)
+}
+if (!summary) {
+  console.error('measurement failed: the window reported no summary')
+  process.exit(1)
+}
+// A sample taken by setting the fields and submitting the form is not a keystroke. The measurement
+// is about the path a person uses, so it is refused rather than annotated and counted.
+if (summary.syntheticSubmits > 0) {
+  console.error(
+    `measurement failed: ${summary.syntheticSubmits} of ${samples.length} entries were submitted ` +
+      'programmatically, so the window was not measuring keystrokes',
+  )
+  process.exit(1)
+}
+// The re-render budget only has a number when a point outside the axes forced a whole redraw. A
+// missing sample, or one the window patched instead, is a gate that would pass without measuring.
+if (rescale.length === 0) {
+  console.error('measurement failed: no full-redraw sample — the window reported no off-domain point')
+  process.exit(1)
+}
+if (rescale[0].incremental !== false) {
+  console.error('measurement failed: the off-domain point was patched, not fully redrawn')
   process.exit(1)
 }
 
@@ -153,18 +180,11 @@ if (commits.length > 0) {
     `  after the paint, the tab file catches up in ${commits[Math.floor(commits.length / 2)].toFixed(1)} ms (not on the keystroke path)`,
   )
 }
-if (rescale.length > 0) {
-  console.log(
-    `  point outside the current axes: ${rescale[0].total.toFixed(1)} ms` +
-      `${rescale[0].incremental ? ' (patched)' : ' (full redraw)'}`,
-  )
-}
-if (summary && summary.syntheticSubmits > 0) {
-  console.log(
-    `  note: ${summary.syntheticSubmits} of ${samples.length} samples submitted programmatically, because the ` +
-      'automation window lost the OS focus; `pnpm app:capture` is the run where every keystroke is real',
-  )
-}
-console.log(`  budget: 100 ms (ADR 0003) — ${median <= 100 ? 'within' : 'OVER'} budget at the median`)
+const rescaleMs = rescale[0].total
+console.log(`  point outside the current axes: ${rescaleMs.toFixed(1)} ms (full redraw)`)
+console.log(`  budget: 100 ms entry (ADR 0003) — ${median <= 100 ? 'within' : 'OVER'} budget at the median`)
+console.log(
+  `  budget: 50 ms re-render (requirements §6) — ${rescaleMs <= 50 ? 'within' : 'OVER'} budget`,
+)
 
-process.exit(median <= 100 ? 0 : 1)
+process.exit(median <= 100 && rescaleMs <= 50 ? 0 : 1)

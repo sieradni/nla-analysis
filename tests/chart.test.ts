@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { incrementalMark, renderChart, ticks, wrapCaption } from '../src/core/chart.ts'
+import { incrementalMark, renderChart, renderChartLayers, ticks, wrapCaption } from '../src/core/chart.ts'
 
 const base = { x: { label: 'x' }, y: { label: 'y' } }
 
@@ -14,18 +14,33 @@ describe('incrementalMark', () => {
     footer: 'n = 3 · no fit — unmodelled',
   }
 
-  it('produces exactly the markup a redraw would, character for character', () => {
+  it('places the mark exactly where a redraw would', () => {
     const point = { x: 2.5, y: 5, id: 'p4' }
     const mark = incrementalMark(spec, point)
-    expect(mark).not.toBeNull()
+    expect(mark).toEqual({ id: 'p4', cx: expect.any(Number), cy: expect.any(Number) })
 
-    // The whole point of patching rather than redrawing is that the two are indistinguishable. A
-    // test that compared rounded numbers would let a drift of one attribute through; comparing the
-    // strings cannot.
+    // The whole point of patching rather than redrawing is that the two are indistinguishable. Read
+    // the mark back out of the artifact a redraw would write and compare the numbers, not the code
+    // path that produced them.
     const redrawn = renderChart({ ...spec, points: [...spec.points, point] })
-    expect(redrawn).toContain(mark!)
-    expect(mark!.startsWith('<circle ')).toBe(true)
-    expect(mark!).toContain('data-point-id="p4"')
+    const circles = [...redrawn.matchAll(/<circle cx="([-0-9.]+)" cy="([-0-9.]+)"[^>]*data-point-id="([^"]+)"/g)]
+    const drawn = circles.find((circle) => circle[3] === 'p4')
+    expect(drawn).toBeDefined()
+    expect(Number(drawn![1])).toBe(mark!.cx)
+    expect(Number(drawn![2])).toBe(mark!.cy)
+  })
+
+  it('packs the marks, values and ids the artifact draws, in the same order', () => {
+    const layers = renderChartLayers(spec)
+    const circles = [...renderChart(spec).matchAll(/<circle cx="([-0-9.]+)" cy="([-0-9.]+)"[^>]*data-point-id="([^"]+)"/g)]
+    expect(layers.marks).toHaveLength(circles.length * 2)
+    expect(layers.ids.split('\n')).toEqual(['p1', 'p2', 'p3'])
+    expect(Array.from(layers.xs)).toEqual([1, 2, 3])
+    expect(Array.from(layers.ys)).toEqual([2, 4, 6])
+    circles.forEach((circle, index) => {
+      expect(layers.marks[index * 2]).toBeCloseTo(Number(circle[1]), 3)
+      expect(layers.marks[index * 2 + 1]).toBeCloseTo(Number(circle[2]), 3)
+    })
   })
 
   it('refuses a mark that would move the axes, so the caller has to redraw', () => {
@@ -49,8 +64,49 @@ describe('incrementalMark', () => {
   })
 })
 
+describe('time axis', () => {
+  it('labels one observation with clock ticks and draws its mark', () => {
+    const at = Date.parse('2026-10-19T12:41:32.498Z')
+    const svg = renderChart({
+      ...base,
+      x: { label: 'date', format: 'time' },
+      points: [{ x: at, y: 992.4, id: 'p1' }],
+      footer: 'n = 1 · no fit — unmodelled',
+    })
+
+    // A single instant must still be a chart: one mark, a padded day around it, and clock labels
+    // rather than a decade of epoch milliseconds.
+    expect(svg.match(/<circle[^>]*data-point-id="p1"/g)).toHaveLength(1)
+    expect(svg).toContain('2026-10-19')
+    expect(svg).not.toContain('1.76e')
+  })
+})
+
+describe('empty chart', () => {
+  it('says what to add and draws no tick numbers or marks', () => {
+    const svg = renderChart({
+      ...base,
+      footer: 'n = 0 · no fit — unmodelled',
+      empty: 'No observations in main yet. Add one: add --values \'{"x":1.2,"y":3}\'',
+    })
+    expect(svg).toContain('No observations in main yet')
+    expect(svg).not.toContain('data-point-id')
+    // No fake 0 … 1 axis: an empty frame that looks like data is the failure this prevents.
+    expect(svg).not.toMatch(/>[01](\.\d+)?<\/text>/)
+  })
+
+  it('asks for a redraw for the first point rather than patching an unlabeled frame', () => {
+    expect(
+      incrementalMark(
+        { ...base, empty: 'No observations in main yet.' },
+        { x: 0.5, y: 0.5, id: 'first' },
+      ),
+    ).toBeNull()
+  })
+})
+
 describe('ticks', () => {
-  it('produces evenly spaced, rounded values inside the domain', () => {
+  it('keeps the numeric tick rule when the axis is not a clock', () => {
     const values = ticks(0, 10, 5)
     expect(values).toEqual([0, 2, 4, 6, 8, 10])
   })

@@ -15,29 +15,11 @@ import { BenchError } from './errors.ts'
 import { makeEvent } from './events.ts'
 import type { BenchEvent, PointValue, Shape } from './events.ts'
 import { validateValues } from './shapes.ts'
+import { resolveImportColumns, suggestTimeColumn } from './import-columns.ts'
 import { coerce, parseDelimited, parseJsonl } from './table.ts'
 import type { Table } from './table.ts'
 import { diffRows, type RowDiff } from './versions.ts'
 import type { Workspace } from './workspace.ts'
-
-/** The names a time column is allowed to have without being told. */
-export const TIME_COLUMN_NAMES = ['t_observed', 'observed_at', 'timestamp', 'time', 'date', 't']
-
-/**
- * The column a header suggests for the observation time, in the file's own spelling.
- *
- * A row is identified by its instant, so "which column is the time" is the one decision an import
- * cannot invent: guessing it from a name is a convenience, and failing to find one is a refusal
- * (see `planImport`), not a fallback to the moment of import.
- */
-export function suggestTimeColumn(columns: readonly string[]): string | null {
-  const byLower = new Map(columns.map((column) => [column.toLowerCase(), column]))
-  for (const name of TIME_COLUMN_NAMES) {
-    const column = byLower.get(name)
-    if (column !== undefined) return column
-  }
-  return null
-}
 
 export type ImportFormat = 'csv' | 'tsv' | 'jsonl'
 
@@ -86,6 +68,12 @@ export interface ImportRequest {
   mapping?: Record<string, string>
   /** Column holding the observation time. Absent means a recognised name, if the file has one. */
   time?: string
+  /**
+   * Source columns the caller has explicitly decided not to import. Every column with no shape
+   * field must be named here, or the plan refuses: an extra column is data the shape cannot hold,
+   * and dropping it without a decision is data loss. This is per invocation on purpose.
+   */
+  ignoreColumns?: string[]
   force?: boolean
   /** Overrides the guess from the filename. */
   format?: ImportFormat
@@ -99,6 +87,8 @@ export interface ImportPlan {
   rows: number
   columns: string[]
   mapping: Record<string, string>
+  /** Source columns the caller named to leave out; empty when every column was used. */
+  ignoredColumns: string[]
   /** Every column a row's identity comes from; an untimed file never reaches a plan. */
   timeColumn: string
   sourceHash: string
@@ -240,42 +230,11 @@ export async function planImport(
   const loaded = await load(file, request.format)
   const { table, text, format } = loaded
 
-  const lowered = new Map(table.columns.map((column) => [column.toLowerCase(), column]))
-  const mapping = new Map<string, string>()
-  for (const field of shape.fields) {
-    const column = request.mapping?.[field.name] ?? lowered.get(field.name.toLowerCase())
-    if (column === undefined) {
-      if (field.optional === true) continue
-      throw new BenchError('invalid', `no column for the required field "${field.name}"`, {
-        // The window maps it in the dialog; the CLI is the second door, so it names that too.
-        hint: `the file has ${table.columns.join(', ')}; map a column onto "${field.name}" — the CLI does it with --map ${field.name}=<column>`,
-      })
-    }
-    if (!table.columns.includes(column)) {
-      throw new BenchError('invalid', `column "${column}" is not in the file`, {
-        hint: `the file has ${table.columns.join(', ')}`,
-      })
-    }
-    mapping.set(field.name, column)
-  }
-
-  // A sheet with no time column chosen sends `''`, which means the same as not saying it.
-  const timeColumn = request.time || suggestTimeColumn(table.columns)
-  if (timeColumn === null) {
-    // Not a warning and not "the moment of import": rows stamped with one invented instant cannot
-    // be told apart, so a re-import would read as every row leaving and every row arriving. The
-    // refusal names the file's columns because the fix is to pick one of them.
-    throw new BenchError(
-      'invalid',
-      `no column holds the observation time, so every row would share one invented instant — the file has ${table.columns.join(', ')}`,
-      { hint: 'name the column that holds it: --time <column> in the CLI, or the time picker in the window' },
-    )
-  }
-  if (!table.columns.includes(timeColumn)) {
-    throw new BenchError('invalid', `no column "${timeColumn}" for the observation time`, {
-      hint: `the file has ${table.columns.join(', ')}`,
-    })
-  }
+  const { mapping, timeColumn, ignoredColumns, timeField, designatedColumn } = resolveImportColumns(
+    shape,
+    table.columns,
+    request,
+  )
 
   const errors: string[] = []
   const warnings: string[] = []
@@ -299,6 +258,27 @@ export async function planImport(
       return
     }
     const observed = new Date(milliseconds).toISOString()
+
+    if (timeField !== undefined) {
+      const fieldRaw = row[designatedColumn!] ?? ''
+      const fieldMilliseconds = Date.parse(fieldRaw)
+      if (fieldRaw === '' || Number.isNaN(fieldMilliseconds)) {
+        errors.push(`${where}: field "${timeField.name}" carries the observation time, but "${fieldRaw}" is not a parseable time`)
+        return
+      }
+      const fieldObserved = new Date(fieldMilliseconds).toISOString()
+      if (fieldObserved !== observed) {
+        // Two columns both claim to be the time and disagree. Choosing one silently would write a
+        // point whose field and `t_observed` tell different stories, which is the split this model
+        // exists to prevent.
+        errors.push(
+          `${where}: field "${timeField.name}" says ${fieldObserved}, but the time column "${timeColumn}" says ${observed}`,
+        )
+        return
+      }
+      // Canonicalise the field in the row too, so the version this import writes is consistent.
+      values[timeField.name] = fieldObserved
+    }
 
     const validation = validateValues(shape, values)
     if (validation.errors.length > 0) {
@@ -357,6 +337,7 @@ export async function planImport(
     rows: prepared.length,
     columns: table.columns,
     mapping: Object.fromEntries(mapping),
+    ignoredColumns,
     timeColumn,
     sourceHash: hash,
     raggedRows: table.raggedRows,
@@ -438,12 +419,17 @@ export async function commitImport(
       }),
     ),
   )
+  const shape = workspace.state.shapes.get(plan.shape)
+  const designatesTime = shape?.time_field !== undefined
   for (const row of plan.diff.changedRows) {
     events.push(
       makeEvent('point_corrected', workspace.session, {
         dataset: plan.dataset,
         supersedes: row.id,
         values: row.after,
+        // A re-read that moves the designated field moves the instant with it. Without this the
+        // correction would change `values.date` and leave the old `t_observed` behind.
+        ...(designatesTime ? { t_observed: row.t } : {}),
         reason: `re-read from ${source} (version ${plan.version})`,
         version: plan.version,
       }),
@@ -467,6 +453,7 @@ export async function commitImport(
       hash: plan.sourceHash,
       columns: plan.columns,
       mapping: plan.mapping,
+      ...(plan.ignoredColumns.length === 0 ? {} : { ignored_columns: plan.ignoredColumns }),
     }),
   )
   await workspace.appendAll(events)

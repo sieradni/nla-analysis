@@ -16,12 +16,13 @@ function clip(text: string, limit = 160): string {
   return text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`
 }
 
-function shapeSummary(shape: Shape | undefined): string {
+export function shapeSummary(shape: Shape | undefined): string {
   if (!shape) return 'missing shape'
   const fields = shape.fields
     .map((field) => `${field.name}:${field.type}${field.unit ? `[${field.unit}]` : ''}`)
     .join(', ')
-  return `${shape.id} (${fields})`
+  const time = shape.time_field === undefined ? '' : `; observation time: ${shape.time_field}`
+  return `${shape.id} (${fields}${time})`
 }
 
 /**

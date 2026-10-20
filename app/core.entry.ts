@@ -17,10 +17,13 @@
  * every mutation and before every persist (ADR 0007), so a long-lived window cannot report a count
  * that contradicts the log. The facade only reports when a repair happened; it never makes one
  * itself, because then there would be two places that decide what "current" means.
+ *
+ * `workspace-session.ts` owns the open project; `view-session.ts` owns a view from construction to
+ * saved state, including the cache and the deferred save. This file adapts those calls to IPC and
+ * owns the project/import surfaces that are not view lifecycle.
  */
-import { APP_ROOT, assessRuns } from '../src/core/analysis.ts'
-import { incrementalMark, renderChart } from '../src/core/chart.ts'
-import type { ChartPoint } from '../src/core/chart.ts'
+import { APP_ROOT } from '../src/core/analysis.ts'
+import { plottableFields } from '../src/core/axes.ts'
 import type { PointValue, ShapeField } from '../src/core/events.ts'
 import { stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -31,21 +34,40 @@ import type { KnownProject } from '../src/core/registry.ts'
 import { RecipeRunner } from '../src/core/runner.ts'
 import { commitImport, planImport, previewImport as planPreview } from '../src/core/import.ts'
 import type { ImportPreview } from '../src/core/import.ts'
-import { sameStamp } from '../src/core/log.ts'
-import type { LogStamp } from '../src/core/log.ts'
 import { BenchError, Workspace } from '../src/core/workspace.ts'
-import type { PointDraft } from '../src/core/workspace.ts'
+import { listViews } from '../src/core/views.ts'
+import type { ViewSummary } from '../src/core/views.ts'
 import {
-  listViews,
-  loadView,
-  materializePanel,
-  panelStatuses,
-  requireFreeName,
-  saveView,
-  selectInput,
-  viewPath,
-} from '../src/core/views.ts'
-import type { PanelStatus, ViewFile, ViewSummary } from '../src/core/views.ts'
+  refreshView,
+  targetForDataset,
+  type EntryTarget,
+  type RefreshedView,
+} from './view-session.ts'
+import { useWorkspace, workspaceFor } from './workspace-session.ts'
+
+export {
+  correctPoint,
+  openView,
+  persistView,
+  point,
+  recordPoint,
+  refreshView,
+  reloadTab,
+  writeView,
+} from './view-session.ts'
+export type {
+  AppendedPoint,
+  CorrectedPoint,
+  EntryTarget,
+  OpenedView,
+  PersistedView,
+  PointDetail,
+  RefreshedView,
+  RefreshOptions,
+  TabReload,
+  ViewDraft,
+} from './view-session.ts'
+export type { IncrementalMark } from '../src/core/panels.ts'
 
 // The shell arms this, not the window: the main process is the one with the filesystem (ADR 0010).
 export { watchProject } from '../src/core/watch.ts'
@@ -91,67 +113,6 @@ export async function recipes(): Promise<RecipeCatalog> {
   }
 }
 
-export interface ViewDraft {
-  name: string
-  dataset: string
-  /** Absent means a plain plot of the dataset; present means a panel built by that recipe. */
-  recipe?: string
-  /** Replace the file when the name is taken. A tab is never deleted: it is superseded on purpose. */
-  replace?: boolean
-}
-
-/**
- * Create a tab, or replace one when the caller says so with `replace`.
- *
- * This is a tab-shaped write, not an analysis request: the panel is materialized exactly as
- * `bench view new` materializes it, no `analysis_run` event is recorded, and a recipe panel still
- * carries the recipe's verdict so the drawing states its own evidence (ADR 0008).
- */
-export async function writeView(dir: string, draft: ViewDraft): Promise<OpenedView> {
-  const name = draft.name.trim()
-  if (name === '') {
-    throw new BenchError('invalid', 'a tab needs a name', { hint: 'name the question this tab answers' })
-  }
-  const workspace = await workspaceFor(dir)
-  const reread = await workspace.freshen()
-  // Never delete a tab: replacing one is an explicit act, and the refusal says how to do it.
-  await requireFreeName(workspace.dir, name, draft.replace === true)
-
-  // A tab from the window holds one panel, so one column. Multi-panel tabs are still `bench view add`.
-  const view: ViewFile = { v: 1, name, layout: { columns: 1 }, panels: [] }
-
-  let runner: RecipeRunner | undefined
-  try {
-    if (draft.recipe !== undefined) {
-      runner = new RecipeRunner(APP_ROOT)
-      await runner.start()
-    }
-    const materialized = await materializePanel(
-      workspace,
-      {
-        dataset: draft.dataset,
-        ...(draft.recipe === undefined ? {} : { recipe: draft.recipe }),
-        title: name,
-      },
-      runner,
-    )
-    view.panels.push(materialized.panel)
-  } catch (error) {
-    if (error instanceof BenchError) throw error
-    const message = error instanceof Error ? error.message : String(error)
-    // Nothing has been saved at this point, and the runner cannot write to the log, so say both.
-    throw new BenchError('invariant', `${message} — the tab was not saved`, {
-      hint: 'a plain plot needs no analysis runtime; a recipe panel does',
-    })
-  } finally {
-    if (runner) await runner.dispose()
-  }
-
-  await saveView(workspace.dir, view)
-  await cacheView(workspace.dir, view)
-  return describe(workspace, view, reread)
-}
-
 export interface ProjectList {
   projects: KnownProject[]
   /** Set when the registry file exists but could not be read. Shown, never swallowed. */
@@ -162,65 +123,19 @@ export async function projects(): Promise<ProjectList> {
   return listProjects()
 }
 
-/** The open project, shared by the read and write calls below. */
-let session: Workspace | null = null
-
-/**
- * The open tab, kept here for the same reason the workspace is: appending a point must not re-read
- * and re-parse a view file, and the file the window repaints from is the file it saves afterwards.
- *
- * The stamp is what lets the shell tell its own save from another writer's: a watched event only
- * costs a redraw when the log or this file has moved past what the session last read (ADR 0010).
- */
-let sessionView: { dir: string; view: ViewFile; stamp: LogStamp | null } | null = null
-
-async function cacheView(dir: string, view: ViewFile): Promise<ViewFile> {
-  sessionView = { dir, view, stamp: await stampOf(viewPath(dir, view.name)) }
-  return view
-}
-
-async function stampOf(file: string): Promise<LogStamp | null> {
-  try {
-    const info = await stat(file)
-    return { size: info.size, mtimeMs: info.mtimeMs }
-  } catch {
-    return null
-  }
-}
-
-async function openViewFile(dir: string, name: string): Promise<ViewFile> {
-  if (sessionView && sessionView.dir === dir && sessionView.view.name === name) return sessionView.view
-  return cacheView(dir, await loadView(dir, name))
-}
-
-/**
- * The session's workspace for `dir`, opening it if this is the first call or a different project.
- * A subdirectory is fine: `Workspace.open` walks up to the project root, and the comparison is
- * against the root it found.
- */
-async function workspaceFor(dir: string): Promise<Workspace> {
-  if (session && session.dir === dir) return session
-  session = await Workspace.open(dir)
-  return session
-}
-
-export interface EntryTarget {
-  dataset: string
-  shape: string
-  /** The version a typed point joins: the newest, which is what a repaint should say it reads. */
-  version: number
-  /** Active points in that dataset, so the stage can state a count instead of summing panels. */
-  active: number
-  /** The fields the entry bar offers. Empty means the shape definition is missing; do not guess. */
-  fields: ShapeField[]
-}
-
 export interface OpenedProject {
   dir: string
   name: string
   views: ViewSummary[]
   viewProblems: string[]
-  datasets: { id: string; shape: string; version: number; active: number }[]
+  datasets: {
+    id: string
+    shape: string
+    version: number
+    active: number
+    /** Which fields the tab dialog may offer on each side; resolved by the core's one axis rule. */
+    axes: { x: ShapeField[]; y: ShapeField[] }
+  }[]
   /**
    * Where a typed point would land before any tab exists. A project with no tabs still has a dataset
    * and a shape, and the entry bar is the door a new project needs most — without this, creating a
@@ -239,12 +154,16 @@ async function describeProject(workspace: Workspace): Promise<OpenedProject> {
     created: workspace.config.created,
   })
   const { views, problems } = await listViews(workspace.dir)
-  const datasets = [...workspace.state.datasets.values()].map((dataset) => ({
-    id: dataset.id,
-    shape: dataset.shape,
-    version: dataset.version,
-    active: workspace.dataset(dataset.id).points.length,
-  }))
+  const datasets = [...workspace.state.datasets.values()].map((dataset) => {
+    const fields = workspace.state.shapes.get(dataset.shape)?.fields ?? []
+    return {
+      id: dataset.id,
+      shape: dataset.shape,
+      version: dataset.version,
+      active: workspace.dataset(dataset.id).points.length,
+      axes: { x: plottableFields(fields, 'x'), y: plottableFields(fields, 'y') },
+    }
+  })
   return {
     dir: workspace.dir,
     name: workspace.config.name,
@@ -256,8 +175,9 @@ async function describeProject(workspace: Workspace): Promise<OpenedProject> {
 }
 
 export async function openProject(dir: string): Promise<OpenedProject> {
-  session = await Workspace.open(dir)
-  return describeProject(session)
+  const workspace = await Workspace.open(dir)
+  useWorkspace(workspace)
+  return describeProject(workspace)
 }
 
 /**
@@ -304,269 +224,9 @@ export async function createProject(parentDir: string, name: string, shape?: unk
     throw new BenchError('invalid', message, { hint: 'choose another name, or another folder' })
   }
 
-  session = await Workspace.open(target)
-  return describeProject(session)
-}
-
-export interface OpenedView {
-  view: ViewFile
-  statuses: PanelStatus[]
-  /** One SVG per panel, drawn by the core renderer. The window transforms these; it does not redraw. */
-  svgs: string[]
-  /** Freshness of the project's recorded runs, so a tab can say whether its analysis still holds. */
-  staleRuns: number
-  /** Where a typed point would land, and which fields to ask for. */
-  entry: EntryTarget | null
-  /**
-   * True when the log had changed on disk and was reread before this answer was built. The window
-   * says so when it happens: a reader is entitled to know the ground moved underneath a tab.
-   */
-  reread: boolean
-}
-
-/**
- * Which dataset the entry bar writes to: the first panel's. A tab that graphs two datasets needs a
- * choice this slice does not offer, and silently picking `main` would be a different answer.
- */
-function entryTarget(workspace: Workspace, view: ViewFile): EntryTarget | null {
-  const first = view.panels[0]
-  if (!first) return null
-  return targetForDataset(workspace, first.dataset)
-}
-
-/** The same answer for a tab's panel and for a project with no tabs: one rule, one place. */
-function targetForDataset(workspace: Workspace, datasetId: string): EntryTarget | null {
-  try {
-    const dataset = workspace.dataset(datasetId)
-    return {
-      dataset: dataset.id,
-      shape: dataset.shape,
-      version: workspace.currentVersion(datasetId),
-      active: dataset.points.length,
-      fields: dataset.definition?.fields ?? [],
-    }
-  } catch {
-    return null
-  }
-}
-
-async function describe(workspace: Workspace, view: ViewFile, reread: boolean): Promise<OpenedView> {
-  const statuses = await panelStatuses(workspace, view)
-  const freshness = await assessRuns(APP_ROOT, workspace.state)
-  return {
-    view,
-    statuses,
-    svgs: view.panels.map((panel) => renderChart(panel.chart)),
-    staleRuns: [...freshness.values()].filter((entry) => entry.status !== 'fresh').length,
-    entry: entryTarget(workspace, view),
-    reread,
-  }
-}
-
-export async function openView(dir: string, name: string): Promise<OpenedView> {
-  const workspace = await workspaceFor(dir)
-  // A tab click is not on the keystroke path, so it pays for a fresh read when one is needed: an
-  // append made by the CLI while the window was idle must not be invisible. `freshen` decides, and
-  // costs one `stat` when nothing has changed.
-  const reread = await workspace.freshen()
-  sessionView = null
-  const view = await openViewFile(workspace.dir, name)
-  return describe(workspace, view, reread)
-}
-
-export interface IncrementalMark {
-  index: number
-  /** The record this mark stands for, so hover can name it without re-parsing the drawing. */
-  id: string
-  /** The core's own markup for one more mark, drawn against the scales the panel already has. */
-  markup: string
-  /** Where it landed, so the window can add it to hit-testing without re-parsing the drawing. */
-  cx: number
-  cy: number
-}
-
-export interface AppendedPoint {
-  id: string
-  dataset: string
-  values: Record<string, string | number | boolean | null>
-  tObserved: string
-  /** Shape warnings, e.g. an unknown field. Recorded all the same, and shown, never swallowed. */
-  warnings: string[]
-  active: number
-  /** Panels that can show the point as one extra mark, without redrawing ten thousand of them. */
-  marks: IncrementalMark[]
-  /** Panels the point does not belong to, because their query excludes it. Nothing changed there. */
-  untouched: number[]
-  /** True when the window has to repaint the whole tab instead of patching it. */
-  redraw: boolean
-  /** True when the log had been changed by another writer and was reread before this append. */
-  reread: boolean
-}
-
-/**
- * Append one point through `Workspace.recordPoint`, then refresh `STATE.md` so the cold-start brief
- * does not fall behind the log. That brief write is the last thing before returning; the repaint the
- * window does next is on its own clock.
- */
-export async function recordPoint(dir: string, draft: PointDraft, viewName?: string): Promise<AppendedPoint> {
-  const workspace = await workspaceFor(dir)
-  // Counted around the whole call: `Workspace` repairs itself before it reads anything it will
-  // validate against, and this is how the window learns that a repair happened.
-  const readsBefore = workspace.logReads
-  const recorded = await workspace.recordPoint(draft)
-  await workspace.writeStateBrief()
-  const base = {
-    id: recorded.event.id,
-    dataset: recorded.dataset,
-    values: draft.values,
-    tObserved: recorded.tObserved,
-    warnings: recorded.warnings,
-    active: workspace.dataset(recorded.dataset).points.length,
-  }
-
-  const reread = workspace.logReads > readsBefore
-
-  // No tab is open, or the point is not a plotted pair: nothing to patch, and nothing to draw either.
-  if (viewName === undefined) return { ...base, marks: [], untouched: [], redraw: false, reread }
-
-  const view = await openViewFile(workspace.dir, viewName)
-  const point: ChartPoint = {
-    id: recorded.event.id,
-    x: typeof draft.values.x === 'number' ? draft.values.x : 0,
-    y: typeof draft.values.y === 'number' ? draft.values.y : 0,
-  }
-  const marks: IncrementalMark[] = []
-  const untouched: number[] = []
-  let redraw = false
-
-  for (const [index, panel] of view.panels.entries()) {
-    // A fitted panel is not patched: its curve and interval would have to move with the point, and
-    // that means running the recipe. It stays as it is and goes stale, which the badge says.
-    if (panel.recipe !== undefined) continue
-    let input
-    try {
-      input = selectInput(workspace.state, panel.dataset, panel.query)
-    } catch {
-      redraw = true
-      continue
-    }
-    if (!input) {
-      redraw = true
-      continue
-    }
-    if (!input.points.some((candidate) => candidate.id === recorded.event.id)) {
-      untouched.push(index)
-      continue
-    }
-    if (typeof draft.values.x !== 'number' || typeof draft.values.y !== 'number') {
-      // A pair without numbers is not plotted by `plotDataset` either, so the panel did not change.
-      untouched.push(index)
-      continue
-    }
-    const markup = incrementalMark(panel.chart, point)
-    if (markup === null) {
-      // The point would move the axes: that is a different picture, not an extra mark.
-      redraw = true
-      continue
-    }
-    marks.push({
-      index,
-      id: recorded.event.id,
-      markup,
-      cx: placementOf(markup, 'cx'),
-      cy: placementOf(markup, 'cy'),
-    })
-  }
-
-  return { ...base, marks, untouched, redraw, reread }
-}
-
-/** Read a coordinate back out of the mark the core just produced, rather than computing it twice. */
-function placementOf(markup: string, attribute: 'cx' | 'cy'): number {
-  const match = new RegExp(`${attribute}="([-0-9.]+)"`).exec(markup)
-  return match ? Number(match[1]) : 0
-}
-
-export interface PointDetail {
-  id: string
-  /** The fields to offer in the correction strip: the shape's, not the point's own keys. */
-  fields: ShapeField[]
-  values: Record<string, string | number | boolean | null>
-  tObserved: string
-  /** Corrections already recorded against it, so a strip can say this is the third one. */
-  corrections: number
-  /** Panels of the open tab drawn by a recipe that include this point: a change makes them stale. */
-  recipePanels: number[]
-}
-
-/**
- * What the strip needs to edit one existing record: its values, the fields its shape demands, and
- * what a change would invalidate. Read-only, and it freshens first — a strip prefilled from a bind
- * the log has moved past would offer numbers that are no longer the point's.
- */
-export async function point(dir: string, id: string, viewName: string): Promise<PointDetail> {
-  const workspace = await workspaceFor(dir)
-  await workspace.freshen()
-  const found = workspace.findPoint(id)
-  if (!found) {
-    throw new BenchError('missing', `no point with id "${id}"`, { hint: 'the log may have been rewritten' })
-  }
-  const shape = workspace.shapeOf(found.dataset)
-  const recipePanels: number[] = []
-  const view = await openViewFile(workspace.dir, viewName)
-  view.panels.forEach((panel, index) => {
-    if (panel.recipe === undefined) return
-    try {
-      const input = selectInput(workspace.state, panel.dataset, panel.query)
-      if (input && input.points.some((candidate) => candidate.id === id)) recipePanels.push(index)
-    } catch {
-      /* a panel that cannot be selected has nothing to say about this point */
-    }
-  })
-  return {
-    id,
-    fields: shape.fields,
-    values: { ...found.point.values },
-    tObserved: found.point.tObserved,
-    corrections: found.point.corrections.length,
-    recipePanels,
-  }
-}
-
-export interface CorrectedPoint {
-  id: string
-  dataset: string
-  /** The point as the log now describes it, which is not always what was typed. */
-  values: Record<string, string | number | boolean | null>
-  active: number
-  /** The tab, rebuilt and redrawn. A recipe panel is kept and reported stale, never silently reused. */
-  view: RefreshedView
-}
-
-/**
- * Correct one existing point, as an event that supersedes it — never an edit of the original record.
- *
- * The rebuild is not optional here. A correction changes a value, which changes every panel's input
- * fingerprint; returning without refreshing would leave the screen claiming an analysis still holds
- * on numbers it was not drawn from. Plot panels are rebuilt from the new state and a recipe panel is
- * kept with its `stale` badge, because running it would be an analysis request (ADR 0002).
- */
-export async function correctPoint(
-  dir: string,
-  id: string,
-  values: Record<string, PointValue>,
-  viewName: string,
-): Promise<CorrectedPoint> {
-  const workspace = await workspaceFor(dir)
-  const corrected = await workspace.correctPoint(id, values, 'corrected in the window')
-  await workspace.writeStateBrief()
-  return {
-    id,
-    dataset: corrected.dataset,
-    values: corrected.now,
-    active: workspace.dataset(corrected.dataset).points.length,
-    view: await refreshView(dir, viewName, { draw: true }),
-  }
+  const workspace = await Workspace.open(target)
+  useWorkspace(workspace)
+  return describeProject(workspace)
 }
 
 export interface RetractedPoint {
@@ -583,105 +243,6 @@ export async function retractPoint(dir: string, id: string, reason?: string): Pr
   return { id, dataset: retracted.dataset, active: retracted.active }
 }
 
-export interface RefreshedView {
-  view: ViewFile
-  statuses: PanelStatus[]
-  /** One SVG per panel, or null when the caller asked for the update without a redraw. */
-  svgs: string[] | null
-  staleRuns: number
-  entry: EntryTarget | null
-  /** Panels whose stored spec was rebuilt from the current data. */
-  refreshed: number[]
-  /** Panels that could not be rebuilt here, with the reason. Never silently left looking current. */
-  kept: { index: number; reason: string }[]
-  /** Active points per panel after the rebuild, for a strip that must not keep saying the old n. */
-  counts: number[]
-  /** Each panel's evidence line after the rebuild, for a drawing that was patched rather than redrawn. */
-  footers: (string | null)[]
-  /** True when the log had changed on disk and was reread before this rebuild. */
-  reread: boolean
-}
-
-export interface RefreshOptions {
-  /**
-   * `false` rebuilds and saves the tab without rendering SVGs. The window uses it to catch the
-   * saved file up *after* it has already painted, so the file it writes is never the thing a
-   * keystroke waits on.
-   */
-  draw?: boolean
-}
-
-/**
- * Rebuild the panels a write has invalidated, without Python and without re-reading the log.
- *
- * A plot panel is materialized from the current in-memory state — cheap, and the same function the
- * CLI uses. A recipe panel would need the analysis runtime, which is deliberately not in the entry
- * path: it stays as it was, keeps its `stale` badge, and `kept` says why. The window says so rather
- * than drawing an old fit as if it still described the new data.
- */
-export async function refreshView(
-  dir: string,
-  name: string,
-  options: RefreshOptions = {},
-): Promise<RefreshedView> {
-  const draw = options.draw !== false
-  const workspace = await workspaceFor(dir)
-  // This saves the tab, so it is a persist path like STATE.md: it must not fingerprint a bind the
-  // file has moved past. After a write this process made, the stat matches and nothing is reread.
-  const reread = await workspace.freshen()
-  const view = await openViewFile(workspace.dir, name)
-  let statuses = await panelStatuses(workspace, view)
-  const refreshed: number[] = []
-  const kept: { index: number; reason: string }[] = []
-
-  for (const status of statuses) {
-    if (status.state === 'current' || status.state === 'unchecked') continue
-    const panel = view.panels[status.index]!
-    if (panel.recipe !== undefined) {
-      kept.push({ index: status.index, reason: 'it was drawn by a recipe, which needs the analysis runtime' })
-      continue
-    }
-    try {
-      const request = {
-        dataset: panel.dataset,
-        ...(panel.query === undefined ? {} : { query: panel.query }),
-        ...(panel.title === undefined ? {} : { title: panel.title }),
-      }
-      view.panels[status.index] = (await materializePanel(workspace, request)).panel
-      refreshed.push(status.index)
-    } catch (error) {
-      kept.push({
-        index: status.index,
-        reason: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  if (refreshed.length > 0) await saveView(workspace.dir, view)
-  // Remember the file the window is holding, whenever it was last saved: a watcher event only has
-  // to compare stamps to know whether there is anything to redraw (ADR 0010).
-  await cacheView(workspace.dir, view)
-  statuses = await panelStatuses(workspace, view)
-  const freshness = draw ? await assessRuns(APP_ROOT, workspace.state) : null
-  return {
-    view,
-    statuses,
-    svgs: draw ? view.panels.map((panel) => renderChart(panel.chart)) : null,
-    staleRuns: freshness === null ? 0 : [...freshness.values()].filter((entry) => entry.status !== 'fresh').length,
-    entry: entryTarget(workspace, view),
-    refreshed,
-    kept,
-    counts: view.panels.map((panel) => (typeof panel.n === 'number' ? panel.n : 0)),
-    footers: view.panels.map((panel) => panel.chart.footer ?? null),
-    reread,
-  }
-}
-
-/**
- * What the import dialog shows before a mapping is chosen: the file's columns and a sample, the
- * shape's fields, the columns whose names already match them, and whether these exact bytes have
- * been in before. Read-only.
- */
 export async function importPreview(dir: string, file: string): Promise<ImportPreview> {
   return planPreview(await workspaceFor(dir), file)
 }
@@ -697,6 +258,8 @@ export interface ImportedTable {
   removedRows: { t: string; values: Record<string, PointValue> }[]
   /** The original, preserved under data/raw/ before any point was written. */
   preserved: string
+  /** Source columns the caller explicitly left out because the shape has no field for them. */
+  ignoredColumns: string[]
   warnings: string[]
   active: number
   /** The open tab, rebuilt and redrawn; null when the project has no tab on screen. */
@@ -717,6 +280,7 @@ export interface PlannedImport {
   parent: number | null
   diff: { added: number; removed: number; changed: number }
   removedRows: { t: string; values: Record<string, PointValue> }[]
+  ignoredColumns: string[]
   warnings: string[]
 }
 
@@ -724,11 +288,12 @@ export async function importPlan(
   dir: string,
   file: string,
   mapping: Record<string, string>,
-  options: { time?: string; force?: boolean } = {},
+  options: { time?: string; force?: boolean; ignoreColumns?: string[] } = {},
 ): Promise<PlannedImport> {
   const plan = await planImport(await workspaceFor(dir), file, {
     mapping,
     ...(options.time === undefined ? {} : { time: options.time }),
+    ...(options.ignoreColumns === undefined ? {} : { ignoreColumns: options.ignoreColumns }),
     ...(options.force === true ? { force: true } : {}),
   })
   return {
@@ -738,6 +303,7 @@ export async function importPlan(
     parent: plan.parent,
     diff: { added: plan.diff.added, removed: plan.diff.removed, changed: plan.diff.changed },
     removedRows: plan.diff.removedRows.map((row) => ({ t: row.t, values: row.values })),
+    ignoredColumns: plan.ignoredColumns,
     warnings: plan.warnings,
   }
 }
@@ -751,13 +317,14 @@ export async function importFile(
   dir: string,
   file: string,
   mapping: Record<string, string>,
-  options: { force?: boolean; time?: string; viewName?: string } = {},
+  options: { force?: boolean; time?: string; viewName?: string; ignoreColumns?: string[] } = {},
 ): Promise<ImportedTable> {
   const workspace = await workspaceFor(dir)
   const plan = await planImport(workspace, file, {
     mapping,
     ...(options.force === true ? { force: true } : {}),
     ...(options.time === undefined ? {} : { time: options.time }),
+    ...(options.ignoreColumns === undefined ? {} : { ignoreColumns: options.ignoreColumns }),
   })
   const committed = await commitImport(workspace, plan)
   return {
@@ -768,61 +335,9 @@ export async function importFile(
     diff: { added: committed.diff.added, removed: committed.diff.removed, changed: committed.diff.changed },
     removedRows: committed.diff.removedRows.map((row) => ({ t: row.t, values: row.values })),
     preserved: plan.preserved,
+    ignoredColumns: plan.ignoredColumns,
     warnings: plan.warnings,
     active: workspace.dataset(plan.dataset).points.length,
     view: options.viewName === undefined ? null : await refreshView(dir, options.viewName, { draw: true }),
-  }
-}
-
-/** What a watched change means for the tab the window is drawing. */
-export type TabReload =
-  | { state: 'same' }
-  | { state: 'redrawn'; views: ViewSummary[]; view: RefreshedView }
-  | { state: 'gone'; views: ViewSummary[]; entry: EntryTarget | null; name: string }
-
-/**
- * Answer a watcher event: did the files this tab was drawn from move, and if so what does the tab
- * look like now?
- *
- * This is a reload, not a patch (ADR 0007): data that changed is re-materialized and the whole tab
- * is drawn again. Asking first is what keeps the window's own saves from starting a read-and-render
- * loop — after a write, the log and tab stamps are exactly the ones this session recorded (ADR 0010).
- */
-export async function reloadTab(dir: string, name: string): Promise<TabReload> {
-  const workspace = await workspaceFor(dir)
-  if (!(await tabMoved(workspace, name))) return { state: 'same' }
-
-  const { views } = await listViews(workspace.dir)
-  if (!views.some((summary) => summary.name === name)) {
-    // The tab is gone but the project is not: the bar falls back to the first dataset, as it does
-    // for a project with no tabs at all.
-    const first = [...workspace.state.datasets.values()][0]
-    return {
-      state: 'gone',
-      views,
-      entry: first === undefined ? null : targetForDataset(workspace, first.id),
-      name,
-    }
-  }
-
-  // Another writer may have replaced the file, and the cached copy would hide that.
-  sessionView = null
-  return {
-    state: 'redrawn',
-    views,
-    view: await refreshView(workspace.dir, name, { draw: true }),
-  }
-}
-
-/** Whether the log or the open tab file has moved past what this session last read. */
-async function tabMoved(workspace: Workspace, name: string): Promise<boolean> {
-  if (await workspace.isStale()) return true
-  if (!sessionView || sessionView.dir !== workspace.dir || sessionView.view.name !== name) return true
-  try {
-    return !sameStamp(await stampOf(viewPath(workspace.dir, name)), sessionView.stamp)
-  } catch {
-    // A name that cannot be a file cannot be the tab that was on screen; report it as moved and let
-    // the reload say what happened rather than assume nothing did.
-    return true
   }
 }

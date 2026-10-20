@@ -21,6 +21,11 @@ export interface Shape {
   id: string
   version: number
   fields: ShapeField[]
+  /**
+   * The field that carries the observation time. Absent means the old behaviour: `--at` or the
+   * import's time column decides, and this declaration makes no promise about any field.
+   */
+  time_field?: string
 }
 
 export type Verdict = 'insufficient' | 'tentative' | 'supported' | 'contradicted'
@@ -40,6 +45,26 @@ export interface ProjectCreated extends EventBase {
 export interface ShapeDefined extends EventBase {
   type: 'shape_defined'
   shape: Shape
+}
+
+export interface ShapeExtended extends EventBase {
+  type: 'shape_extended'
+  /** The shape declaration that was extended. It must be that base's latest version. */
+  from: string
+  /** The complete new declaration: old fields in their original order, plus one appended field. */
+  shape: Shape
+  /** The one appended field, repeated for readers that only need the delta. Checked against `shape`. */
+  field: ShapeField
+}
+
+export interface ShapeTimeDesignated extends EventBase {
+  type: 'shape_time_designated'
+  /** The declaration whose observation-time field is being set. */
+  from: string
+  /** The complete new declaration: same fields, same order, plus the designation. */
+  shape: Shape
+  /** The designated field name, repeated so a reader does not have to cross-check the declaration. */
+  time_field: string
 }
 
 export interface DatasetCreated extends EventBase {
@@ -87,6 +112,11 @@ export interface PointCorrected extends EventBase {
   supersedes: string
   values: Record<string, PointValue>
   reason?: string
+  /**
+   * The canonical observation time after the correction, when the shape designates a field. Absent
+   * for shapes with no designation and for events written before this existed.
+   */
+  t_observed?: IsoTime
   /** The version this change belongs to, so an older version still reads as it did. */
   version?: number
 }
@@ -110,6 +140,8 @@ export interface ImportCompleted extends EventBase {
   hash?: string
   columns?: string[]
   mapping?: Record<string, string>
+  /** Source columns the importer explicitly left out because the shape had no field for them. */
+  ignored_columns?: string[]
 }
 
 export interface AnalysisRun extends EventBase {
@@ -138,6 +170,8 @@ export interface DecisionRecorded extends EventBase {
 export type BenchEvent =
   | ProjectCreated
   | ShapeDefined
+  | ShapeExtended
+  | ShapeTimeDesignated
   | DatasetCreated
   | DatasetVersionCreated
   | PointRecorded

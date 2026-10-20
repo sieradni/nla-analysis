@@ -1,8 +1,11 @@
 import type { BenchEvent, IsoTime, PointValue, Shape, Verdict } from './events.ts'
+import { sameShapeField, validateShapeExtensionShape, validateTimeDesignation } from './shapes.ts'
 
 export interface Point {
   id: string
   dataset: string
+  /** The declaration current when this point was recorded. It never moves on extension. */
+  shape: string
   values: Record<string, PointValue>
   /** The time the value refers to. */
   tObserved: IsoTime
@@ -142,6 +145,7 @@ function applyRecorded(
   const point: Point = {
     id: event.id,
     dataset: event.dataset,
+    shape: event.shape,
     values: { ...event.values },
     tObserved: event.t_observed,
     recordedAt: event.at,
@@ -163,6 +167,9 @@ function applyCorrected(fold: PointFold, event: Extract<BenchEvent, { type: 'poi
     return
   }
   target.values = { ...target.values, ...event.values }
+  // A designated time field can move the observation instant. The event carries the canonical value
+  // so the fold never has to guess which declaration was current when the correction was written.
+  if (event.t_observed !== undefined) target.tObserved = event.t_observed
   target.corrections.push(event.id)
   // The log is append-only, so events can be replayed out of order; keep the latest instant.
   if (target.correctedAt === undefined || event.at > target.correctedAt) target.correctedAt = event.at
@@ -222,6 +229,59 @@ export function bind(events: BenchEvent[]): ProjectState {
       case 'shape_defined':
         state.shapes.set(event.shape.id, event.shape)
         break
+
+      case 'shape_time_designated': {
+        const from = state.shapes.get(event.from)
+        if (!from) {
+          state.problems.push(`designation ${event.id} designates unknown shape "${event.from}"`)
+          break
+        }
+        if (state.shapes.has(event.shape.id)) {
+          state.problems.push(`designation ${event.id} redeclares shape "${event.shape.id}"`)
+          break
+        }
+        try {
+          validateTimeDesignation(from, event.shape, event.time_field)
+          state.shapes.set(event.shape.id, event.shape)
+          // Datasets move to the new declaration; points already recorded keep the shape event that
+          // was current when they were written, so their values and times are never reinterpreted.
+          for (const dataset of state.datasets.values()) {
+            if (dataset.shape === event.from) dataset.shape = event.shape.id
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          state.problems.push(`designation ${event.id} is invalid: ${message}`)
+        }
+        break
+      }
+
+      case 'shape_extended': {
+        const from = state.shapes.get(event.from)
+        if (!from) {
+          state.problems.push(`extension ${event.id} extends unknown shape "${event.from}"`)
+          break
+        }
+        if (state.shapes.has(event.shape.id)) {
+          state.problems.push(`extension ${event.id} redeclares shape "${event.shape.id}"`)
+          break
+        }
+        try {
+          const field = validateShapeExtensionShape(from, event.shape)
+          if (!event.field || !sameShapeField(field, event.field)) {
+            throw new Error(`the recorded field does not match the added field "${field.name}"`)
+          }
+          state.shapes.set(event.shape.id, event.shape)
+          // Datasets move to the new declaration; points already recorded keep the shape event that
+          // was current when they were written, so their values are never reinterpreted.
+          for (const dataset of state.datasets.values()) {
+            if (dataset.shape === event.from) dataset.shape = event.shape.id
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          state.problems.push(`extension ${event.id} is invalid: ${message}`)
+        }
+        break
+      }
 
       case 'dataset_created':
         ensureDataset(event.dataset, event.shape)

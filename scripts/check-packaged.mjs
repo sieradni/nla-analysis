@@ -86,6 +86,10 @@ console.log(`  title="${report.facts.title}" readout="${report.facts.readout}" f
 console.log(`  meta="${report.facts.meta}"`)
 console.log(`  recipes offered=${report.recipes.offered.length} problem=${report.recipes.problem ?? '(none)'}`)
 console.log(`  tab dialog options=${report.tabDialog.options.join(',')} note="${report.tabDialog.note}"`)
+console.log(
+  `  custom axis: typed to n = ${report.custom.saved.n} on ${report.custom.saved.x}/${report.custom.saved.y}` +
+    `, hover ${report.custom.hover.id}, ${report.custom.selection}`,
+)
 console.log(`  ${elapsed} ms from spawn to report, then exit ${code}`)
 
 if (code !== 0) fail(`the build reported success but exited ${code}`)
@@ -266,6 +270,7 @@ await writeFile(
       facts: report.facts,
       tabDialog: report.tabDialog,
       recipes: report.recipes,
+      custom: report.custom,
       elapsedMs: elapsed,
       artifactBytes: size,
     },

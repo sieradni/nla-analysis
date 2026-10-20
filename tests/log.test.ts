@@ -1,15 +1,24 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { EventLog } from '../src/core/log.ts'
 import { makeEvent } from '../src/core/events.ts'
 
+// Each test gets its own folder, and the folder is removed when the file finishes: a suite that
+// leaves one scratch directory per case fills the temp folder with empty `bench-log-*` folders.
+const scratch: string[] = []
+
 async function tempLog(): Promise<{ log: EventLog; file: string }> {
   const dir = await mkdtemp(join(tmpdir(), 'bench-log-'))
+  scratch.push(dir)
   const file = join(dir, 'events.jsonl')
   return { log: new EventLog(file), file }
 }
+
+afterAll(async () => {
+  while (scratch.length > 0) await rm(scratch.pop()!, { recursive: true, force: true })
+})
 
 describe('EventLog', () => {
   it('appends without rewriting previous bytes', async () => {

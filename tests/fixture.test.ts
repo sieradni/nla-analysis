@@ -9,7 +9,8 @@ import { EventLog } from '../src/core/log.ts'
 import type { ProjectConfig } from '../src/core/project.ts'
 import { validateValues } from '../src/core/shapes.ts'
 import { renderState } from '../src/core/state.ts'
-import { loadView, listViews, panelStatuses, renderView } from '../src/core/views.ts'
+import { loadView, listViews, renderView } from '../src/core/views.ts'
+import { panelStatuses } from '../src/core/panels.ts'
 import { Workspace } from '../src/core/workspace.ts'
 
 /**

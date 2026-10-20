@@ -6,20 +6,19 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { interpreterCandidates, RecipeRunner } from '../src/core/runner.ts'
 import { initProject } from '../src/core/project.ts'
 import { BenchError } from '../src/core/errors.ts'
+import { renderChart } from '../src/core/chart.ts'
 import { Workspace } from '../src/core/workspace.ts'
 import {
   listViews,
   loadView,
-  materializePanel,
-  panelStatus,
   renderView,
   saveView,
-  selectInput,
   slugFor,
   validateQuery,
   validateView,
   type ViewFile,
 } from '../src/core/views.ts'
+import { materializePanel, panelStatus, selectInput } from '../src/core/panels.ts'
 
 let root: string
 let workspace: Workspace
@@ -170,6 +169,88 @@ describe('materializing a panel', () => {
     expect(panel.n).toBe(6)
     expect(panel.recipe).toBeUndefined()
     expect(panel.chart.footer).toContain('no fit — unmodelled')
+  })
+
+  it('plots a custom shape on named axes, including an instant horizontal axis', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bench-axes-'))
+    try {
+      await initProject(dir, 'axes-test', undefined, {
+        id: 'flight.v1',
+        fields: [
+          { name: 'date', type: 'instant' },
+          { name: 'altitude', type: 'number' },
+          { name: 'app', type: 'number' },
+        ],
+      })
+      const custom = await Workspace.open(dir)
+      await custom.recordPoint({
+        values: { date: '2026-10-19T12:41:32.498Z', altitude: 992.4, app: 0.675 },
+        tObserved: '2026-10-19T12:41:32.498Z',
+      })
+
+      const { panel } = await materializePanel(custom, {
+        dataset: 'main',
+        xField: 'date',
+        yField: 'altitude',
+      })
+      expect(panel.x_field).toBe('date')
+      expect(panel.y_field).toBe('altitude')
+      expect(panel.chart.x).toEqual({ label: 'date', format: 'time' })
+      expect(panel.chart.y).toEqual({ label: 'altitude' })
+      // One row is still one honest mark, not an empty frame with a count in the footer.
+      expect(panel.chart.points).toEqual([
+        { id: panel.chart.points![0]!.id, x: Date.parse('2026-10-19T12:41:32.498Z'), y: 992.4 },
+      ])
+      const svg = renderChart(panel.chart)
+      expect(svg.match(/<circle[^>]*data-point-id=/g)).toHaveLength(1)
+      expect(svg).toContain('2026-10-19')
+
+      const numeric = await materializePanel(custom, { dataset: 'main', xField: 'app', yField: 'altitude' })
+      expect(numeric.panel.chart.x).toEqual({ label: 'app' })
+      expect(numeric.panel.chart.points).toHaveLength(1)
+
+      await expect(
+        materializePanel(custom, { dataset: 'main', xField: 'app', yField: 'date' }),
+      ).rejects.toThrow(/not numeric/)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('saves an empty first tab before any point exists, and a recipe still refuses with its own hint', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bench-empty-tab-'))
+    try {
+      await initProject(dir, 'empty-tab', undefined, {
+        id: 'flight.v1',
+        fields: [
+          { name: 'altitude', type: 'number' },
+          { name: 'app', type: 'number' },
+          { name: 'date', type: 'instant' },
+        ],
+      })
+      const fresh = await Workspace.open(dir)
+      const { panel } = await materializePanel(fresh, {
+        dataset: 'main',
+        xField: 'app',
+        yField: 'altitude',
+      })
+      expect(panel.n).toBe(0)
+      expect(panel.chart.empty).toContain('No observations in main yet')
+      expect(panel.chart.empty).toContain('--values')
+      expect(panel.chart.empty).toContain('altitude')
+      expect(renderChart(panel.chart)).not.toContain('data-point-id')
+
+      await expect(materializePanel(fresh, { dataset: 'main', recipe: 'fit' })).rejects.toThrow(
+        /has no active points/,
+      )
+      try {
+        await materializePanel(fresh, { dataset: 'main', recipe: 'fit' })
+      } catch (error) {
+        expect((error as BenchError).hint).toContain('--values')
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('draws only the rows a query selected', async () => {

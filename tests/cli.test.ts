@@ -92,6 +92,458 @@ describe('bench CLI, as executed', () => {
     }
   })
 
+  it('takes a custom shape from init through a real first tab, with hints derived from its fields', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bench-first-run-'))
+    try {
+      const shapeFile = join(root, 'flight.json')
+      await writeFile(
+        shapeFile,
+        JSON.stringify({
+          id: 'flight.v1',
+          fields: [
+            { name: 'altitude', type: 'number' },
+            { name: 'app', type: 'number' },
+            { name: 'date', type: 'instant' },
+          ],
+        }),
+        'utf8',
+      )
+      const target = join(root, 'flight-log')
+      const init = await bench(['init', target, '--name', 'flight log', '--shape', shapeFile])
+      expect(init.code).toBe(0)
+      // Every hint on the route names the shape's own fields, never `x`/`y`.
+      const hint = init.stdout.split('\n').find((line) => line.trimStart().startsWith('next:'))!
+      expect(hint).toContain('--values')
+      expect(hint).toContain('altitude')
+      expect(hint).toContain('app')
+      expect(hint).toContain('date')
+      expect(hint).not.toContain('--x ')
+      expect(hint).not.toContain('--y ')
+
+      // `bench chart` on an empty project is an artifact with a sentence, not a bare refusal.
+      const emptyChart = await bench([
+        '--project',
+        target,
+        'chart',
+        '--x-field',
+        'app',
+        '--y-field',
+        'altitude',
+        '--out',
+        join(root, 'no-rows.svg'),
+      ])
+      expect(emptyChart.code).toBe(0)
+      expect(emptyChart.stdout).toContain('(0 points)')
+      const noRowsSvg = await readFile(join(root, 'no-rows.svg'), 'utf8')
+      expect(noRowsSvg).toContain('No observations')
+      expect(noRowsSvg).not.toContain('data-point-id')
+
+      const empty = await bench(['--project', target, 'view', 'list'])
+      expect(empty.code).toBe(0)
+      // The example puts a different field on each axis; the y is the shape's first numeric field.
+      expect(empty.stdout).toContain('--x-field app')
+      expect(empty.stdout).toContain('--y-field altitude')
+      expect(empty.stdout).not.toContain('--recipe')
+
+      // A tab with no rows is real: it saves, says what to add, and draws no mark.
+      const first = await bench([
+        '--project',
+        target,
+        'view',
+        'new',
+        'empty tab',
+        '--dataset',
+        'main',
+        '--x-field',
+        'altitude',
+        '--y-field',
+        'app',
+      ])
+      expect(first.code).toBe(0)
+      const shown = await bench(['--project', target, 'view', 'show', 'empty tab', '--json'])
+      const panel = JSON.parse(shown.stdout) as {
+        data: { view: { panels: { n: number; chart: { empty?: string } }[] } }
+      }
+      expect(panel.data.view.panels[0]!.n).toBe(0)
+      expect(panel.data.view.panels[0]!.chart.empty).toContain('No observations')
+      const rendered = await bench([
+        '--project',
+        target,
+        'view',
+        'render',
+        'empty tab',
+        '--out',
+        join(root, 'empty.svg'),
+      ])
+      expect(rendered.code).toBe(0)
+      const emptySvg = await readFile(join(root, 'empty.svg'), 'utf8')
+      expect(emptySvg).toContain('No observations')
+      expect(emptySvg).not.toContain('data-point-id')
+
+      // A bare `add` on the custom shape teaches the same command, not `--x`/`--y`.
+      const bareAdd = await bench(['--project', target, 'add'])
+      expect(bareAdd.code).toBe(1)
+      expect(bareAdd.stderr).toContain('hint:')
+      expect(bareAdd.stderr).toContain('--values')
+      expect(bareAdd.stderr).not.toContain('--x ')
+
+      // The init hint's own sample values are accepted by the shape it described.
+      const values = /--values '([^']+)'/.exec(hint)![1]!
+      const added = await bench(['--project', target, 'add', '--values', values, '--at', '2026-10-01T00:00:00Z'])
+      expect(added.code).toBe(0)
+      const withPoint = await bench(['--project', target, 'view', 'show', 'empty tab', '--json'])
+      const pointed = JSON.parse(withPoint.stdout) as {
+        data: { view: { panels: { n: number; chart: { points?: { id?: string }[] } }[] } }
+      }
+      // `view show` reads the saved panel, so the count there is still the saved zero until render.
+      expect(pointed.data.view.panels[0]!.n).toBe(0)
+      const rerendered = await bench([
+        '--project',
+        target,
+        'view',
+        'render',
+        'empty tab',
+        '--refresh',
+        '--out',
+        join(root, 'filled.svg'),
+      ])
+      expect(rerendered.code).toBe(0)
+      expect(await readFile(join(root, 'filled.svg'), 'utf8')).toContain('data-point-id')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('extends a declared shape and records a point in the new field', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bench-extend-'))
+    try {
+      const shapeFile = join(root, 'flight.json')
+      await writeFile(
+        shapeFile,
+        JSON.stringify({
+          id: 'flight.v1',
+          fields: [
+            { name: 'date', type: 'instant' },
+            { name: 'altitude', type: 'number' },
+            { name: 'app', type: 'number' },
+            { name: 'apm', type: 'number' },
+            { name: 'pps', type: 'number' },
+          ],
+        }),
+        'utf8',
+      )
+      const target = join(root, 'flight-log')
+      expect((await bench(['init', target, '--name', 'flight log', '--shape', shapeFile])).code).toBe(0)
+      // A row recorded before b2b existed must stay valid after the extension.
+      const prior = await bench([
+        '--project',
+        target,
+        'add',
+        '--values',
+        '{"date":"2026-10-19T12:40:32.498Z","altitude":991.2,"app":0.67,"apm":52.1,"pps":1.28}',
+        '--at',
+        '2026-10-19T12:40:32.498Z',
+        '--json',
+      ])
+      expect(prior.code).toBe(0)
+      const priorId = (JSON.parse(prior.stdout) as { data: { id: string } }).data.id
+
+      const extended = await bench([
+        '--project',
+        target,
+        'shape',
+        'extend',
+        'flight.v1',
+        '--field',
+        'b2b',
+        '--type',
+        'integer',
+        '--json',
+      ])
+      expect(extended.code).toBe(0)
+      const extension = JSON.parse(extended.stdout) as {
+        data: { from: string; shape: { id: string; fields: { name: string }[] }; datasets: string[] }
+      }
+      expect(extension.data.from).toBe('flight.v1')
+      expect(extension.data.shape.id).toBe('flight.v2')
+      expect(extension.data.shape.fields.map((field) => field.name)).toEqual([
+        'date',
+        'altitude',
+        'app',
+        'apm',
+        'pps',
+        'b2b',
+      ])
+      expect(extension.data.datasets).toEqual(['main'])
+
+      // A second extension of v1 would fork the history; a duplicate or an untyped field is refused
+      // before anything is appended.
+      const stale = await bench(['--project', target, 'shape', 'extend', 'flight.v1', '--field', 'extra', '--type', 'number'])
+      expect(stale.code).toBe(1)
+      expect(stale.stderr).toContain('not the latest version')
+      const duplicate = await bench(['--project', target, 'shape', 'extend', 'flight.v2', '--field', 'b2b', '--type', 'integer'])
+      expect(duplicate.code).toBe(1)
+      expect(duplicate.stderr).toContain('appears twice')
+      const untyped = await bench(['--project', target, 'shape', 'extend', 'flight.v2', '--field', 'extra'])
+      expect(untyped.code).toBe(1)
+      expect(untyped.stderr).toContain('explicit type')
+
+      // Correcting an older row validates it against its own declaration, not the required b2b that
+      // was added afterwards.
+      const corrected = await bench([
+        '--project',
+        target,
+        'correct',
+        priorId,
+        '--values',
+        '{"altitude":991.3}',
+        '--reason',
+        'transcription',
+      ])
+      expect(corrected.code).toBe(0)
+
+      const added = await bench([
+        '--project',
+        target,
+        'add',
+        '--values',
+        '{"date":"2026-10-19T12:41:32.498Z","altitude":992.4,"app":0.675,"apm":52.24,"pps":1.29,"b2b":14}',
+        '--at',
+        '2026-10-19T12:41:32.498Z',
+      ])
+      expect(added.code).toBe(0)
+      expect(added.stderr).not.toContain('unknown field')
+
+      const checked = await bench(['--project', target, 'check'])
+      expect(checked.code).toBe(0)
+      expect(checked.stdout).toContain('2 active points')
+      expect(checked.stdout).toContain('0 error(s)')
+
+      const listed = await bench(['--project', target, 'list', '--json'])
+      const points = JSON.parse(listed.stdout) as { data: { values: Record<string, unknown> }[] }
+      expect(points.data.find((point) => point.values.altitude === 992.4)?.values).toMatchObject({
+        altitude: 992.4,
+        b2b: 14,
+      })
+      // The earlier row keeps its original fields; it was not backfilled with a value nobody measured.
+      expect(points.data.find((point) => point.values.altitude === 991.3)?.values).not.toHaveProperty('b2b')
+
+      // The same field pair through `bench chart` and a saved panel.
+      const chartPath = join(root, 'axes.svg')
+      const chart = await bench([
+        '--project',
+        target,
+        'chart',
+        '--x-field',
+        'date',
+        '--y-field',
+        'altitude',
+        '--out',
+        chartPath,
+      ])
+      expect(chart.code).toBe(0)
+      expect(chart.stdout).toContain('2 points')
+      const chartSvg = await readFile(chartPath, 'utf8')
+      expect(chartSvg).toContain('data-point-id')
+      expect(chartSvg).toContain('2026-10-19')
+      const noAxes = await bench(['--project', target, 'chart'])
+      expect(noAxes.code).toBe(2)
+      expect(noAxes.stderr).toContain('has no field "x"')
+      expect(noAxes.stderr).toContain('--x-field')
+
+      const tab = await bench([
+        '--project',
+        target,
+        'view',
+        'new',
+        'altitude over time',
+        '--dataset',
+        'main',
+        '--x-field',
+        'date',
+        '--y-field',
+        'altitude',
+      ])
+      expect(tab.code).toBe(0)
+      expect(tab.stdout).toContain('created views/altitude-over-time.json')
+      const saved = JSON.parse(
+        await readFile(join(target, 'views', 'altitude-over-time.json'), 'utf8'),
+      ) as { panels: { x_field?: string; y_field?: string; chart: { x: { format?: string } } }[] }
+      expect(saved.panels[0]?.x_field).toBe('date')
+      expect(saved.panels[0]?.y_field).toBe('altitude')
+      expect(saved.panels[0]?.chart.x.format).toBe('time')
+      const rendered = await bench(['--project', target, 'view', 'render', 'altitude over time'])
+      expect(rendered.code).toBe(0)
+      expect(await readFile(join(target, 'artifacts', 'view-altitude-over-time.svg'), 'utf8')).toContain(
+        'data-point-id',
+      )
+
+      const state = await bench(['--project', target, 'state'])
+      expect(state.stdout).toContain('flight.v2')
+      expect(state.stdout).toContain('b2b:integer')
+      const agents = await readFile(join(target, 'AGENTS.md'), 'utf8')
+      expect(agents).toContain('flight.v2')
+      expect(agents).toContain('b2b:integer')
+
+      // The import mapping reads the new declaration too: B2B is no longer an undeclared column.
+      const csv = join(root, 'flight.csv')
+      await writeFile(
+        csv,
+        'Date,Altitude,APP,APM,PPS,B2B\n2026-10-19T12:42:32.498Z,993.1,0.681,52.31,1.3,14\n',
+        'utf8',
+      )
+      const dry = await bench([
+        '--project',
+        target,
+        'import',
+        csv,
+        '--time',
+        'Date',
+        '--dry-run',
+        '--json',
+      ])
+      expect(dry.stderr).toBe('')
+      expect(dry.code).toBe(0)
+      const plan = JSON.parse(dry.stdout) as {
+        data: { mapping: Record<string, string>; ignoredColumns?: string[] }
+      }
+      expect(plan.data.mapping.b2b).toBe('B2B')
+      expect(plan.data.ignoredColumns).toBeUndefined()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('designates a shape\'s observation field, derives the instant from it, and refuses a contradiction', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bench-observation-'))
+    try {
+      const shapeFile = join(root, 'visit.json')
+      await writeFile(
+        shapeFile,
+        JSON.stringify({
+          id: 'visit.v1',
+          fields: [
+            { name: 'date', type: 'instant' },
+            { name: 'value', type: 'number' },
+          ],
+        }),
+        'utf8',
+      )
+      const target = join(root, 'visits')
+      expect((await bench(['init', target, '--name', 'visits', '--shape', shapeFile])).code).toBe(0)
+
+      // An event written before there was a designation is not reinterpreted by it: this point's
+      // text and its instant disagree, and the model leaves both exactly as recorded.
+      const prior = await bench([
+        '--project', target, 'add', '--values', '{"date":"2026-09-01T00:00:00Z","value":1}',
+        '--at', '2026-09-02T00:00:00Z', '--json',
+      ])
+      expect(prior.code).toBe(0)
+      const priorId = (JSON.parse(prior.stdout) as { data: { id: string } }).data.id
+
+      const designated = await bench([
+        '--project', target, 'shape', 'designate', 'visit.v1', '--time-field', ' date ', '--json',
+      ])
+      expect(designated.code).toBe(0)
+      const declaration = JSON.parse(designated.stdout) as {
+        data: { from: string; shape: { id: string; time_field?: string }; time_field: string }
+      }
+      expect(declaration.data.from).toBe('visit.v1')
+      expect(declaration.data.shape.id).toBe('visit.v2')
+      expect(declaration.data.shape.time_field).toBe('date')
+      expect(declaration.data.time_field).toBe('date')
+
+      // A matching add writes one instant twice: the field is canonicalised in `values`, and
+      // `t_observed` is that same canonical text. An offset is accepted, not copied through.
+      const matching = await bench([
+        '--project', target, 'add', '--values', '{"date":"2026-10-01T12:34:56+02:00","value":5}', '--json',
+      ])
+      expect(matching.code).toBe(0)
+      const recorded = JSON.parse(matching.stdout) as {
+        data: { id: string; values: Record<string, unknown>; t_observed: string }
+      }
+      expect(recorded.data.values.date).toBe('2026-10-01T10:34:56.000Z')
+      expect(recorded.data.t_observed).toBe('2026-10-01T10:34:56.000Z')
+
+      const logBefore = await readFile(join(target, 'data', 'events.jsonl'), 'utf8')
+      const contradiction = await bench([
+        '--project', target, 'add', '--values', '{"date":"2026-10-02T00:00:00Z","value":6}',
+        '--at', '2026-10-03T00:00:00Z',
+      ])
+      expect(contradiction.code).toBe(1)
+      expect(contradiction.stderr).toContain('field "date" says 2026-10-02T00:00:00.000Z')
+      expect(contradiction.stderr).toContain('--at says 2026-10-03T00:00:00.000Z')
+      expect(await readFile(join(target, 'data', 'events.jsonl'), 'utf8')).toBe(logBefore)
+
+      const unparseable = await bench([
+        '--project', target, 'add', '--values', '{"date":"yesterday","value":7}',
+      ])
+      expect(unparseable.code).toBe(1)
+      expect(unparseable.stderr).toContain('not a parseable instant')
+
+      // A correction to the time field moves the instant with it, in the same event.
+      const corrected = await bench([
+        '--project', target, 'correct', recorded.data.id, '--values', '{"date":"2026-11-01T00:00:00Z"}', '--json',
+      ])
+      expect(corrected.code).toBe(0)
+      const correction = JSON.parse(corrected.stdout) as {
+        data: { t_observed?: string; now: Record<string, unknown> }
+      }
+      expect(correction.data.t_observed).toBe('2026-11-01T00:00:00.000Z')
+      expect(correction.data.now.date).toBe('2026-11-01T00:00:00.000Z')
+
+      // Both points are still in version 1, so the list shows the pre-designation point unchanged and
+      // the corrected one carrying its new instant.
+      const listed = await bench(['--project', target, 'list', '--json'])
+      const points = (JSON.parse(listed.stdout) as {
+        data: { id: string; values: Record<string, unknown>; t_observed: string }[]
+      }).data
+      expect(points.find((point) => point.id === priorId)?.t_observed).toBe('2026-09-02T00:00:00.000Z')
+      expect(points.find((point) => point.id === recorded.data.id)?.t_observed).toBe('2026-11-01T00:00:00.000Z')
+
+      // Import derives the time from the mapped field, not from a header guess, and refuses a second
+      // time column that tells a different story.
+      const disagreeing = join(root, 'disagreeing.csv')
+      await writeFile(
+        disagreeing,
+        'when,date,value\n2026-12-01T00:00:00Z,2026-12-02T00:00:00Z,9\n',
+        'utf8',
+      )
+      const refusedImport = await bench([
+        '--project', target, 'import', disagreeing, '--time', 'when',
+      ])
+      expect(refusedImport.code).toBe(1)
+      expect(refusedImport.stderr).toContain('field "date" says 2026-12-02T00:00:00.000Z')
+      expect(refusedImport.stderr).toContain('time column "when" says 2026-12-01T00:00:00.000Z')
+
+      const agreeing = join(root, 'agreeing.csv')
+      await writeFile(
+        agreeing,
+        'when,date,value\n2026-12-03T00:00:00Z,2026-12-03T00:00:00Z,9\n',
+        'utf8',
+      )
+      const imported = await bench([
+        '--project', target, 'import', agreeing, '--time', 'when', '--json',
+      ])
+      expect(imported.code).toBe(0)
+      expect(imported.stderr).toBe('')
+
+      const afterImport = await bench(['--project', target, 'list', '--json'])
+      const importedPoints = (JSON.parse(afterImport.stdout) as {
+        data: { values: Record<string, unknown>; t_observed: string }[]
+      }).data
+      const importedPoint = importedPoints.find((point) => point.values.value === 9)!
+      expect(importedPoint.values.date).toBe('2026-12-03T00:00:00.000Z')
+      expect(importedPoint.t_observed).toBe('2026-12-03T00:00:00.000Z')
+
+      const checked = await bench(['--project', target, 'check'])
+      expect(checked.code).toBe(0)
+      expect(checked.stdout).toContain('0 error(s)')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('runs a whole session: init, add, correct, retract, list, check, state, chart', async () => {
     const init = await bench(['init', project, '--name', 'cli-smoke'])
     expect(init.code).toBe(0)
@@ -292,9 +744,12 @@ describe('bench import, as executed', () => {
           sourceHash: string
           version: number
           parent: number | null
+          ignoredColumns?: string[]
         }
       }
       expect(payload.data.rows).toBe(3)
+      // Nothing was ignored, so the success payload keeps its pre-existing shape.
+      expect(payload.data.ignoredColumns).toBeUndefined()
       expect(payload.data.timeColumn).toBe('timestamp')
       // An empty dataset's first import is version 1: nothing was replaced, so nothing is diffed.
       expect(payload.data.version).toBe(1)
@@ -397,6 +852,46 @@ describe('bench import, as executed', () => {
       expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
       // data/raw exists from init; a dry run must not put anything in it.
       expect(await readdir(join(dir, 'data', 'raw'))).toEqual([])
+    })
+  })
+
+  it('refuses an undeclared column unless it is explicitly ignored, and reports the choice', async () => {
+    await withProject('import-extra', async (dir) => {
+      await writeFile(
+        join(dir, 'extra.csv'),
+        'timestamp,x,y,extra\n2026-01-05T09:00:00Z,1,2,9\n2026-01-05T09:01:00Z,3,4,10\n',
+        'utf8',
+      )
+      const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+      const args = ['--project', dir, 'import', 'extra.csv', '--map', 'x=x', '--map', 'y=y']
+
+      const refused = await bench([...args, '--json'])
+      expect(refused.code).toBe(1)
+      expect(refused.stderr).toContain('1 column has no shape field: extra')
+      expect(refused.stderr).toContain('--ignore-unmapped extra')
+      // A refusal writes nothing, not even the preserved original.
+      expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
+      expect(await readdir(join(dir, 'data', 'raw'))).toEqual([])
+
+      const ignored = await bench([...args, '--ignore-unmapped', 'extra', '--json'])
+      expect(ignored.code).toBe(0)
+      const payload = JSON.parse(ignored.stdout) as {
+        data: { ignoredColumns: string[]; mapping: Record<string, string>; rows: number }
+      }
+      expect(payload.data).toMatchObject({ ignoredColumns: ['extra'], rows: 2, mapping: { x: 'x', y: 'y' } })
+
+      const listed = await bench(['--project', dir, 'list', '--json'])
+      const points = (JSON.parse(listed.stdout) as { data: { values: Record<string, number> }[] }).data
+      expect(points.map((point) => point.values)).toEqual([
+        { x: 1, y: 2 },
+        { x: 3, y: 4 },
+      ])
+      const record = (await readFile(join(dir, 'data', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((event) => event.type === 'import_completed')
+      expect(record).toMatchObject({ ignored_columns: ['extra'] })
     })
   })
 

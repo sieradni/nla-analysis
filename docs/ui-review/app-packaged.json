@@ -28,6 +28,18 @@
     "offered": [],
     "problem": "no Python interpreter at \"python\" and none on PATH — recipes need the analysis environment"
   },
-  "elapsedMs": 2260,
-  "artifactBytes": 386820674
+  "custom": {
+    "saved": {
+      "n": 3,
+      "x": "mass",
+      "y": "extension"
+    },
+    "hover": {
+      "id": "01M5ATK2X6PC029C9Y1B0KZXCG",
+      "tooltip": "01M5ATK2X6PC029C9Y1B0KZXCGmass 1000   extension 5000main · load.v1"
+    },
+    "selection": "Correcting 01M5ATK2X6PC029C9Y1B0KZXCG · recorded 2026-10-19 19:35 · no corrections yet"
+  },
+  "elapsedMs": 2804,
+  "artifactBytes": 386914331
 }

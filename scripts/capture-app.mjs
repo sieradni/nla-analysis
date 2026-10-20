@@ -94,7 +94,10 @@ if (code === 0) {
     const followed = spawnSync(recorded[0].trim(), {
       shell: true,
       cwd: scratch,
-      env: process.env,
+      // The launcher opens the project, and opening records a recent. Give this run its own home for
+      // the same reason the window above has one, or every capture adds a temp project to the
+      // operator's list.
+      env: { ...process.env, BENCH_HOME: benchHome },
       encoding: 'utf8',
       windowsHide: true,
     })
@@ -122,6 +125,10 @@ const frames = [
   'app-corrected.png',
   'app-new-tab.png',
   'app-new-project.png',
+  'app-custom-axis.png',
+  'app-empty-tab-100.png',
+  'app-empty-tab-125.png',
+  'app-empty-tab-150.png',
   'app-live.png',
   'app-tab-replaced.png',
   'app-tab-gone.png',

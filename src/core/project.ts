@@ -9,7 +9,7 @@ import { APP_ROOT, assessRuns } from './analysis.ts'
 import { bind } from './binder.ts'
 import { validateShapeDefinition } from './shapes.ts'
 import type { ProjectState } from './binder.ts'
-import { renderState } from './state.ts'
+import { renderState, shapeSummary } from './state.ts'
 
 export interface ProjectConfig {
   name: string
@@ -22,6 +22,11 @@ export interface ProjectHandle {
   config: ProjectConfig
   log: EventLog
   session: string
+  /**
+   * The shape `init` declared, for callers that need a next-step hint before folding the log. A
+   * handle opened later leaves it undefined: the log is the authority, and `bind` has the answer.
+   */
+  shape?: Shape
 }
 
 export const PROJECT_FILE = 'project.json'
@@ -89,7 +94,7 @@ export function launcherProjectPath(dir: string): string {
   return commandPath(dir)
 }
 
-function projectAgents(dir: string): string {
+function projectAgents(dir: string, state?: ProjectState): string {
   const launcher = launcherInvocation()
   // A project inside this checkout is addressed relative to it, so the file stays true on any clone:
   // the demo fixture must not record one machine's absolute path. Anything else needs the checkout's
@@ -117,6 +122,12 @@ function projectAgents(dir: string): string {
         'If this folder has moved since that line was written, run the same launcher with `--project`',
         "pointing at the folder's current path and run `state`: that rewrites this line.",
       ].join('\n')
+  const shapes =
+    state === undefined
+      ? ''
+      : `\n## Shapes\n\n${[...state.datasets.values()]
+          .map((dataset) => `- \`${dataset.id}\` — ${shapeSummary(state.shapes.get(dataset.shape))}`)
+          .join('\n')}\n`
   return `# AGENTS.md
 
 This folder is a **bench data project**. The append-only event log is the truth.
@@ -148,7 +159,7 @@ Run the \`state\` command the same way and read the result. It is the brief the 
 ## Before concluding anything
 
 Run the \`check\` command the same way. A clean log is not the same as a supported claim.
-`
+${shapes}`
 }
 
 /** Write a generated file only when it differs, so ordinary use does not churn its timestamp. */
@@ -202,7 +213,7 @@ export async function writeStateBrief(handle: ProjectHandle, state: ProjectState
   // the brief is written: `state`, every mutation, and the window's own writes. A project made from
   // the older placeholder — or one opened after its folder moved — is healed by ordinary use, and
   // an unchanged file is not rewritten, so nothing churns.
-  await writeIfChanged(join(handle.dir, 'AGENTS.md'), projectAgents(handle.dir))
+  await writeIfChanged(join(handle.dir, 'AGENTS.md'), projectAgents(handle.dir, state))
 }
 
 /** Read the log, fold it, and write the brief. Used when there is no workspace to keep in step. */
@@ -245,6 +256,7 @@ export async function initProject(
     config,
     log: new EventLog(join(target, EVENTS_FILE)),
     session,
+    shape: declared,
   }
 
   await handle.log.append(makeEvent('project_created', session, { name: config.name }))

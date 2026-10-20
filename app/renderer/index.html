@@ -103,6 +103,19 @@
             <option value="plot">Plot the dataset</option>
           </select>
         </label>
+        <!-- A plot names its axes. The fields are the selected shape's own fields, so a custom
+             shape offers altitude/date instead of silently producing an empty x/y panel. -->
+        <div id="tab-axes" class="sheet-row">
+          <label class="sheet-field">
+            <span>Horizontal</span>
+            <select id="tab-x-field"></select>
+          </label>
+          <label class="sheet-field">
+            <span>Vertical</span>
+            <select id="tab-y-field"></select>
+          </label>
+        </div>
+        <p id="tab-axes-note" class="sheet-note" hidden></p>
         <label id="tab-replace-field" class="sheet-check" hidden>
           <input id="tab-replace" type="checkbox" />
           <span>Replace the tab with this name</span>
@@ -183,6 +196,12 @@
           <span class="import-field-type">time · required</span>
           <select id="import-time" aria-label="column holding the observation time"></select>
         </label>
+        <!-- A source column the shape cannot hold is data the import would lose. It is never
+             dropped silently: the sheet names it and asks for this explicit, per-file decision. -->
+        <label id="import-extra-field" class="sheet-check" hidden>
+          <input id="import-ignore-extra" type="checkbox" />
+          <span id="import-extra-names"></span>
+        </label>
         <!-- What the mapping would do, worked out before the button is pressed: which version this
              becomes, and what happens to the rows the file does not have. -->
         <p id="import-plan" class="import-plan" hidden></p>
@@ -201,6 +220,6 @@
     <div id="tooltip" class="tooltip" role="status" hidden></div>
 
     <script src="chart.js"></script>
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>

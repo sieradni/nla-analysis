@@ -19,9 +19,10 @@ import { APP_ROOT, assessRuns, buildRunInput, chartSpecFor, hashInput, type RunF
 import { activePoints, activeRowsOfVersion, bind, type DatasetVersion, type Point, type ProjectState, type RunRecord } from './binder.ts'
 import { renderChart, type ChartSpec } from './chart.ts'
 import { BenchError } from './errors.ts'
+import { addHint } from './hints.ts'
 import { sameStamp, type LogStamp } from './log.ts'
 import { makeEvent } from './events.ts'
-import type { BenchEvent, PointValue, Shape } from './events.ts'
+import type { BenchEvent, PointValue, Shape, ShapeField } from './events.ts'
 import {
   DEFAULT_DATASET,
   findProjectDir,
@@ -31,7 +32,14 @@ import {
   type ProjectHandle,
 } from './project.ts'
 import type { RecipeRunner, RunResult } from './runner.ts'
-import { validateValues } from './shapes.ts'
+import {
+  latestShapeOf,
+  planShapeExtension,
+  planTimeDesignation,
+  validateValues,
+  type ShapeFieldInput,
+} from './shapes.ts'
+import { resolveObservation } from './observation.ts'
 
 // Re-exported so existing callers (the CLI, the tests) keep importing the refusal from the seam that
 // raises it; the definition lives in errors.ts so modules that are not the write path can use it too.
@@ -54,6 +62,24 @@ export interface RecordedPoint {
   warnings: string[]
 }
 
+export interface ShapeExtension {
+  event: BenchEvent
+  from: Shape
+  shape: Shape
+  field: ShapeField
+  /** Datasets that moved to the new declaration; points already recorded did not move. */
+  datasets: string[]
+}
+
+export interface ShapeTimeDesignation {
+  event: BenchEvent
+  from: Shape
+  shape: Shape
+  field: ShapeField
+  /** Datasets that moved to the new declaration; points already recorded did not move. */
+  datasets: string[]
+}
+
 export interface DatasetView {
   id: string
   shape: string
@@ -67,6 +93,8 @@ export interface PointCorrection {
   dataset: string
   values: Record<string, PointValue>
   now: Record<string, PointValue>
+  /** Present when the shape designates an observation-time field and it was re-derived. */
+  tObserved?: string
 }
 
 export interface PointRetraction {
@@ -92,15 +120,6 @@ export interface AnalysisOutcome {
   params: Record<string, unknown>
   artifactRef: string
   verdictChanged?: boolean
-}
-
-/** Canonical UTC with milliseconds, so ordering by string and by instant agree. */
-function canonicalTime(input: string): string {
-  const parsed = Date.parse(input)
-  if (Number.isNaN(parsed)) {
-    throw new BenchError('invalid', `not a parseable time: "${input}"`, { hint: 'use an ISO timestamp' })
-  }
-  return new Date(parsed).toISOString()
 }
 
 export class Workspace {
@@ -232,6 +251,86 @@ export class Workspace {
       throw new BenchError('invariant', `dataset "${datasetId}" references unknown shape "${dataset.shape}"`)
     }
     return shape
+  }
+
+  /** The datasets a shape mutation moves; points do not move with them. */
+  private datasetsUsing(shapeId: string): string[] {
+    return [...this.current.datasets.values()]
+      .filter((dataset) => dataset.shape === shapeId)
+      .map((dataset) => dataset.id)
+  }
+
+  /**
+   * Add one field to a shape as a new version. This is the only way a declared shape grows: the old
+   * declaration and every point written against it stay untouched, and the extension is its own
+   * event, so `bench check` can validate the history instead of trusting the newest definition.
+   */
+  async extendShape(fromId: string, input: ShapeFieldInput): Promise<ShapeExtension> {
+    await this.freshen()
+    const from = this.current.shapes.get(fromId)
+    if (!from) throw new BenchError('missing', `no shape "${fromId}"`)
+
+    // A base has one newest declaration, and an extension of an older one would fork the history
+    // into two shapes that both claim to be next. `shapes.ts` owns which version that is.
+    const latest = latestShapeOf(this.current.shapes.values(), from)
+    if (latest.id !== from.id) {
+      throw new BenchError('invalid', `shape "${from.id}" is not the latest version`, {
+        hint: `extend "${latest.id}" instead`,
+      })
+    }
+
+    const plan = planShapeExtension(from, input)
+    if (this.current.shapes.has(plan.shape.id)) {
+      throw new BenchError('invalid', `shape "${plan.shape.id}" already exists`)
+    }
+    const datasets = this.datasetsUsing(from.id)
+
+    const event = makeEvent('shape_extended', this.handle.session, {
+      from: from.id,
+      shape: plan.shape,
+      field: plan.field,
+    })
+    await this.append([event])
+    return { event, from, shape: plan.shape, field: plan.field, datasets }
+  }
+
+  /**
+   * Designate which field carries the observation time, as a new shape version. The field list is
+   * unchanged and no point moves: from now on every recording door derives `t_observed` from the
+   * field, and the declaration itself is the record of that decision.
+   */
+  async designateShapeTime(fromId: string, fieldName: string): Promise<ShapeTimeDesignation> {
+    await this.freshen()
+    const from = this.current.shapes.get(fromId)
+    if (!from) throw new BenchError('missing', `no shape "${fromId}"`)
+    const latest = latestShapeOf(this.current.shapes.values(), from)
+    if (latest.id !== from.id) {
+      throw new BenchError('invalid', `shape "${from.id}" is not the latest version`, {
+        hint: `designate "${latest.id}" instead`,
+      })
+    }
+
+    // `shapes.ts` owns the next declaration, including the canonical field name and the refusal to
+    // move a designation that already exists. The event repeats that canonical name.
+    const shape = planTimeDesignation(from, fieldName)
+    if (this.current.shapes.has(shape.id)) {
+      throw new BenchError('invalid', `shape "${shape.id}" already exists`)
+    }
+    const datasets = this.datasetsUsing(from.id)
+
+    const event = makeEvent('shape_time_designated', this.handle.session, {
+      from: from.id,
+      shape,
+      time_field: shape.time_field!,
+    })
+    await this.append([event])
+    return {
+      event,
+      from,
+      shape,
+      field: shape.fields.find((field) => field.name === shape.time_field)!,
+      datasets,
+    }
   }
 
   /**
@@ -367,21 +466,27 @@ export class Workspace {
     const datasetId = this.resolveDataset(draft.dataset)
     const shape = this.shapeOf(datasetId)
     if (Object.keys(draft.values).length === 0) {
-      throw new BenchError('invalid', 'nothing to record', {
-        hint: `pass --x and --y, or --values '{"x":1,"y":2}'`,
+      throw new BenchError('invalid', 'nothing to record', { hint: addHint(shape) })
+    }
+
+    const validation = validateValues(shape, draft.values)
+    if (validation.errors.length > 0) {
+      throw new BenchError('invalid', 'point rejected', {
+        problems: validation.errors,
+        hint: addHint(shape),
       })
     }
 
-    const tObserved = canonicalTime(draft.tObserved ?? new Date().toISOString())
-    const validation = validateValues(shape, draft.values)
-    if (validation.errors.length > 0) {
-      throw new BenchError('invalid', 'point rejected', { problems: validation.errors })
-    }
+    // One owner decides what the observation time is: a designated field when the shape has one,
+    // otherwise the explicit --at, otherwise now. The chosen value is written back into the values
+    // so `values[date]` and `t_observed` cannot disagree in the log.
+    const observation = resolveObservation(shape, draft.values, draft.tObserved)
+    const tObserved = observation.tObserved
 
     const event = makeEvent('point_recorded', this.handle.session, {
       dataset: datasetId,
       shape: shape.id,
-      values: draft.values,
+      values: observation.values,
       t_observed: tObserved,
       // The version this row joins: the newest one, which is the version a panel or a run pinned
       // unless it named an older one.
@@ -414,21 +519,35 @@ export class Workspace {
       throw new BenchError('invalid', 'nothing to correct', { hint: `pass --values '{"y":3.5}'` })
     }
 
-    // Validate the merged result, so a correction cannot leave a point that its own shape rejects.
+    // Validate the merged result against the declaration this point was recorded with, not the
+    // dataset's newest: an extension must not make an older row retroactively incomplete.
     const shape = this.current.shapes.get(
-      this.current.datasets.get(found.dataset)?.shape ?? '',
+      found.point.shape ?? this.current.datasets.get(found.dataset)?.shape ?? '',
     )
+    const merged = { ...found.point.values, ...patch }
     if (shape) {
-      const validation = validateValues(shape, { ...found.point.values, ...patch })
+      const validation = validateValues(shape, merged)
       if (validation.errors.length > 0) {
         throw new BenchError('invalid', 'correction rejected', { problems: validation.errors })
       }
     }
 
+    // The canonical time is re-derived from the corrected row, not inherited from the point being
+    // corrected: a correction to the time field must move both, or it has only half happened. The
+    // field's text is canonicalised in the event too, so `values.date` and `t_observed` agree.
+    const currentShape = this.current.shapes.get(
+      this.current.datasets.get(found.dataset)?.shape ?? '',
+    )
+    const observation = currentShape ? resolveObservation(currentShape, merged) : undefined
+    const written = observation?.field
+      ? { ...patch, [observation.field.name]: observation.values[observation.field.name]! }
+      : patch
+
     const event = makeEvent('point_corrected', this.handle.session, {
       dataset: found.dataset,
       supersedes: id,
-      values: patch,
+      values: written,
+      ...(currentShape?.time_field === undefined ? {} : { t_observed: observation!.tObserved }),
       ...(reason === undefined ? {} : { reason }),
       // A correction made now belongs to the version that is current now: an older version keeps
       // reading as it did, which is the point of keeping the old one at all.
@@ -438,8 +557,9 @@ export class Workspace {
     return {
       event,
       dataset: found.dataset,
-      values: patch,
-      now: { ...found.point.values, ...patch },
+      values: written,
+      now: observation?.values ?? merged,
+      ...(currentShape?.time_field === undefined ? {} : { tObserved: observation!.tObserved }),
     }
   }
 
@@ -487,7 +607,7 @@ export class Workspace {
     if (!input) throw new BenchError('missing', `no dataset "${datasetId}"`)
     if (input.points.length === 0) {
       throw new BenchError('missing', `dataset "${datasetId}" has no active points`, {
-        hint: 'bench add --x 1 --y 2',
+        hint: addHint(this.shapeOf(datasetId)),
       })
     }
 
