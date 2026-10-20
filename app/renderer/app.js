@@ -2,18 +2,21 @@
  * The window shell: which project is open, which tab is showing, and what happens when either moves.
  *
  * Everything it displays comes from the core through `window.bench`. It formats nothing itself:
- * `copy.js` owns every word, `panels.js` draws it, `entry.js` owns typing, and `rail.js` owns the
- * left side. This file is the wiring and the open-view lifecycle, not a second renderer.
+ * `copy.js` owns every word, `panels.js` draws it, `entry.js` owns typing, `history.js` owns what
+ * undo would reverse, and `rail.js` owns the left side. This file is the wiring and the open-view
+ * lifecycle, not a second renderer.
  */
 import { state, ui, bridge, call, showFailure, showEmpty } from './state.js'
 import { renderProjects, renderTabs, renderFoot } from './rail.js'
 import { renderView, watchOpenTab, captureRestore } from './panels.js'
 import { applyStatic, builtInShape, empty as emptyCopy, status as copyStatus } from './copy.js'
+import { resetTabHistory } from './history.js'
 import {
   renderEntry,
   setStatus,
   focusFirstField,
   selectPoint,
+  pointAction,
   wireEntry,
 } from './entry.js'
 import { openTabDialog, wireTabs } from './tabs.js'
@@ -28,6 +31,7 @@ actions.openTabDialog = openTabDialog
 actions.openProjectDialog = openProjectDialog
 actions.renderEntry = renderEntry
 actions.selectPoint = selectPoint
+actions.pointAction = pointAction
 actions.setStatus = setStatus
 
 /**
@@ -58,6 +62,9 @@ export async function openView(name) {
     state.view = state.opened.view
     state.status = null
     state.timing = null
+    // Undo is the tab's, not the window's: another tab's history would offer to act on a point this
+    // drawing never showed. One call, so the point and the stacks cannot be cleared separately.
+    resetTabHistory()
     // A new tab may ask for different fields; rebuild them rather than painting one shape's inputs
     // over another's. Rebuilding also clears anything half-typed, which is the right default when
     // the target changed underneath it.
@@ -82,7 +89,9 @@ export async function afterOpen(opened) {
   state.projectEntry = opened.entry || null
   state.view = null
   state.opened = null
-  state.lastPoint = null
+  // A removal belongs to the tab it happened in; another project's history would offer to undo an
+  // act on a record that is not on screen.
+  resetTabHistory()
   state.entryKey = null
   state.timing = null
   state.status = null
@@ -150,6 +159,8 @@ export function applyChange(change) {
     // A correction belongs to the tab that was on screen; with no tab there is nowhere to save it.
     state.correction = null
     state.selection = null
+    // The tab's history goes with the tab: there is no drawing for it to act on.
+    resetTabHistory()
     if (change.entry) state.projectEntry = change.entry
     watchOpenTab()
     renderTabs()
@@ -176,6 +187,11 @@ export function applyChange(change) {
   state.opened = change.view
   state.view = change.view.view
   if (state.projectEntry && change.view.entry) state.projectEntry.active = change.view.entry.active
+  // Another writer moved the project. A removal this window remembers may have been undone or
+  // repeated by that writer, and the drawing cannot say which: the act the button would reverse is
+  // no longer known, so forget the history rather than offer an undo that can only refuse. The
+  // status already says the project changed on disk.
+  resetTabHistory()
   renderTabs()
   renderView(captureRestore())
   // A refusal the user is reading is not replaced by good news about a redraw.

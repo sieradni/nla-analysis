@@ -7,7 +7,7 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 
 | working | specified, not built |
 |---|---|
-| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `dataset list\|versions\|diff`, `shape extend`, `shape designate`, `view list\|show\|new\|add\|save\|render` | `dataset replace\|show\|export`, `shape list\|validate`, `annotate`, `add --stdin`, `view create\|open`, `recipe show` |
+| `init`, `add`, `correct`, `retract`, `restore`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `dataset list\|versions\|diff`, `shape extend`, `shape designate`, `view list\|show\|new\|add\|save\|render` | `dataset replace\|show\|export`, `shape list\|validate`, `annotate`, `add --stdin`, `view create\|open`, `recipe show` |
 
 Available recipes: `fit` (curve, band, verdict) and `drift` (does the relationship change over time).
 
@@ -18,9 +18,7 @@ implemented.
 
 **Human output (decided 2026-10-20, roadmap U24).** A mutating command's first line says what changed
 in plain words (`1 row added, none removed, none changed → version 5`); the event id and version follow
-on a second line for the agent. `--json` and exit codes are unchanged. **Specified, not built:**
-`point_restored`, the inverse of a retraction, so undo of a removal restores the same record instead of
-re-recording it ([ADR 0015](adr/0015-user-surface.md), roadmap U5).
+on a second line for the agent. `--json` and exit codes are unchanged.
 
 `bench recipes` deliberately does **not** require a project: recipes belong to the application, not
 to a data set. `bench run` writes the rendered artifact, appends an `analysis_run` event carrying the
@@ -170,6 +168,7 @@ exist, which analyses are stale, what the last decisions were, and what is unres
 | `bench add --stdin` | bulk points: JSONL or TSV with `--columns x,y,t`. **Not built.** |
 | `bench correct <point-id> --values '{"y":3.5}' --reason "typo"` | supersede a point |
 | `bench retract <point-id> --reason` | mark as withdrawn (kept, excluded from analysis) |
+| `bench restore <point-id>` | the inverse: bring the same record back, naming the retraction it reverses ([ADR 0016](adr/0016-point-restore.md)) |
 | `bench annotate <point-id> --note/--tag` | add context without changing values. **Not built**; notes and tags are set when a point is added or corrected. |
 | `bench import <file> [--map field=column]… [--time <col>] [--format csv\|tsv\|jsonl] [--ignore-unmapped <col>]… [--dry-run] [--force]` | preserve in `data/raw/`, then load |
 | `bench chart [--x-field <field>] [--y-field <field>] [--out file.svg]` | render the active points to an SVG artifact |

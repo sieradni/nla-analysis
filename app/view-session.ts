@@ -341,6 +341,11 @@ export interface PointDetail {
   fields: ShapeField[]
   values: Record<string, string | number | boolean | null>
   tObserved: string
+  /**
+   * The field the observation time came from, when the declaration designates one. A copied detail
+   * line says the time once, as "observed", rather than repeating it as a value.
+   */
+  timeField?: string
   /** Corrections already recorded against it, so a strip can say this is the third one. */
   corrections: number
   /** Panels of the open tab drawn by a recipe that include this point: a change makes them stale. */
@@ -376,6 +381,7 @@ export async function point(dir: string, id: string, viewName: string): Promise<
     fields: shape.fields,
     values: { ...found.point.values },
     tObserved: found.point.tObserved,
+    ...(shape.time_field === undefined ? {} : { timeField: shape.time_field }),
     corrections: found.point.corrections.length,
     recipePanels,
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activePoints, bind } from '../src/core/binder.ts'
+import { activePoints, bind, foldVersion } from '../src/core/binder.ts'
 import { DEFAULT_SHAPE, DEFAULT_DATASET } from '../src/core/project.ts'
 import { makeEvent } from '../src/core/events.ts'
 import type { BenchEvent } from '../src/core/events.ts'
@@ -108,5 +108,122 @@ describe('bind', () => {
 
     expect(state.problems).toHaveLength(1)
     expect(state.problems[0]).toContain('unknown point')
+  })
+})
+
+describe('a restore event', () => {
+  /** The instants matter here, so the clock `makeEvent` stamps is replaced on purpose. */
+  function stamped<T extends BenchEvent>(event: T, at: string): T {
+    return { ...event, at }
+  }
+
+  function withdrawn() {
+    const recorded = point(1, 2, '2026-01-01T00:00:00.000Z')
+    const retraction = stamped(
+      makeEvent('point_retracted', 'test', {
+        dataset: DEFAULT_DATASET,
+        supersedes: recorded.id,
+        reason: 'typed the wrong row',
+      }),
+      '2026-01-02T00:00:00.000Z',
+    )
+    return { recorded, retraction }
+  }
+
+  it('brings the same record back: its id, values, time and version', () => {
+    const { recorded, retraction } = withdrawn()
+    const restore = stamped(
+      makeEvent('point_restored', 'test', {
+        dataset: DEFAULT_DATASET,
+        restores: retraction.id,
+        version: 1,
+      }),
+      '2026-01-03T00:00:00.000Z',
+    )
+    const state = bind([...seed(), recorded, retraction, restore])
+
+    const [back] = activePoints(state, DEFAULT_DATASET)
+    expect(back?.id).toBe(recorded.id)
+    expect(back?.values).toEqual({ x: 1, y: 2 })
+    expect(back?.tObserved).toBe('2026-01-01T00:00:00.000Z')
+    expect(back?.version).toBe(1)
+    expect(back?.status).toBe('active')
+    expect(back?.restoredAt).toBe(restore.at)
+    // The withdrawal stays in the history: the record came back, the act did not disappear.
+    expect(back?.retractedAt).toBe(retraction.at)
+    expect(back?.retractedBy).toBeUndefined()
+    expect(state.problems).toEqual([])
+    // Two rows in the dataset, one of them active — a restore is not a new point.
+    expect(state.datasets.get(DEFAULT_DATASET)?.points).toHaveLength(1)
+  })
+
+  it('refuses to reverse a retraction that is no longer in force', () => {
+    const { recorded, retraction } = withdrawn()
+    const firstRestore = stamped(
+      makeEvent('point_restored', 'test', {
+        dataset: DEFAULT_DATASET,
+        restores: retraction.id,
+      }),
+      '2026-01-03T00:00:00.000Z',
+    )
+    const secondRetraction = stamped(
+      makeEvent('point_retracted', 'test', {
+        dataset: DEFAULT_DATASET,
+        supersedes: recorded.id,
+        reason: 'wrong again',
+      }),
+      '2026-01-04T00:00:00.000Z',
+    )
+    // A stale undo arriving after the point was withdrawn again. It must not re-open it.
+    const staleRestore = stamped(
+      makeEvent('point_restored', 'test', {
+        dataset: DEFAULT_DATASET,
+        restores: retraction.id,
+      }),
+      '2026-01-05T00:00:00.000Z',
+    )
+    const state = bind([...seed(), recorded, retraction, firstRestore, secondRetraction, staleRestore])
+
+    expect(activePoints(state, DEFAULT_DATASET)).toHaveLength(0)
+    expect(state.problems).toHaveLength(1)
+    expect(state.problems[0]).toContain('not in force')
+  })
+
+  it('reports a restore that names a retraction the log does not have', () => {
+    const { recorded } = withdrawn()
+    const orphan = makeEvent('point_restored', 'test', {
+      dataset: DEFAULT_DATASET,
+      restores: '01JZZZZZZZZZZZZZZZZZZZZZZZ',
+    })
+    const state = bind([...seed(), recorded, orphan])
+
+    expect(state.problems).toHaveLength(1)
+    expect(state.problems[0]).toContain('unknown retraction')
+  })
+
+  it('leaves an older version reading as it did, and later versions with the point back', () => {
+    const recorded = { ...point(1, 2, '2026-01-01T00:00:00.000Z'), version: 1 } satisfies BenchEvent
+    const retraction = makeEvent('point_retracted', 'test', {
+      dataset: DEFAULT_DATASET,
+      supersedes: recorded.id,
+      version: 2,
+    })
+    const restore = makeEvent('point_restored', 'test', {
+      dataset: DEFAULT_DATASET,
+      restores: retraction.id,
+      version: 3,
+    })
+    const events = [...seed(), recorded, retraction, restore]
+
+    // Every version still knows about the row; what changes is whether the row is evidence in it.
+    expect(foldVersion(events, DEFAULT_DATASET, 1).map((row) => [row.id, row.status])).toEqual([
+      [recorded.id, 'active'],
+    ])
+    expect(foldVersion(events, DEFAULT_DATASET, 2).map((row) => [row.id, row.status])).toEqual([
+      [recorded.id, 'retracted'],
+    ])
+    expect(foldVersion(events, DEFAULT_DATASET, 3).map((row) => [row.id, row.status])).toEqual([
+      [recorded.id, 'active'],
+    ])
   })
 })

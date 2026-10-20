@@ -130,6 +130,24 @@ export interface PointRetracted extends EventBase {
   version?: number
 }
 
+/**
+ * The inverse of a retraction: the record comes back as the same record, not a lookalike.
+ *
+ * It names the retraction it reverses rather than the point, because a point can be withdrawn more
+ * than once. That makes the restore checkable: it may only reverse the retraction that is actually
+ * in force, so an old undo arriving late cannot silently re-open a point that was withdrawn again.
+ * The values, observation time and version are the record's own and are deliberately not repeated:
+ * a restore that carried its own copy could disagree with them.
+ */
+export interface PointRestored extends EventBase {
+  type: 'point_restored'
+  dataset: string
+  /** Id of the `point_retracted` event this reverses. */
+  restores: string
+  /** The version this restoration happened in; see `PointCorrected.version`. */
+  version?: number
+}
+
 export interface ImportCompleted extends EventBase {
   type: 'import_completed'
   dataset: string
@@ -177,6 +195,7 @@ export type BenchEvent =
   | PointRecorded
   | PointCorrected
   | PointRetracted
+  | PointRestored
   | ImportCompleted
   | AnalysisRun
   | DecisionRecorded

@@ -73,16 +73,17 @@ One JSON object per line: `{v, id (ULID), type, at, session, payload}`.
 
 Types as built: `project_created`, `shape_defined`, `shape_extended`, `shape_time_designated`,
 `dataset_created`, `dataset_version_created`, `point_recorded`, `point_corrected`,
-`point_retracted`, `import_completed`, `analysis_run`, `decision_recorded`.
+`point_retracted`, `point_restored`, `import_completed`, `analysis_run`, `decision_recorded`.
 
 `dataset_replaced` was superseded by `dataset_version_created` ([ADR
 0012](adr/0012-dataset-versions.md)). Views record no events at all ([ADR
 0004](adr/0004-views-and-projects.md)), and a note or tag travels on the point event rather than in
 separate `note_added`/`tag_added` events.
 
-**Specified, not built:** `point_restored`, the inverse of a retraction, so undoing a removal brings
-the same record back instead of re-recording its values under a new id ([ADR
-0015](adr/0015-user-surface.md), roadmap U5). It is the only event the user surface adds.
+**Built 2026-10-20:** `point_restored`, the inverse of a retraction, so undoing a removal brings the
+same record back instead of re-recording its values under a new id. It names the retraction it
+reverses and repeats none of the record's values, and it is the only event the user surface added
+([ADR 0016](adr/0016-point-restore.md), roadmap U5).
 
 A point carries: `dataset`, `shape`, `values{}`, `t_observed`, `version`, `note`, `tags`; a
 correction names the point it `supersedes`. `sources` and `confidence` are not in the model. They
@@ -245,14 +246,16 @@ Promise *a menu of legitimate tests with visible uncertainty* — not "hidden pa
 Per [ADR 0002](adr/0002-agent-only-v1.md), v1 was agent-only: points arrive through `bench add`. The
 window has since landed, and part of this list with it: the always-focused bar, optimistic append, and
 correction by selecting a mark are in use. Auto-advance, paste-TSV preview and stream mode are **not
-built**; the plan's progress table records them as not done. `Ctrl+Z` undoes the last point when the
-bar is empty, and `Esc` cancels a correction ([plan](02-implementation-plan.md)).
+built**; the plan's progress table records them as not done. `Ctrl+Z` in an empty bar reverses the later of the last point added here and the last point removed
+from this tab, and `Esc` cancels a correction ([plan](02-implementation-plan.md)).
 
 **Undo and redo (decided 2026-10-20, [ADR 0015](adr/0015-user-surface.md)):** one history covers add,
 remove, correct, tab create/delete and import; `Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`; visible buttons
-naming the action. A removed point is restored by `point_restored` — the same record, not a lookalike.
-Undoing an import appends a **restore version**; it never deletes one (principle 7). Text fields
-keep their own undo while focused. This is not built yet (roadmap U4/U5).
+naming the action. A removed point is restored by `point_restored` — the same record, not a lookalike
+([ADR 0016](adr/0016-point-restore.md)) — and **that part is built**: remove from a point's menu,
+undo from the status line or the keyboard, redo to remove it again. The rest of the history (a
+correction's undo, tab create/delete, an import's restore version) is not built yet (roadmap U4).
+Text fields keep their own undo while focused.
 
 **Buttons, not commands (decided 2026-10-20):** every action a person needs is reachable from the
 window. A CLI command may appear only inside a collapsed "for agents" detail, never as the only way

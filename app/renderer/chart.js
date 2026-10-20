@@ -10,12 +10,127 @@
  * only maps those units onto the canvas. Hover finds the nearest mark in the crop and reads it out
  * through `copy.js`, so the tooltip cannot grow a second vocabulary.
  */
-import { tooltipLines } from './copy.js'
+import { pointMenu, tooltipLines } from './copy.js'
 
   var SVG_NS = 'http://www.w3.org/2000/svg'
   var MIN_ZOOM = 1
   var MAX_ZOOM = 8
   var HOVER_RADIUS_PX = 13
+
+  /**
+   * The one point menu in the window.
+   *
+   * It lives at module level because a menu is a property of the window, not of a panel: opening a
+   * second one from another chart has to close the first, and a panel that is repainted has to be
+   * able to dismiss the menu it opened. Everything a person reads inside it comes from `copy.js`.
+   */
+  var openMenu = null
+
+  /**
+   * Close the menu, and put the keyboard back where it was.
+   *
+   * A repaint replaces the host the menu was opened from, so the element to focus may already be on
+   * its way out; `refocus` asks the layer that owns the drawing to focus its replacement after the
+   * rebuild, which is what keeps Escape from dropping a keyboard reader onto the document body.
+   */
+  function closeMenu(returnFocus) {
+    if (!openMenu) return
+    var closed = openMenu
+    openMenu = null
+    closed.element.remove()
+    document.removeEventListener('pointerdown', closed.outside, true)
+    window.removeEventListener('resize', closed.dismiss)
+    // Dismissals that are not a choice pass `false`, so a pointerdown elsewhere never pulls the
+    // cursor out of the field it landed in. Escape, Tab and a chosen item always mean the keyboard
+    // belongs to the drawing again.
+    if (!returnFocus) return
+    if (closed.host.isConnected) closed.host.focus()
+    else if (closed.refocus) closed.refocus()
+  }
+
+  /**
+   * Open the point menu at a screen position, for one mark. The caller owns what the actions mean; a
+   * menu that also knew how to remove a record would be a second write path.
+   */
+  function showMenu(host, mark, clientX, clientY, onChoose, refocus) {
+    closeMenu(false)
+    var element = document.createElement('div')
+    element.className = 'point-menu'
+    element.setAttribute('role', 'menu')
+    element.setAttribute('aria-label', pointMenu.label)
+
+    var items = [
+      ['copy', pointMenu.copy],
+      ['correct', pointMenu.correct],
+      ['remove', pointMenu.remove],
+    ]
+    var buttons = items.map(function (item) {
+      var button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'point-menu-item'
+      button.setAttribute('role', 'menuitem')
+      button.dataset.action = item[0]
+      button.textContent = item[1]
+      button.addEventListener('click', function () {
+        // Back to the drawing before the write, so the repaint the action causes has a panel to
+        // return the keyboard to rather than the document body.
+        closeMenu(true)
+        onChoose(item[0])
+      })
+      element.appendChild(button)
+      return button
+    })
+
+    element.addEventListener('keydown', function (event) {
+      var at = buttons.indexOf(document.activeElement)
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMenu(true)
+        return
+      }
+      // Tab leaves the menu rather than walking out of it into nothing: after `remove()` the focused
+      // button is gone, and a keyboard reader would land on the document body.
+      if (event.key === 'Tab') {
+        event.preventDefault()
+        closeMenu(true)
+        return
+      }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') {
+        return
+      }
+      event.preventDefault()
+      var next =
+        event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? buttons.length - 1
+            : at === -1
+              ? 0
+              : (at + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+      buttons[next].focus()
+    })
+
+    document.body.appendChild(element)
+    // Placed at the pointer first, then pulled back inside the window: a menu opened at the right
+    // edge would otherwise offer a Remove nobody can click.
+    element.style.left = clientX + 'px'
+    element.style.top = clientY + 'px'
+    var box = element.getBoundingClientRect()
+    if (box.right > window.innerWidth - 8) element.style.left = Math.max(8, clientX - box.width) + 'px'
+    if (box.bottom > window.innerHeight - 8) element.style.top = Math.max(8, clientY - box.height) + 'px'
+
+    var outside = function (event) {
+      if (!element.contains(event.target)) closeMenu(false)
+    }
+    var dismiss = function () {
+      closeMenu(false)
+    }
+    document.addEventListener('pointerdown', outside, true)
+    window.addEventListener('resize', dismiss)
+
+    buttons[0].focus()
+    openMenu = { element: element, host: host, outside: outside, dismiss: dismiss, refocus: refocus }
+  }
 
   /**
    * Build one of the drawing's halves. The HTML parser builds SVG content in place, in the
@@ -75,6 +190,11 @@ import { tooltipLines } from './copy.js'
     // Positions, ids and data values arrive as parallel arrays in the spec's own point order. Tooltip
     // values are data values, not projected positions: `cx`/`cy` say where a mark is drawn, `xs`/`ys`
     // say what it measured.
+    // A panel drawn by a recipe is kept, not rebuilt, when a write changes the data: its marks are
+    // the ones the file was drawn with, and one of them may no longer be in the project. It still
+    // draws them (with a stale badge that says so), but it does not offer to act on them.
+    var actionable = options.pointsAreCurrent !== false
+
     var packed = drawing.marks || []
     var xs = drawing.xs || []
     var ys = drawing.ys || []
@@ -249,8 +369,10 @@ import { tooltipLines } from './copy.js'
 
     /** Put the selection ring on one mark and tell the window which record it is. */
     function showSelection(mark) {
-      // Only a mark with a record can be selected: there is nothing to correct otherwise.
-      if (!mark || !mark.id) return
+      // Only a mark with a record can be selected: there is nothing to correct otherwise. A kept
+      // panel's marks are not offered at all — correcting one would edit a record the drawing cannot
+      // vouch for, and removing one may already be gone.
+      if (!actionable || !mark || !mark.id) return
       selected = mark
       var at = toBox(0, 0)
       var perPixel = box.w / at.rect.width
@@ -350,6 +472,33 @@ import { tooltipLines } from './copy.js'
       if (!drag) hideHover()
     })
 
+    /** Open the menu for one mark, at wherever that mark is drawn. */
+    function openPointMenu(mark, clientX, clientY) {
+      showMenu(
+        host,
+        mark,
+        clientX,
+        clientY,
+        function (action) {
+          // The panel says what to do about it; the drawing only knows which record was asked for.
+          if (options.onPointAction) options.onPointAction(action, mark.id)
+        },
+        // Where the keyboard goes if this panel is replaced while the menu is open.
+        options.refocus,
+      )
+    }
+
+    // A point's own menu. Right-click is the gesture a person tries; the ring is deliberately not
+    // moved, because asking for the menu is not the same act as selecting the point for correction.
+    host.addEventListener('contextmenu', function (event) {
+      if (!actionable) return
+      var mark = nearest(event.clientX, event.clientY)
+      if (!mark || !mark.id) return
+      event.preventDefault()
+      hideHover()
+      openPointMenu(mark, event.clientX, event.clientY)
+    })
+
     host.addEventListener(
       'wheel',
       function (event) {
@@ -368,6 +517,16 @@ import { tooltipLines } from './copy.js'
     })
 
     host.addEventListener('keydown', function (event) {
+      // The keyboard's context-menu key, on the selected mark: a menu is only about a point the
+      // person has already chosen. Shift+F10 is the Windows convention; the menu key is its twin.
+      if ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu') {
+        if (!actionable || !selected) return
+        var at = toClient(selected.cx, selected.cy)
+        event.preventDefault()
+        hideHover()
+        openPointMenu(selected, at.x, at.y)
+        return
+      }
       if (event.key === 'Escape') {
         clearSelection(true)
         return
@@ -453,6 +612,18 @@ import { tooltipLines } from './copy.js'
         if (observer) {
           observer.disconnect()
           observer = null
+        }
+        // A repaint replaces this drawing; a menu still pointing at one of its marks would act on a
+        // record the person can no longer see. The host is about to leave the document, so the
+        // keyboard goes to whatever replaces this panel rather than to the body.
+        if (openMenu && openMenu.host === host) {
+          // The menu was up when the panel was replaced: put the keyboard on the panel that replaces
+          // it, rather than leaving it on a detached element and then on the document body.
+          var menuHadFocus =
+            openMenu.element.contains(document.activeElement) || document.activeElement === host
+          closeMenu(false)
+          if (menuHadFocus && options.refocus) options.refocus()
+          else if (menuHadFocus) host.focus()
         }
       },
       /**

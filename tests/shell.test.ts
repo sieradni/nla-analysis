@@ -209,6 +209,58 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(appended[1].reason).toBe('undo from the window')
   })
 
+  it('brings a removed point back as the same record, through the door the menu uses', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const opened = (await api.openView!(dir, 'drift over time')) as Window
+    const drawing = opened.drawings[1]
+    const target = { id: drawing.ids.split('\n')[0], x: drawing.xs[0], y: drawing.ys[0] }
+    const detail = (await api.point!(dir, target.id, 'drift over time')) as Window
+    // The fixture's shape designates no observation-time field, so nothing is left out of a copied
+    // detail line in favour of "observed".
+    expect(detail.timeField).toBeUndefined()
+    const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+
+    // Remove, as the menu does it: no reason, one event.
+    const removed = (await api.retractPoint!(dir, target.id)) as Window
+    expect(removed.active).toBe(13)
+    // The window's history remembers the *act*, not just the point: undo names that removal.
+    const restored = (await api.restorePoint!(dir, target.id, removed.retraction)) as Window
+    expect(restored.id).toBe(target.id)
+    expect(restored.active).toBe(14)
+
+    const appended = (await readFile(join(dir, 'data', 'events.jsonl'), 'utf8'))
+      .slice(before.length)
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(appended.map((event: Window) => event.type)).toEqual(['point_retracted', 'point_restored'])
+    expect(appended[0].reason).toBeUndefined()
+    // The restore names the act it reverses, and is not a second record.
+    expect(appended[1].restores).toBe(appended[0].id)
+    expect(appended).toHaveLength(2)
+
+    // The same record is what the strip reads back: values and observation time did not move.
+    const again = (await api.point!(dir, target.id, 'drift over time')) as Window
+    expect(again.values).toEqual(detail.values)
+    expect(again.tObserved).toBe(detail.tObserved)
+
+    const refreshed = (await api.refreshView!(dir, 'drift over time')) as Window
+    expect(refreshed.entry.active).toBe(14)
+    expect(refreshed.view.panels[1].n).toBe(14)
+    expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('14 active points')
+
+    // A second undo holding the *old* removal is refused rather than reversing the newer one: the
+    // window's stale button cannot undo somebody else's act.
+    const again2 = (await api.retractPoint!(dir, target.id)) as Window
+    await expect(api.restorePoint!(dir, target.id, removed.retraction)).rejects.toThrow(
+      /no longer the one in force/,
+    )
+    // The removal that is in force still comes back, whether it is named or left to the core.
+    expect(((await api.restorePoint!(dir, target.id, again2.retraction)) as Window).active).toBe(14)
+    await expect(api.restorePoint!(dir, target.id)).rejects.toThrow(/is not retracted/)
+  })
+
   it('corrects a selected point as an event, and says the recipe panel no longer holds', async () => {
     const api = await shell()
     const dir = await scratchProject()

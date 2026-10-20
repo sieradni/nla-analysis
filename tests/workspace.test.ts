@@ -164,6 +164,86 @@ describe('Workspace', () => {
     expect(after.trimEnd().split('\n').at(-1)).toContain('point_corrected')
   })
 
+  it('restores a removed point as the same record, and refuses a second restore', async () => {
+    const workspace = await Workspace.open(project)
+    const recorded = await workspace.recordPoint({
+      values: { x: 4.5, y: 9.25 },
+      tObserved: '2026-02-02T02:02:02Z',
+    })
+    const count = workspace.dataset().points.length
+    const retracted = await workspace.retractPoint(recorded.event.id)
+    expect(workspace.dataset().points).toHaveLength(count - 1)
+
+    const restored = await workspace.restorePoint(recorded.event.id)
+    const back = workspace.findPoint(recorded.event.id)?.point
+    expect(back?.status).toBe('active')
+    // The same record: the id, the values, the observation time and the version it was recorded in.
+    expect(back?.id).toBe(recorded.event.id)
+    expect(back?.values).toEqual({ x: 4.5, y: 9.25 })
+    expect(back?.tObserved).toBe('2026-02-02T02:02:02.000Z')
+    expect(back?.version).toBe((recorded.event as { version?: number }).version ?? 1)
+    expect(restored.retraction).toBe(retracted.event.id)
+    expect(restored.active).toBe(count)
+
+    // One event per undo, and it names the retraction it reversed.
+    const appended = (await readFile(join(project, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { id: string; type: string; restores?: string })
+    expect(appended.at(-1)?.type).toBe('point_restored')
+    expect(appended.at(-1)?.restores).toBe(retracted.event.id)
+
+    // Restoring an active point would record an act that changed nothing.
+    await expect(workspace.restorePoint(recorded.event.id)).rejects.toThrow(/is not retracted/)
+
+    // Redo: the same record can be withdrawn and brought back again, and the count agrees each time.
+    const again = await workspace.retractPoint(recorded.event.id)
+    expect(again.active).toBe(count - 1)
+    const second = await workspace.restorePoint(recorded.event.id)
+    expect(second.active).toBe(count)
+  })
+
+  it('reverses the removal it is told to, and refuses one that is no longer in force', async () => {
+    const workspace = await Workspace.open(project)
+    const recorded = await workspace.recordPoint({
+      values: { x: 5.5, y: 1.5 },
+      tObserved: '2026-02-03T03:03:03Z',
+    })
+    const first = await workspace.retractPoint(recorded.event.id)
+
+    // A caller that remembers the act names it, and gets that act reversed.
+    const restored = await workspace.restorePoint(recorded.event.id, first.event.id)
+    expect(restored.retraction).toBe(first.event.id)
+
+    // The point is removed again — by this window or another writer — so the older removal is no
+    // longer the one in force. Naming it must refuse rather than reverse the newer act under the
+    // older act's name.
+    const second = await workspace.retractPoint(recorded.event.id)
+    await expect(workspace.restorePoint(recorded.event.id, first.event.id)).rejects.toThrow(
+      /no longer the one in force/,
+    )
+    // The removal in force still comes back, named or unnamed.
+    expect((await workspace.restorePoint(recorded.event.id, second.event.id)).retraction).toBe(
+      second.event.id,
+    )
+    await workspace.retractPoint(recorded.event.id)
+    expect((await workspace.restorePoint(recorded.event.id)).active).toBe(
+      workspace.dataset().points.length,
+    )
+    expect(workspace.findPoint(recorded.event.id)?.point.status).toBe('active')
+  })
+
+  it('refuses to restore a point the log does not have', async () => {
+    const workspace = await Workspace.open(project)
+    const failure = await workspace
+      .restorePoint('01NOPE')
+      .then(() => null)
+      .catch((error: unknown) => error)
+
+    expect((failure as BenchError).kind).toBe('missing')
+    expect((failure as BenchError).message).toBe('no point with id "01NOPE"')
+  })
+
   it('arrives at the same result as the CLI for the same input', async () => {
     const args = ['add', '--x', '3', '--y', '7.25', '--at', '2026-03-03T03:03:03Z', '--note', 'same input']
 

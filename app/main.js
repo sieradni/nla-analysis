@@ -10,7 +10,7 @@
  * answer belongs in `src/core`, not here. Capture, measure and smoke runs live in `harness/`:
  * they drive this window, they are not a second shell.
  */
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain } from 'electron'
 import { join, resolve } from 'node:path'
 import * as bench from './core.bundle.mjs'
 import {
@@ -237,7 +237,7 @@ ipcMain.handle('bench:pickFolder', async (event) => {
   return { ok: true, value: result.canceled ? null : result.filePaths[0] }
 })
 
-// The write channel. Four calls, each one a `Workspace` method: there is no generic "run this"
+// The write channel. Five calls, each one a `Workspace` method: there is no generic "run this"
 // escape hatch, so the window cannot grow a write path the core has not already agreed to.
 ipcMain.handle('bench:recordPoint', (_event, dir, draft, viewName) =>
   guarded(() => bench.recordPoint(dir, draft, viewName)),
@@ -248,6 +248,20 @@ ipcMain.handle('bench:correctPoint', (_event, dir, id, values, viewName) =>
 ipcMain.handle('bench:retractPoint', (_event, dir, id, reason) =>
   guarded(() => bench.retractPoint(dir, id, reason)),
 )
+ipcMain.handle('bench:restorePoint', (_event, dir, id, retraction) =>
+  guarded(() => bench.restorePoint(dir, id, retraction)),
+)
+// Copying a point's details is a clipboard write, not a project write: it neither reads nor moves the
+// log, so it deliberately does not run under `guarded` (which arms the project watcher).
+ipcMain.handle('bench:copyText', async (_event, text) => {
+  if (typeof text !== 'string' || text === '') {
+    return { ok: false, error: { message: 'there was nothing to copy' } }
+  }
+  // `await` so the answer means the clipboard holds the line, whether this Electron's clipboard is
+  // synchronous or promise-based. The window reports success only after this resolves.
+  await clipboard.writeText(text)
+  return { ok: true, value: { characters: text.length } }
+})
 ipcMain.handle('bench:writeView', (_event, dir, draft) => guarded(() => bench.writeView(dir, draft)))
 // An import is one plan and one append: a refusal returns before anything is preserved or written.
 ipcMain.handle('bench:importPreview', (_event, dir, file) => guarded(() => bench.importPreview(dir, file)))

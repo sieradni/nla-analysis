@@ -4,7 +4,7 @@
  * One linear scenario, because the frames are the argument: each step is a thing a person does, and
  * each assertion is what the window should have said afterwards.
  */
-import { app, ipcMain } from 'electron'
+import { app, clipboard, ipcMain } from 'electron'
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
@@ -103,6 +103,10 @@ async function assertPlainSurface(where) {
       charts: Array.prototype.map.call(document.querySelectorAll('.panel-chart svg text'), (n) => n.textContent).join(' | '),
       evidence: Array.prototype.map.call(document.querySelectorAll('.panel-evidence'), (n) => n.textContent).join(' | '),
       empty: Array.prototype.map.call(document.querySelectorAll('.panel-empty'), (n) => n.textContent).join(' | '),
+      menu: (() => {
+        const menu = document.querySelector('.point-menu')
+        return menu ? menu.textContent : ''
+      })(),
       sheet: (() => {
         const dialog = document.getElementById('import-dialog')
         if (!dialog || !dialog.open) return ''
@@ -418,6 +422,9 @@ let cspViolations = 0
     if (refused.typed.x !== 'seven') {
       throw new Error('the refused entry did not keep what was typed')
     }
+    // A refusal is a surface too: the core's message is written for an agent and can name the record
+    // or shape it checked, so the frame this writes is read back like every other one.
+    await assertPlainSurface('the refused entry')
     await writeFile(join(captureDir, 'app-refused.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
@@ -568,6 +575,327 @@ let cspViolations = 0
     }
     await assertPlainSurface('after refresh')
 
+    // A point's menu. Right-click a mark the way a person does, copy the details, remove the point,
+    // undo it, redo it, then open the same menu from the keyboard. Every claim is read back from the
+    // log, because "the point came back" is a fact about the file, not about a frame.
+    const logTail = async () => {
+      const lines = (await readFile(join(writableDir, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n')
+      return JSON.parse(lines[lines.length - 1])
+    }
+    const totalMarks = async () =>
+      window.webContents.executeJavaScript(
+        "Array.prototype.reduce.call(document.querySelectorAll('.panel-chart'), (total, host) => total + Number(host.dataset.marks || 0), 0)",
+      )
+    const menuState = async () =>
+      JSON.parse(
+        await window.webContents.executeJavaScript(`(() => {
+          const menu = document.querySelector('.point-menu')
+          const box = menu ? menu.getBoundingClientRect() : null
+          return JSON.stringify({
+            open: Boolean(menu),
+            role: menu ? menu.getAttribute('role') : null,
+            items: menu ? Array.prototype.map.call(menu.querySelectorAll('.point-menu-item'), (button) => button.textContent) : [],
+            focused: menu && document.activeElement ? document.activeElement.textContent : '',
+            // A menu opened near an edge must still be clickable: no item may fall outside.
+            inside: Boolean(
+              box &&
+                box.left >= 0 &&
+                box.top >= 0 &&
+                box.right <= window.innerWidth &&
+                box.bottom <= window.innerHeight &&
+                box.width > 0 &&
+                box.height > 0,
+            ),
+          })
+        })()`),
+      )
+    // Right-click the third mark in the plot panel, so the record is not the one the correction frame
+    // edited and the counts are easy to follow.
+    const menuTarget = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const panels = document.querySelectorAll('.panel')
+        const host = panels[panels.length - 1].querySelector('.panel-chart')
+        const mark = host.__benchChart.marks()[2]
+        host.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: mark.x,
+          clientY: mark.y,
+          button: 2,
+        }))
+        return JSON.stringify({ id: mark.id, marks: Number(host.dataset.marks || 0) })
+      })()`),
+    )
+    const opened = await menuState()
+    console.log('[bench] menu ' + JSON.stringify({ target: menuTarget.id, ...opened }))
+    if (!opened.open || opened.role !== 'menu') throw new Error('right-clicking a mark opened no menu')
+    if (opened.items.join('|') !== 'Copy details|Correct…|Remove') {
+      throw new Error('the point menu does not offer the three actions: ' + JSON.stringify(opened.items))
+    }
+    if (opened.focused !== 'Copy details') throw new Error('the menu did not put the keyboard on its first item')
+    if (!opened.inside) throw new Error('the point menu was not fully inside the window')
+    await assertPlainSurface('the point menu')
+    await writeFile(join(captureDir, 'app-point-menu.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // Copy details writes one line to the system clipboard, not to the screen.
+    await window.webContents.executeJavaScript(
+      "document.querySelector('.point-menu-item[data-action=\"copy\"]').click()",
+    )
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Copied/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const copiedState = JSON.parse(await entryState())
+    // The clipboard is the system's, not the window's: read it from the process that wrote it. This
+    // Electron's clipboard may answer synchronously or with a promise, so await both cases.
+    const copiedText = await clipboard.readText()
+    console.log('[bench] copied ' + JSON.stringify({ status: copiedState.status, clipboard: copiedText }))
+    if (typeof copiedText !== 'string') {
+      throw new Error('the clipboard did not return text: ' + String(copiedText))
+    }
+    if (!/^Copied/.test(copiedState.status || '')) throw new Error('Copy details reported nothing')
+    if (!copiedText.endsWith('record ' + menuTarget.id)) {
+      throw new Error('the copied line does not end with the record id: ' + copiedText)
+    }
+    if (!/observed \d{2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2}/.test(copiedText)) {
+      throw new Error('the copied line does not say when the point was observed: ' + copiedText)
+    }
+    if ((await menuState()).open) throw new Error('the menu stayed open after choosing an item')
+    await assertPlainSurface('after copying a point')
+
+    // Correct… opens the same strip a click on the mark opens: the menu is a second door to the
+    // editor, not a second editor.
+    await window.webContents.executeJavaScript(`(() => {
+      const panels = document.querySelectorAll('.panel')
+      const host = panels[panels.length - 1].querySelector('.panel-chart')
+      const mark = host.__benchChart.marks().find((candidate) => candidate.id === ${JSON.stringify(menuTarget.id)})
+      host.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: mark.x,
+        clientY: mark.y,
+        button: 2,
+      }))
+      document.querySelector('.point-menu-item[data-action=\"correct\"]').click()
+      return true
+    })()`)
+    for (let waited = 0; waited < 60; waited += 1) {
+      const correcting = await window.webContents.executeJavaScript(
+        "!document.getElementById('entry-correct').hidden",
+      )
+      if (correcting) break
+      await sleep(100)
+    }
+    const correctingState = JSON.parse(await entryState())
+    console.log('[bench] menu-correct ' + JSON.stringify({ correcting: correctingState.correcting, status: correctingState.status }))
+    if (!correctingState.correcting) throw new Error('Correct… in the menu opened no correction strip')
+    if (!/^Editing /.test(correctingState.status || '')) {
+      throw new Error('the correction strip does not name the measurement: ' + correctingState.status)
+    }
+    await assertPlainSurface('the correction strip the menu opened')
+    pressKey('Escape')
+    for (let waited = 0; waited < 40; waited += 1) {
+      const closed = await window.webContents.executeJavaScript(
+        "document.getElementById('entry-correct').hidden",
+      )
+      if (closed) break
+      await sleep(100)
+    }
+    if (!(await window.webContents.executeJavaScript("document.getElementById('entry-correct').hidden"))) {
+      throw new Error('Escape did not close the correction strip the menu opened')
+    }
+
+    // Remove: one click, no reason prompt, the status offers the undo rather than describing it.
+    const beforeRemove = await totalMarks()
+    await window.webContents.executeJavaScript(`(() => {
+      const panels = document.querySelectorAll('.panel')
+      const host = panels[panels.length - 1].querySelector('.panel-chart')
+      const mark = host.__benchChart.marks().find((candidate) => candidate.id === ${JSON.stringify(menuTarget.id)})
+      host.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: mark.x,
+        clientY: mark.y,
+        button: 2,
+      }))
+      document.querySelector('.point-menu-item[data-action="remove"]').click()
+      return true
+    })()`)
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Removed/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const removedState = JSON.parse(await entryState())
+    const retraction = await logTail()
+    const removedMarks = await totalMarks()
+    // One undo, and it names the act: the bar's button, not a second button beside the status.
+    const undoButton = await window.webContents.executeJavaScript(`(() => {
+      const button = document.getElementById('entry-undo')
+      const beside = document.querySelector('#entry-status .status-action')
+      return JSON.stringify({
+        label: button && !button.disabled ? button.textContent : null,
+        beside: beside ? beside.textContent : null,
+        focus: document.activeElement ? String(document.activeElement.className || '') : '',
+        menu: Boolean(document.querySelector('.point-menu')),
+      })
+    })()`)
+    const undoState = JSON.parse(undoButton)
+    console.log(
+      '[bench] removed ' +
+        JSON.stringify({
+          status: removedState.status,
+          undo: undoState.label,
+          beside: undoState.beside,
+          focus: undoState.focus,
+          marks: { before: beforeRemove, after: removedMarks },
+          event: retraction.type,
+          reason: retraction.reason,
+        }),
+    )
+    if (!/^Removed/.test(removedState.status || '')) throw new Error('Removing a point reported nothing')
+    if (undoState.label !== 'Undo removal') {
+      throw new Error('the one undo does not name the removal it would reverse: ' + undoState.label)
+    }
+    // The act came from the drawing, and the repaint that followed it must leave the keyboard there
+    // rather than putting it in the entry bar or on the document body.
+    if (!/panel-chart/.test(undoState.focus)) {
+      throw new Error('choosing Remove from the menu did not return focus to a chart: ' + undoState.focus)
+    }
+    if (undoState.menu) throw new Error('the menu stayed open after Remove')
+    await writeFile(join(captureDir, 'app-point-menu-removed.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+    if (removedMarks !== beforeRemove - 1) {
+      throw new Error(`the removed mark is still drawn (${beforeRemove} → ${removedMarks})`)
+    }
+    if (retraction.type !== 'point_retracted' || retraction.supersedes !== menuTarget.id) {
+      throw new Error('the removal was not recorded against that point: ' + JSON.stringify(retraction))
+    }
+    // The window asks for no justification (U6); only an agent or the CLI may add one.
+    if (retraction.reason !== undefined) throw new Error('the window recorded a reason for the removal')
+
+    // Undo, with the bar's own button: the same record comes back, and the log says it was restored.
+    await window.webContents.executeJavaScript("document.getElementById('entry-undo').click()")
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Restored/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const restoredState = JSON.parse(await entryState())
+    const restoration = await logTail()
+    const restoredMarks = await totalMarks()
+    console.log(
+      '[bench] restored ' +
+        JSON.stringify({
+          status: restoredState.status,
+          marks: restoredMarks,
+          event: restoration.type,
+          restores: restoration.restores === retraction.id,
+        }),
+    )
+    if (!/^Restored/.test(restoredState.status || '')) throw new Error('Undo reported nothing')
+    if (restoredMarks !== beforeRemove) throw new Error(`the mark did not come back (${restoredMarks})`)
+    // Redo is the other direction of the same history, and it is the only button beside the status:
+    // two undo buttons for one act was the thing this replaced.
+    const redoButton = await window.webContents.executeJavaScript(`(() => {
+      const button = document.querySelector('#entry-status .status-action')
+      return button ? button.textContent : null
+    })()`)
+    if (redoButton !== 'Redo removal') {
+      throw new Error('undo of a removal offers no Redo button: ' + redoButton)
+    }
+    if (restoration.type !== 'point_restored' || restoration.restores !== retraction.id) {
+      throw new Error('undo did not record a restore of that retraction: ' + JSON.stringify(restoration))
+    }
+
+    // Redo, by keyboard, puts the same record away again and leaves it undoable.
+    await focusField(0)
+    pressKey('Z', ['control', 'shift'])
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Removed/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const redoneState = JSON.parse(await entryState())
+    const redone = await logTail()
+    console.log('[bench] redone ' + JSON.stringify({ status: redoneState.status, event: redone.type }))
+    if (!/^Removed/.test(redoneState.status || '')) throw new Error('redo did not remove the point again')
+    if (redone.type !== 'point_retracted' || redone.supersedes !== menuTarget.id) {
+      throw new Error('redo did not record a second removal of that point: ' + JSON.stringify(redone))
+    }
+    await assertPlainSurface('after undo and redo')
+
+    // The keyboard path: select a mark, then Shift+F10. Escape closes it and puts the focus back on
+    // the chart rather than on the document body.
+    const keyboardPath = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const panels = document.querySelectorAll('.panel')
+        const host = panels[panels.length - 1].querySelector('.panel-chart')
+        host.focus()
+        host.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }))
+        const ring = host.querySelector('svg.layer-over .select-dot')
+        host.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }))
+        const menu = document.querySelector('.point-menu')
+        const opened = Boolean(menu)
+        const focused = document.activeElement ? document.activeElement.textContent : ''
+        if (menu) {
+          document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        }
+        return JSON.stringify({
+          ring: ring ? ring.getAttribute('visibility') : 'none',
+          opened: opened,
+          focused: focused,
+          closed: document.querySelector('.point-menu') === null,
+          focusReturned: document.activeElement === host,
+        })
+      })()`),
+    )
+    console.log('[bench] menu-keyboard ' + JSON.stringify(keyboardPath))
+    if (keyboardPath.ring !== 'visible') throw new Error('shift-arrow selected no mark for the menu')
+    if (!keyboardPath.opened) throw new Error('Shift+F10 opened no menu')
+    if (keyboardPath.focused !== 'Copy details') throw new Error('the keyboard menu is not focusable')
+    if (!keyboardPath.closed) throw new Error('Escape did not close the menu')
+    if (!keyboardPath.focusReturned) throw new Error('Escape did not return the focus to the chart')
+
+    // A repaint while the menu is open: another writer appends, the window redraws, and the panel the
+    // menu was opened from is replaced. The menu goes with it, and the keyboard lands on the panel
+    // that replaced it — not on the document body.
+    const menuOpenedForRepaint = await window.webContents.executeJavaScript(`(() => {
+      const panels = document.querySelectorAll('.panel')
+      const host = panels[panels.length - 1].querySelector('.panel-chart')
+      const mark = host.__benchChart.marks()[0]
+      host.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: mark.x,
+        clientY: mark.y,
+        button: 2,
+      }))
+      return Boolean(document.querySelector('.point-menu'))
+    })()`)
+    if (!menuOpenedForRepaint) throw new Error('the menu did not open for the repaint check')
+    await runCli(['add', '--x', '8.5', '--y', '12.5'])
+    for (let waited = 0; waited < 80; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/changed on disk/.test(state.status || '')) break
+      await sleep(100)
+    }
+    await sleep(200)
+    const repainted = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => JSON.stringify({
+        menu: Boolean(document.querySelector('.point-menu')),
+        focus: document.activeElement ? String(document.activeElement.className || '') : '',
+        tag: document.activeElement ? document.activeElement.tagName : '',
+      }))()`),
+    )
+    console.log('[bench] menu-repaint ' + JSON.stringify(repainted))
+    if (repainted.menu) throw new Error('the menu survived a repaint')
+    if (!/panel-chart/.test(repainted.focus)) {
+      throw new Error('a repaint during an open menu lost the keyboard: ' + JSON.stringify(repainted))
+    }
+
     // A tab built from the dialog: a name, a dataset, a recipe. It runs against a second, untouched
     // copy of the fixture — the frames above appended and corrected points, and a verdict computed
     // from those edits would say more about this harness than about the door being shown.
@@ -660,6 +988,243 @@ let cspViolations = 0
     if (!tabNames.includes('regimes')) throw new Error('the new tab is not in the rail')
     await writeFile(join(captureDir, 'app-new-tab.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
+
+    // A recipe panel is kept when a write changes the data: it still draws the marks it was drawn
+    // with, and one of them may no longer exist. It says it is out of date, and it must not offer to
+    // act on those marks.
+    const staleTarget = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const host = document.querySelector('.panel-chart')
+        const mark = host.__benchChart.marks()[0]
+        host.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: mark.x,
+          clientY: mark.y,
+          button: 2,
+        }))
+        const item = document.querySelector('.point-menu-item[data-action="remove"]')
+        if (item) item.click()
+        return JSON.stringify({ id: mark.id, marks: Number(host.dataset.marks || 0) })
+      })()`),
+    )
+    for (let waited = 0; waited < 80; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Removed/.test(state.status || '')) break
+      await sleep(100)
+    }
+    await sleep(200)
+    const staleState = JSON.parse(await entryState())
+    const staleMarks = await totalMarks()
+    const staleMenu = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const host = document.querySelector('.panel-chart')
+        const mark = host.__benchChart.marks()[0]
+        host.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: mark.x,
+          clientY: mark.y,
+          button: 2,
+        }))
+        host.focus()
+        host.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }))
+        host.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }))
+        return JSON.stringify({
+          menu: Boolean(document.querySelector('.point-menu')),
+          ring: host.querySelector('svg.layer-over .select-dot').getAttribute('visibility'),
+        })
+      })()`),
+    )
+    console.log(
+      '[bench] stale-panel ' +
+        JSON.stringify({
+          status: staleState.status,
+          badges: staleState.badges,
+          marks: { before: staleTarget.marks, after: staleMarks },
+          menu: staleMenu.menu,
+          ring: staleMenu.ring,
+        }),
+    )
+    if (!/^Removed/.test(staleState.status || '')) {
+      throw new Error('removing from a recipe panel reported nothing')
+    }
+    // The kept drawing is kept: its marks are what the file was drawn with, and it says so.
+    if (staleMarks !== staleTarget.marks) {
+      throw new Error(`the kept panel's marks changed (${staleTarget.marks} → ${staleMarks})`)
+    }
+    if (!staleState.badges.some((badge) => badge !== '')) {
+      throw new Error('the kept panel does not say it is out of date')
+    }
+    // ... and it offers no menu, no selection and no keyboard menu on marks it cannot vouch for.
+    if (staleMenu.menu) throw new Error('a kept panel offered a point menu for a mark it cannot vouch for')
+    if (staleMenu.ring !== 'hidden') throw new Error('a kept panel let a mark be selected')
+
+    // The history belongs to the drawing it happened in. The removal above left the bar offering its
+    // undo on "regimes"; switching to the other tab must drop it, because that drawing never showed
+    // the point.
+    const undoOnRegimes = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const button = document.getElementById('entry-undo')
+        return JSON.stringify({ label: button.textContent, disabled: button.disabled })
+      })()`),
+    )
+    if (undoOnRegimes.disabled || undoOnRegimes.label !== 'Undo removal') {
+      throw new Error('the removal did not reach the bar: ' + JSON.stringify(undoOnRegimes))
+    }
+    const switched = await window.webContents.executeJavaScript(`(() => {
+      const item = Array.prototype.find.call(document.querySelectorAll('#tabs .item'), (button) => {
+        const name = button.querySelector('.item-name')
+        return name && name.textContent === 'drift over time'
+      })
+      if (!item) return false
+      item.click()
+      return true
+    })()`)
+    if (!switched) throw new Error('no tab in the rail to switch to')
+    for (let waited = 0; waited < 60; waited += 1) {
+      const title = await window.webContents.executeJavaScript("document.getElementById('view-title').textContent")
+      if (title === 'drift over time') break
+      await sleep(100)
+    }
+    const undoAfterSwitch = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const button = document.getElementById('entry-undo')
+        return JSON.stringify({ label: button.textContent, disabled: button.disabled, title: button.title })
+      })()`),
+    )
+    console.log('[bench] tab-switch-history ' + JSON.stringify({ before: undoOnRegimes, after: undoAfterSwitch }))
+    if (!undoAfterSwitch.disabled) {
+      throw new Error('the bar still offers an undo for the tab that was left: ' + JSON.stringify(undoAfterSwitch))
+    }
+
+    // Remove while a write is in flight. Enter starts a save and the menu is opened in the same tick,
+    // before it settles: the click must say so rather than doing nothing, and the removal must not
+    // happen once the save lands.
+    const marksBeforeBusy = await totalMarks()
+    const busyRemove = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const panels = document.querySelectorAll('.panel')
+        const host = panels[panels.length - 1].querySelector('.panel-chart')
+        const mark = host.__benchChart.marks()[0]
+        const fields = document.querySelectorAll('#entry-fields input')
+        fields[0].value = '9.5'
+        fields[1].value = '11.5'
+        document.getElementById('entry').requestSubmit()
+        host.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: mark.x,
+          clientY: mark.y,
+          button: 2,
+        }))
+        const item = document.querySelector('.point-menu-item[data-action="remove"]')
+        const opened = Boolean(item)
+        if (item) item.click()
+        return JSON.stringify({ opened, status: document.getElementById('entry-status').textContent })
+      })()`),
+    )
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Saved|^Point /.test(state.status || '')) break
+      await sleep(100)
+    }
+    const marksAfterBusy = await totalMarks()
+    // The log is the proof, not the count: the tab was one point behind when it was opened, so the
+    // save brings the drawing even and the totals do not move. What must be true is that no removal
+    // was appended on top of it.
+    const afterBusy = JSON.parse(
+      (await readFile(join(tabProject, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n').at(-1),
+    )
+    console.log(
+      '[bench] remove-while-busy ' +
+        JSON.stringify({
+          opened: busyRemove.opened,
+          status: busyRemove.status,
+          marks: { before: marksBeforeBusy, after: marksAfterBusy },
+          last: afterBusy.type,
+        }),
+    )
+    if (!busyRemove.opened) throw new Error('the menu did not open during the write')
+    if (!/Still saving/.test(busyRemove.status)) {
+      throw new Error('Remove during a write said nothing: ' + JSON.stringify(busyRemove.status))
+    }
+    if (afterBusy.type !== 'point_recorded') {
+      throw new Error('the removal ran while a write was in flight: ' + afterBusy.type)
+    }
+
+    // A point removed here leaves its undo in the bar; a tab built from the dialog is a different
+    // drawing, so the bar must stop offering it.
+    const busyTarget = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const panels = document.querySelectorAll('.panel')
+        const host = panels[panels.length - 1].querySelector('.panel-chart')
+        const mark = host.__benchChart.marks()[1] || host.__benchChart.marks()[0]
+        host.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: mark.x,
+          clientY: mark.y,
+          button: 2,
+        }))
+        const item = document.querySelector('.point-menu-item[data-action="remove"]')
+        if (item) item.click()
+        return JSON.stringify({ id: mark.id })
+      })()`),
+    )
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Removed/.test(state.status || '')) break
+      await sleep(100)
+    }
+    await window.webContents.executeJavaScript("document.getElementById('new-tab').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      const ready = await window.webContents.executeJavaScript(
+        "document.getElementById('tab-dialog').open && !!document.querySelector('#tab-panel option[value=\"plot\"]')",
+      )
+      if (ready) break
+      await sleep(100)
+    }
+    await window.webContents.executeJavaScript(`(() => {
+      const name = document.getElementById('tab-name')
+      name.value = 'second look'
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+      const panel = document.getElementById('tab-panel')
+      panel.value = 'plot'
+      panel.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(150)
+    await window.webContents.executeJavaScript("document.getElementById('tab-create').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^(Created|Replaced) tab/.test(state.status || '')) break
+      await sleep(100)
+    }
+    await sleep(300)
+    const undoAfterNewTab = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const button = document.getElementById('entry-undo')
+        return JSON.stringify({
+          title: document.getElementById('view-title').textContent,
+          label: button.textContent,
+          disabled: button.disabled,
+        })
+      })()`),
+    )
+    const newTabState = JSON.parse(await entryState())
+    console.log(
+      '[bench] new-tab-history ' + JSON.stringify({ removed: busyTarget.id, status: newTabState.status, ...undoAfterNewTab }),
+    )
+    if (!/^(Created|Replaced) the tab/.test(newTabState.status || '')) {
+      throw new Error('the plain tab was not created: ' + newTabState.status)
+    }
+    if (undoAfterNewTab.title !== 'second look') {
+      throw new Error('creating a tab did not open it: ' + undoAfterNewTab.title)
+    }
+    if (!undoAfterNewTab.disabled) {
+      throw new Error('the bar still offers the old tab\u2019s undo: ' + JSON.stringify(undoAfterNewTab))
+    }
 
     // A project created from the window, with fields of its own choosing. The shape is declared at
     // init and every later point inherits it, so the frame shows the bar offering those fields and

@@ -4,6 +4,7 @@ import { datasetOption, status as copyStatus } from './copy.js'
 import { renderTabs } from './rail.js'
 import { renderView } from './panels.js'
 import { setStatus, focusFirstField } from './entry.js'
+import { resetTabHistory } from './history.js'
 
 /** Put the project's datasets in the select, and the catalog in the panel select once it arrives. */
 export function fillTabDialog() {
@@ -147,7 +148,8 @@ export async function createTab(event) {
     state.view = opened.view
     state.correction = null
     state.selection = null
-    state.lastPoint = null
+    // The new tab is a different drawing: the history of the one it replaced goes with it.
+    resetTabHistory()
     state.entryKey = null
     state.timing = null
     ui.tabDialog.close()

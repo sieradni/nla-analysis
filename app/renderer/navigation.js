@@ -12,5 +12,6 @@ export const actions = {
   openProjectDialog: null,
   renderEntry: null,
   selectPoint: null,
+  pointAction: null,
   setStatus: null,
 }

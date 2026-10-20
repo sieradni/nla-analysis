@@ -40,6 +40,7 @@ const APP_FILES = [
   join('renderer', 'rail.js'),
   join('renderer', 'panels.js'),
   join('renderer', 'entry.js'),
+  join('renderer', 'history.js'),
   join('renderer', 'tabs.js'),
   join('renderer', 'projects.js'),
   join('renderer', 'import.js'),

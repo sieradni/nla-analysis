@@ -103,6 +103,14 @@ export interface PointRetraction {
   active: number
 }
 
+export interface PointRestoration {
+  event: BenchEvent
+  dataset: string
+  /** The retraction this reversed: the act an undo undid. */
+  retraction: string
+  active: number
+}
+
 export interface AnalysisRequest {
   recipe: string
   params: Record<string, unknown>
@@ -584,6 +592,63 @@ export class Workspace {
     })
     await this.append([event])
     return { event, dataset: found.dataset, active: activePoints(this.current, found.dataset).length }
+  }
+
+  /**
+   * Undo a removal: the same record comes back, not a copy of its values.
+   *
+   * The event names the retraction it reverses, so the restore is checkable against the history
+   * rather than trusted: it may only reverse the retraction that is currently in force. A point that
+   * is already active is refused for the same reason a second retraction is — the event would record
+   * an act that changed nothing.
+   *
+   * `retraction` says *which* removal to reverse. A caller that remembers the act it is undoing
+   * passes it, so undo cannot quietly reverse a later removal that someone else recorded; the CLI
+   * omits it and means "the one in force", which is the only removal a person naming a point can
+   * mean.
+   */
+  async restorePoint(id: string, retraction?: string): Promise<PointRestoration> {
+    await this.freshen()
+    const found = this.findPoint(id)
+    if (!found) throw new BenchError('missing', `no point with id "${id}"`)
+    if (found.point.status !== 'retracted') {
+      throw new BenchError('invalid', `point "${id}" is not retracted`, {
+        hint: 'nothing to restore; it is already in the data',
+      })
+    }
+    // The retraction in force is the last one the log records. The fold agrees with this choice and
+    // refuses a restore that names any other, so the two cannot drift apart.
+    const inForce = this.events.findLast(
+      (event): event is Extract<BenchEvent, { type: 'point_retracted' }> =>
+        event.type === 'point_retracted' && event.supersedes === id,
+    )
+    // A remembered act that is no longer the one in force: the point was brought back and removed
+    // again, by this window or another writer. Reversing the newer removal under the older one's
+    // name would undo an act nobody asked to undo, so refuse and let the caller say so.
+    if (retraction !== undefined && (inForce === undefined || inForce.id !== retraction)) {
+      throw new BenchError('invalid', 'that removal is no longer the one in force', {
+        hint: 'the point was removed again after that, so there is nothing left to undo',
+      })
+    }
+    if (inForce === undefined) {
+      throw new BenchError('invariant', `point "${id}" is retracted but no retraction names it`, {
+        hint: 'the log was written by something other than bench; `bench check` reports the rest',
+      })
+    }
+    const event = makeEvent('point_restored', this.handle.session, {
+      dataset: found.dataset,
+      restores: inForce.id,
+      // A restore belongs to the version that is current now, exactly as a retraction does: an older
+      // version keeps reading as it did.
+      version: this.currentVersion(found.dataset),
+    })
+    await this.append([event])
+    return {
+      event,
+      dataset: found.dataset,
+      retraction: inForce.id,
+      active: activePoints(this.current, found.dataset).length,
+    }
   }
 
   async recordDecision(text: string, tags?: string[]): Promise<BenchEvent> {

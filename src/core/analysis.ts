@@ -195,6 +195,11 @@ function changesSince(state: ProjectState, datasetId: string, since: string): Ru
     if (after(point.recordedAt)) {
       if (point.status === 'active') addedSince += 1
       else retractedSince += 1
+    } else if (point.status === 'active' && after(point.restoredAt)) {
+      // It left and came back. The run cannot be shown to have included it — a restore after a
+      // retraction that also followed the run leaves the evidence as it was, and calling that a
+      // change is the safe side of this question (the remedy is the same: look again).
+      addedSince += 1
     } else if (after(point.retractedAt)) {
       retractedSince += 1
     } else if (after(point.correctedAt)) {

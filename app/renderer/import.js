@@ -3,6 +3,7 @@ import { state, ui, node, bridge, call, showFailure } from './state.js'
 import { renderTabs } from './rail.js'
 import { renderView, captureRestore } from './panels.js'
 import { renderEntry, setStatus, focusFirstField } from './entry.js'
+import { resetTabHistory } from './history.js'
 import {
   importButton,
   importPlan as importPlanText,
@@ -283,6 +284,9 @@ export async function submitImport(event) {
       state.opened = imported.view
       state.view = imported.view.view
       if (state.projectEntry && imported.view.entry) state.projectEntry.active = imported.view.entry.active
+      // An import can withdraw a row this tab still remembered a removal of. The acts belong to the
+      // data they were made against, so the history goes with it.
+      resetTabHistory()
       renderTabs()
       renderView(captureRestore())
     } else {

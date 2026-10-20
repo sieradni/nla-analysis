@@ -6,8 +6,9 @@
  * chart. Bundling exists because Electron's Node does not strip TypeScript types; `pnpm app:build`
  * runs esbuild over this entry and writes `app/core.bundle.mjs`, which is generated and ignored.
  *
- * The facade is deliberately small: read what the window shows, and six writes — create a project,
- * write a tab, append a point, correct one, retract one, rebuild a tab (ADR 0008). Anything a window
+ * The facade is deliberately small: read what the window shows, and seven writes — create a project,
+ * write a tab, append a point, correct one, remove one, bring a removed one back, rebuild a tab
+ * (ADR 0008, ADR 0016). Anything a window
  * wants that is not here is a core capability that does not exist yet, and it belongs in the core
  * rather than reimplemented in the shell.
  *
@@ -232,15 +233,43 @@ export async function createProject(parentDir: string, name: string, shape?: unk
 export interface RetractedPoint {
   id: string
   dataset: string
+  /** The retraction event this call wrote — the act an undo has to name to reverse *this* removal. */
+  retraction: string
   active: number
 }
 
-/** Undo. A retraction event in the log, not a deletion: the point and its retraction both remain. */
+/** Remove. A retraction event in the log, not a deletion: the point and its retraction both remain. */
 export async function retractPoint(dir: string, id: string, reason?: string): Promise<RetractedPoint> {
   const workspace = await workspaceFor(dir)
   const retracted = await workspace.retractPoint(id, reason)
   await workspace.writeStateBrief()
-  return { id, dataset: retracted.dataset, active: retracted.active }
+  return { id, dataset: retracted.dataset, retraction: retracted.event.id, active: retracted.active }
+}
+
+export interface RestoredPoint {
+  id: string
+  dataset: string
+  /** The retraction this reversed, which is what the undo undid. */
+  retraction: string
+  active: number
+}
+
+/**
+ * Undo of a removal. The same record returns: same id, values, observation time and version.
+ *
+ * `retraction` is the removal being undone, as returned by `retractPoint`. A window that remembers
+ * the act it is undoing passes it; omitting it means the removal in force.
+ */
+export async function restorePoint(dir: string, id: string, retraction?: string): Promise<RestoredPoint> {
+  const workspace = await workspaceFor(dir)
+  const restored = await workspace.restorePoint(id, retraction)
+  await workspace.writeStateBrief()
+  return {
+    id,
+    dataset: restored.dataset,
+    retraction: restored.retraction,
+    active: restored.active,
+  }
 }
 
 export async function importPreview(dir: string, file: string): Promise<ImportPreview> {

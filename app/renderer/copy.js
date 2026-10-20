@@ -75,6 +75,41 @@ function fieldSpec(panel, name) {
   return { label: spec.label || name, unit: spec.unit || '' }
 }
 
+/**
+ * The line **Copy details** puts on the clipboard: what this point measured, when, and — last,
+ * because the person reading the window never needs it — the record's id, which is the one thing
+ * another session needs to find the same point again.
+ *
+ * The values keep the order the shape declares them in, so a copied line reads the same way twice.
+ * The observation time is written once: a designated time field is left out of the values and said
+ * as "observed", the way the hover says it.
+ */
+export function copiedDetails(point) {
+  if (!point) return ''
+  var values = point.values || {}
+  var fields = point.fields || []
+  var names =
+    fields.length > 0
+      ? fields.map(function (field) {
+          return field.name
+        })
+      : Object.keys(values)
+  var parts = []
+  names.forEach(function (name) {
+    if (name === point.timeField) return
+    var value = values[name]
+    if (value === undefined || value === null || value === '') return
+    var field = fields.find(function (candidate) {
+      return candidate.name === name
+    })
+    var shown = typeof value === 'number' ? formatValue(value) : String(value)
+    parts.push(name + ' ' + shown + (field && field.unit ? ' ' + field.unit : ''))
+  })
+  if (point.tObserved) parts.push('observed ' + formatInstant(point.tObserved))
+  parts.push('record ' + point.id)
+  return parts.join(' · ')
+}
+
 /** `x 6.5 · y 16.4`: the values of one record, in the panel's own words. */
 export function describeValues(values, panel) {
   if (!values) return ''
@@ -315,12 +350,29 @@ export function importButton(planned) {
   return planned ? 'Import ' + plural(planned.rows, 'row') : 'Import'
 }
 
+/**
+ * A point's menu. Three verbs, in the order a person needs them: take the details away, change the
+ * measurement, or take the measurement out. The ellipsis on Correct is the only one in the window,
+ * because it is the only item that opens something else before it acts.
+ */
+export var pointMenu = {
+  label: 'Actions for this point',
+  copy: 'Copy details',
+  correct: 'Correct…',
+  remove: 'Remove',
+}
+
 export var labels = {
   importTitle: 'Import a file',
   newProject: 'New project',
   openProject: 'Open project',
   newTab: 'New tab',
-  undo: 'Undo last point',
+  // One history, so one undo: the label names the act it would reverse. A second button that
+  // quietly undid something else is what this replaced.
+  undo: 'Undo',
+  undoPoint: 'Undo added point',
+  undoRemoval: 'Undo removal',
+  redoRemoval: 'Redo removal',
   importFile: 'Import file',
   refresh: 'Refresh',
   saveCorrection: 'Save correction',
@@ -372,6 +424,16 @@ export var status = {
   removed: function (change) {
     return 'Removed · ' + plural(change.active, 'point') + ' left in this tab'
   },
+  restored: function (change) {
+    return 'Restored · ' + plural(change.active, 'point') + ' in this tab'
+  },
+  copied: function () {
+    return 'Copied · paste the details into a conversation'
+  },
+  /** An action that arrived while a write was in flight: nothing happened, and it says why. */
+  stillSaving: function () {
+    return 'Still saving — try again in a moment.'
+  },
   editing: function (change) {
     return 'Editing ' + describeValues(change.values, change.panel) + ' · Escape cancels'
   },
@@ -382,10 +444,18 @@ export var status = {
     if (change.stalePanels > 0) text += ' · an analysis panel will need to run again'
     return text
   },
-  undoTitle: function (lastPoint) {
-    return lastPoint
-      ? 'Undo the last point added here (Ctrl+Z in an empty field)'
-      : 'Nothing to undo: no point has been added from this window'
+  /** What the one undo button will reverse, so it never asks a person to press and find out. */
+  undoLabel: function (next) {
+    if (!next) return labels.undo
+    return next.kind === 'removal' ? labels.undoRemoval : labels.undoPoint
+  },
+  undoTitle: function (next) {
+    if (!next) return 'Nothing to undo yet (Ctrl+Z in an empty field)'
+    return (
+      'Undo ' +
+      (next.kind === 'removal' ? 'the last point removed here' : 'the last point added here') +
+      ' (Ctrl+Z in an empty field)'
+    )
   },
   readoutTitle: function () {
     return 'Points in this tab. The millisecond figure is Enter to painted frame.'
@@ -492,13 +562,34 @@ function countPart(count, word) {
 }
 
 /**
- * A refusal, in words a person can act on. The core's message is written for an agent and can name
- * the shape it was checked against; the shape is agent vocabulary, so it leaves the screen.
+ * A refusal, in words a person can act on.
+ *
+ * The core writes for an agent: it names the record, dataset or shape it checked, and sometimes the
+ * command that would list them. Those handles are how the log is addressed, not what the person was
+ * doing, so the sentence keeps the consequence and drops them (ADR 0015). The phrasings the core
+ * actually uses come first, so the result reads as English; the sweeps under them are the net for a
+ * message this file has not seen yet.
  */
 export function refusal(message) {
   var text = String(message || 'That point was not saved.')
+    // The four acts the window can be refused, said as consequences.
+    .replace(/\bno point with id "?[^"\s]+"?/gi, 'that point is no longer in the project')
+    .replace(/\bpoint "?[^"\s]+?"? is already retracted/gi, 'that point has already been removed')
+    .replace(/\bpoint "?[^"\s]+?"? is not retracted/gi, 'that point is still in the data')
+    .replace(/\bdataset "?[^"\s]+?"? has no active points/gi, 'that dataset has no points yet')
+    .replace(/\bno dataset "?[^"\s]+"?/gi, 'that dataset is not in the project')
+    // Any other handle: keep the sentence, drop the name it was checked against.
+    .replace(/\b(point|dataset|shape|removal)\s+"[^"]*"/gi, 'that $1')
     .replace(/\s+(?:for|in) shape\s+[A-Za-z0-9_.-]+/g, '')
+    // The net: an id this file has not seen in a phrasing it knows, and the command a hint would
+    // offer — the window offers buttons, so a command is never the next step here.
+    .replace(/;[^.;]*`[^`]*`[^.;]*/g, '')
+    .replace(/\b[0-9A-HJKMNP-TV-Z]{26}\b/g, '')
+    .replace(/\bversion \d+\b/gi, '')
+    .replace(/`[^`]*`/g, '')
+    .replace(/"\s*"/g, '')
     .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
     .trim()
   if (text === '') return 'That point was not saved.'
   return text.charAt(0).toUpperCase() + text.slice(1)

@@ -573,6 +573,28 @@ describe('bench CLI, as executed', () => {
     expect(points.data).toHaveLength(2)
     expect(points.data.find((point) => point.corrections === 1)?.values.y).toBe(2.9)
 
+    // Remove and bring back through the CLI, so the two doors record the same event and the same
+    // record comes back: the window's undo is this call, not a second implementation of it.
+    const retracted = await bench(['--project', project, 'retract', created.data.id, '--reason', 'typo'])
+    expect(retracted.code).toBe(0)
+    expect(retracted.stdout).toContain('1 active')
+
+    const restored = await bench(['--project', project, 'restore', created.data.id, '--json'])
+    expect(restored.code).toBe(0)
+    const back = JSON.parse(restored.stdout) as {
+      ok: boolean
+      data: { restored: string; reverses: string; active: number }
+    }
+    expect(back.ok).toBe(true)
+    expect(back.data.restored).toBe(created.data.id)
+    expect(back.data.active).toBe(2)
+    expect((await bench(['--project', project, 'list', '--json'])).stdout).toContain(created.data.id)
+
+    // A second undo would record an act that changed nothing.
+    const twice = await bench(['--project', project, 'restore', created.data.id])
+    expect(twice.code).toBe(1)
+    expect(twice.stderr).toContain('is not retracted')
+
     const checked = await bench(['--project', project, 'check'])
     expect(checked.code).toBe(0)
     expect(checked.stdout).toContain('0 error(s)')

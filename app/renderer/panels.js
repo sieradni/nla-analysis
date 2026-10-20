@@ -140,6 +140,9 @@ export function renderView(restore) {
   renderMeta()
   renderNotice()
   state.handles = []
+  // A recipe panel is kept as it was drawn, and `kept` says which ones: its marks may include a
+  // point that is no longer in the project, so the drawing shows them but does not offer them.
+  var kept = opened.kept || []
 
   view.panels.forEach(function (panel, index) {
     var status = (opened.statuses[index] || { state: 'unchecked' })
@@ -179,8 +182,20 @@ export function renderView(restore) {
       zoomLabel: zoom,
       tooltip: ui.tooltip,
       viewBox: restore && restore.viewBoxes ? restore.viewBoxes[index] : null,
+      pointsAreCurrent: !kept.some(function (entry) {
+        return entry.index === index
+      }),
+      // A menu dismissed by this panel being replaced asks for the panel that replaced it.
+      refocus: function () {
+        state.refocusPanel = index
+      },
       onSelect: function (id) {
         actions.selectPoint(id, index)
+      },
+      // The menu names an action and a record; `entry.js` owns what each one does, because a write
+      // belongs to the bar that owns writes, not to the drawing that asked for it.
+      onPointAction: function (action, id) {
+        if (actions.pointAction) actions.pointAction(action, id, index)
       },
     })
     state.handles[index] = handle
@@ -206,7 +221,11 @@ export function renderView(restore) {
   })
 
   var hosts = ui.grid.querySelectorAll('.panel-chart')
-  if (focusedPanel >= 0 && hosts[focusedPanel]) hosts[focusedPanel].focus()
+  // The panel that had the keyboard, or — when a menu owned it and the repaint closed it — the panel
+  // the menu was opened from.
+  var target = state.refocusPanel !== null ? state.refocusPanel : focusedPanel
+  state.refocusPanel = null
+  if (target >= 0 && hosts[target]) hosts[target].focus()
   ui.grid.scrollTop = scrollTop
   actions.renderEntry()
   watchOpenTab()

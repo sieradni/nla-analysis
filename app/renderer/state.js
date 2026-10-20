@@ -4,6 +4,8 @@
  * Every renderer module reads the same objects from here. Nothing in this file draws; it only holds
  * what the window knows and the one guarded call into `window.bench`.
  */
+import { refusal } from './copy.js'
+
 export const bridge = window.bench
 
 export const state = {
@@ -17,9 +19,9 @@ export const state = {
   // default turns the rail into a graveyard; hiding them by default would hide a real project
   // someone moved. So: hide, and say how many are hidden.
   showMissing: false,
-  // Entry state. `lastPoint` is this window's own append, which is the only thing Undo may
-  // retract: a retraction of someone else's record is a different act, done on purpose.
-  lastPoint: null,
+  // Which panel should have the keyboard after a repaint, when the element that had it was replaced
+  // (a menu closed by a redraw). `null` means the drawing's own focus restoration decides.
+  refocusPanel: null,
   busy: false,
   entryKey: null,
   timing: null,
@@ -138,6 +140,9 @@ export async function call(promise) {
   }
   if (!result || result.ok !== true) {
     var refusal = new Error((result && result.error && result.error.message) || 'the core refused the call')
+    // The kind, not the message, says whether an act can still be taken: a stale undo is refused for
+    // good, a busy file is not. Matching on prose would break the moment a sentence changed.
+    refusal.kind = (result && result.error && result.error.kind) || null
     refusal.hint = (result && result.error && result.error.hint) || null
     refusal.problems = (result && result.error && result.error.problems) || []
     throw refusal
@@ -158,12 +163,14 @@ export function showFailure(title, error) {
   ui.entry.hidden = true
   ui.empty.textContent = ''
   ui.empty.appendChild(node('h2', null, title))
-  ui.empty.appendChild(node('p', null, String((error && error.message) || error)))
+  // The core writes for an agent; a screen a person is stranded on is the worst place to show its
+  // record ids. The filter is the copy owner's, not a second implementation of it.
+  ui.empty.appendChild(node('p', null, refusal(String((error && error.message) || error))))
   var hint = error && error.hint
-  if (hint) ui.empty.appendChild(node('p', null, hint))
+  if (hint) ui.empty.appendChild(node('p', null, refusal(hint)))
   var problems = (error && error.problems) || []
   for (var index = 0; index < problems.length; index += 1) {
-    ui.empty.appendChild(node('p', null, problems[index]))
+    ui.empty.appendChild(node('p', null, refusal(problems[index])))
   }
 }
 

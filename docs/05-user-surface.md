@@ -3,9 +3,10 @@
 Status: **decided 2026-10-20** from the user's review of the desktop window. **Built 2026-10-20:**
 U1 (hover), U3 (statuses and the correction strip), U10 (the import sheet's words), U12 (the state
 words, the spelled-out degrees of freedom and the verdict that explains itself), U14 (a plain drawing
-and an evidence line built from numbers) and U22 (the empty first panel). U13, U17, U18 and U21 are
-partly built — the number formats, the rail labels, the deduplicated facts and the **Refresh** action
-— and the roadmap row for each names what is left. Everything a person reads is composed by one
+and an evidence line built from numbers) and U22 (the empty first panel), plus **U2, U5 and U6** — the
+point menu, the restore event and removal as one action with undo. U4 is partly built (a removal, its
+undo and its redo); U13, U17, U18 and U21 are partly built — the number formats, the rail labels, the
+deduplicated facts and the **Refresh** action — and the roadmap row for each names what is left. Everything a person reads is composed by one
 module, `app/renderer/copy.js`; the rest of the list is still open and the roadmap row says so. The
 work list is [03-roadmap.md](03-roadmap.md) §6, keyed by the same `U` numbers. The principle is
 [ADR 0015](adr/0015-user-surface.md).
@@ -71,6 +72,12 @@ instant under the value.
 **Seen:** the only way to identify a point for a conversation was to read the ULID out of the
 tooltip; the only action on a mark was selection-for-correction.
 
+**Built 2026-10-20:** right-click, or Shift+F10 on a selected mark, opens the menu; the keyboard
+lands on the first item; Escape closes it and returns focus to the chart; a repaint dismisses it.
+**Copy details** writes one line — `x 3 · y 8.09 °C · observed 19 Oct 2026, 06:00 · record 01M58…` —
+with the id last and nowhere on screen. Evidence: `app/renderer/chart.js`,
+`copy.copiedDetails`, `tests/window-copy.test.mjs`, `pnpm app:capture`, `app-point-menu.png`.
+
 **Decision:** right-clicking a mark (and Shift+F10 / the context-menu key when it has keyboard focus)
 opens a small menu: **Copy details**, **Correct…**, **Remove**. *Copy details* puts a readable line on
 the clipboard — values, units, observation time, and the record id last, for the agent — because the
@@ -134,6 +141,12 @@ over-recording and would break the history the person just undid.
 record is removed again; `bench check` stays green; the log has one restore event per undo, not a
 new point.
 
+**Built 2026-10-20:** the event carries `restores` (the retraction, not the point) and the version it
+happened in; the fold applies it only to the retraction in force, so a stale undo cannot re-open a
+record that was removed again. [ADR 0016](adr/0016-point-restore.md); evidence in
+`tests/binder.test.ts`, `tests/workspace.test.ts`, `tests/shell.test.ts`, `tests/cli.test.ts`, and
+the capture's remove → undo → redo.
+
 ### U6. Removing a point is one action, with no ceremony
 
 **Seen:** the only removal is the entry bar's undo, which retracts silently but cannot reach an older
@@ -147,6 +160,11 @@ does not ask the person to justify a typo. An agent or the CLI may add a reason;
 
 **Done when:** removing a selected point takes one action; the status offers undo; the docked entry
 bar is not the only path; a reason is optional everywhere and never requested by the window.
+
+**Built 2026-10-20:** one click in the menu, no prompt; the status reads
+`Removed · 14 points left in this tab` and the bar's single undo reads **Undo removal**, naming the
+act rather than asking a person to press and find out. The capture asserts the recorded retraction
+carries no reason.
 
 ### U7. Deleting a tab is recoverable
 

@@ -158,14 +158,15 @@ app/renderer/       the viewport, split by concern. app.js is wiring and the ope
                     only; state.js owns shared state and the core call; copy.js owns every word
                     a person reads (ADR 0015) and no other module composes a sentence;
                     rail.js owns projects/tabs/folder; panels.js owns the panel mount and statuses;
-                    entry.js owns typing, correction and undo; tabs.js owns the tab sheet;
-                    projects.js owns the project sheet; import.js owns the import sheet;
+                    entry.js owns typing, correction and the bar's undo actions; history.js owns
+                    the tab's undo/redo stacks and what each would reverse; tabs.js owns the tab
+                    sheet; projects.js owns the project sheet; import.js owns the import sheet;
                     navigation.js holds the few shell actions that cross a module.
                     Remaining window work lands here: resizable/collapsible rail in rail.js, the
-                    point menu and readable tooltip in chart.js with its actions in entry.js, undo/redo
-                    in entry.js, tab and project management in tabs.js/projects.js, entry extras in
-                    entry.js, versions panel beside panels.js, and preferences in state.js + the main
-                    process ($BENCH_HOME/ui.json).
+                    point menu and readable tooltip in chart.js with its actions in entry.js, the
+                    rest of undo/redo in history.js, tab and project management in tabs.js/projects.js,
+                    entry extras in entry.js, versions panel beside panels.js, and preferences in
+                    state.js + the main process ($BENCH_HOME/ui.json).
 src/core/registry.ts
                     which projects exist on this machine ($BENCH_HOME/projects.json, outside every
                     project). App state, disposable: losing it loses recency, not data.

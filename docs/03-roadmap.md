@@ -32,11 +32,11 @@ missing, and what would closing it look like".
   [05-user-surface.md](05-user-surface.md)) and **partly built**. The hover, the entry-bar statuses,
   a panel's facts and state word, and the stale notice now speak plain words from one owner,
   `app/renderer/copy.js`, and the tab strip no longer names a dataset, shape or version. The point
-  menu, removal, redo, tab management, the versions panel, the import wording, display labels and
-  the resizable rail are not built. §6 is the list.
-- **Not built:** the rows below — point retraction from the window, tab/project management, the
-  versions panel, entry extras, the shape flow, a resizable rail, the user-surface pass, and the
-  delivery items.
+  menu, removal and its restore are now built too: a point can be removed from its own menu and
+  brought back as the same record. Tab management, the versions panel, the import wording, display
+  labels, the rest of the undo history and the resizable rail are not built. §6 is the list.
+- **Not built:** the rows below — tab/project management, the versions panel, entry extras, the
+  shape flow, a resizable rail, the rest of the user-surface pass, and the delivery items.
 
 ## Verified on this tree (2026-10-19)
 
@@ -68,6 +68,14 @@ which layer composes it, not how a mark is drawn or painted; the budgets are sti
 numbers above have not been re-measured since, and a later session should run `pnpm app:measure`
 before quoting them for a release.
 
+**Measured again 2026-10-20, with the point menu in the tree: the gate fails, and the machine is why.**
+`pnpm app:measure` reported a **44.9 ms** median entry (record 25.5 · rebuild 0.3 · paint 19.5) — within
+the 100 ms budget — and a **79.9 ms** full redraw, over the 50 ms re-render budget. The same command on
+the tree *without* this change, minutes later, reported 42.7 ms and 89.8 ms: the miss is present before
+and after the menu, so it is not this slice. The CPU was running at 2.47 of 4.0 GHz and the GPU logged
+`command_buffer_proxy_impl` errors during both runs. The gate must be re-run on an idle machine before
+a release; the figures in the table remain the last run that passed.
+
 ## How this stays current
 
 A plan document cannot prove itself current. These are the rules that keep it honest, and the honest
@@ -94,10 +102,10 @@ limit of each:
 | hover tooltip: values only | chart hover | **done 2026-10-20** | `copy.tooltipLines` composes the readout: values with the axis label and unit, the time only when it is not an axis, and no id, dataset, shape, recipe or version. `app-interaction.png` reads `x 3 · y 8.09`; `tests/window-copy.test.mjs`, and `pnpm app:capture` refuses log vocabulary in the hover |
 | wheel zoom, keyboard pan, hover ring | chart | done | `app-interaction.png` |
 | add a point from the entry bar | entry bar | done | `app-entry.png`; measured 22.2–25.8 ms median (2026-10-19) |
-| undo the last point (`Ctrl+Z` in an empty bar) | entry bar | done | `app-undo.png`; redo, correction undo and removal undo are U4/U5 |
+| undo the last point (`Ctrl+Z` in an empty bar) | entry bar | done | `app-undo.png`; the same button now names whichever act is later — the last added point or the last removal (U5/U6); correction undo and tab undo remain U4 |
 | correct a point by clicking its mark | chart selection | done | `app-corrected.png` |
 | import CSV/TSV/JSONL with a mapping sheet and a version diff | `Import…` | done | `app-import.png`, `app-version-diff.png` |
-| **remove any point, from its menu, with undo** | — | missing | CLI `bench retract` only; the window can undo only the last point. U6 replaces the reason prompt with one action |
+| **remove any point, from its menu, with undo** | point menu, `app/renderer/entry.js` | **done 2026-10-20** | right-click or Shift+F10 opens **Copy details / Correct… / Remove**; Remove is one click with no reason prompt, the bar's single undo is labelled **Undo removal**, and undo writes `point_restored` naming the retraction it reverses ([ADR 0016](adr/0016-point-restore.md)) — the window passes that id back, so a later removal is never reversed under an older act's name. Evidence: `tests/binder.test.ts` (a restore event), `tests/workspace.test.ts` (a named removal, and a stale one refused), `tests/shell.test.ts` "brings a removed point back as the same record", `tests/cli.test.ts` (retract → restore → a second restore refused), `pnpm app:capture` (right-click, clipboard, remove with focus back on the chart, undo, redo, keyboard, a menu closed by a repaint, a kept recipe panel that offers no menu, a plain refusal frame), `app-point-menu.png`, `app-point-menu-removed.png`. U2, U5, U6 |
 | browse dataset versions and diffs | import sheet | partial | `bench dataset list\versions\diff` exists; no panel lists versions or shows a diff outside an import |
 | rename / delete / duplicate a tab | — | missing | no `bench view rm` either. U7 moves a deleted tab to `views/.trash/` and offers Undo, so the question is not lost |
 | rename a project, or forget it from recents | — | missing | registry has no `forget`; deletion is not offered anywhere and should not be |
@@ -137,7 +145,7 @@ row, and that is said in the row.
 | 0 | **Land the tree; close the review gate** | S | **done 2026-10-20** — committed in `cb681b2` plus the docs commit and `a3888b4`; `pnpm verify` is green on the tree (264 tests). It landed as **one** code commit, not slices: `src/core/chart.ts`, the panels moving out of `views.ts`, `app/core.entry.ts` and the renderer share a compile boundary, so a split leaves every intermediate commit failing `tsc` (probe: the new chart alone at the old tree → `app/core.entry.ts(475)` type errors). The review gate was closed **by direction** on 2026-10-20 — 25 rows, no per-frame verdicts, quoted in the log | — |
 | 1 | **Canvas renderer** | M | **done 2026-10-19** — a rescale measures 35.1–47.4 ms at 10k (was 147–174), `pnpm app:measure` exits non-zero over 50 ms and when no full-redraw sample arrived or a submit was programmatic, and `pnpm app:capture` checks the canvas's coverage and painted pixels | — |
 | 2 | **Resizable rail** | S | drag handle plus `ArrowLeft`/`ArrowRight` when focused; width in `$BENCH_HOME/ui.json`, restored on launch; no reflow jitter; three-scaling screenshot | U19 |
-| 3 | **Point actions** | M | right-click **Copy details / Correct… / Remove**; removal is one action with undo, not a reason prompt; a retracted point stays visible as retracted until it is restored | U2, U5, U6 |
+| 3 | **Point actions** | M | **done 2026-10-20** — right-click and Shift+F10 (on the selected mark) open **Copy details / Correct… / Remove**; Copy writes one line, values and time first and the record id last; Remove is one action with no reason prompt and one undo button in the bar, labelled with the act it reverses; undo writes `point_restored`, so the same id, values, time and version come back, and redo removes it again. A retracted point leaves the plot panels, the count and every action that names it; a recipe panel that cannot rerun keeps the drawing it was saved with, says it is out of date, and stops offering its marks. The earlier wording here said a removed point should stay *visible* as retracted, which contradicts U6's "the mark disappears"; U6 wins, and the log keeps the record. Evidence: `app-point-menu.png`, the capture's menu/clipboard/remove/undo/redo/keyboard checks, `tests/window-copy.test.mjs`, `tests/binder.test.ts`, `tests/workspace.test.ts`, `tests/shell.test.ts`, `tests/cli.test.ts` | U2, U5, U6 |
 | 4 | **Tab and project management** | M | `bench view rm <name>`, a rail action for rename/delete with Undo, and `bench projects --forget <path>` dropping recency only | U7 |
 | 5 | **Dataset versions panel** | M | a tab or sheet listing every version with rows and `+n −n ~n`, a diff between any two, and which panels are pinned to which version; reads `Workspace`, runs nothing | — |
 | 6 | **Entry extras** | M | paste a TSV block → preview against the shape → commit; auto-advance after Enter; stream mode; requirements §6's targets still hold | `add --stdin` |
@@ -236,24 +244,25 @@ None of them is waiting on the user, and none should be reopened without changin
 
 The details, the wording the user used, and the acceptance test for each row are in
 [05-user-surface.md](05-user-surface.md). This table is the order of work. Rows U1, U3, U10, U12,
-U14 and U22 landed on 2026-10-20 through `app/renderer/copy.js`; U13, U17, U18 and U21 are partly
-built; the rest is not started, and nothing here is waiting on a decision.
+U14 and U22 landed on 2026-10-20 through `app/renderer/copy.js`; **U2, U5 and U6** landed with the
+point menu and the restore event; U4 is partly built (remove → undo → redo); U13, U17, U18 and U21
+are partly built; the rest is not started, and nothing here is waiting on a decision.
 
 ### 6.1 A point, and what hovering one says
 
 | id | slice | size | done means |
 |---|---|---|---|
 | **U1** | Tooltip is a value readout | S | **done 2026-10-20** — values with labels and units, time only when it is not an axis, no id/dataset/shape/recipe/version. Evidence: `copy.tooltipLines`, `tests/window-copy.test.mjs`, the capture's `assertPlainSurface('hover')`, `app-interaction.png` (`x 3 · y 8.09`) |
-| **U2** | Point menu: Copy details / Correct… / Remove | S–M | right-click and Shift+F10 open it; copied text identifies the point without the person reading an id; keyboard reachable; Escape returns focus |
+| **U2** | Point menu: Copy details / Correct… / Remove | S–M | **done 2026-10-20** — right-click a mark, or Shift+F10 with the chart focused on a selected mark, opens a `role="menu"` with the three actions; the keyboard lands on **Copy details**; Escape closes it and returns focus to the chart; choosing an item closes it; a repaint dismisses it. Copied text is one line — values with units, `observed …`, then `record <id>` last — written to the system clipboard through the shell. Evidence: `app/renderer/chart.js`, `entry.js` `pointAction`/`copyPointDetails`, `copy.copiedDetails`, `tests/window-copy.test.mjs` (the line, and that the id appears once and last), `pnpm app:capture` (menu, clipboard contents, Escape/focus, edge-safe geometry), `app-point-menu.png` |
 | **U3** | Correction strip and statuses in plain words | S | **done 2026-10-20** — the strip reads `Editing x 6.5 · y 16.4 · observed 19 Oct 2026, 06:00`; statuses read `Saved · 15 points in this tab`, `Corrected …`, `Removed · 14 points left in this tab`; the packaged check now records `Editing mass 1 000 · extension 5 000 …` instead of a ULID. Evidence: `copy.status.*`, `tests/window-copy.test.mjs`, the capture's `assertPlainSurface`, `docs/ui-review/app-packaged.json` |
 
 ### 6.2 Undo, redo, removal
 
 | id | slice | size | done means |
 |---|---|---|---|
-| **U4** | One undo/redo history for the tab | M | add / remove / correct / tab / import each undo and redo; `Ctrl+Z`, `Ctrl+Shift+Z`, `Ctrl+Y`; visible buttons naming the action; redo cleared by a new action; text fields keep their own undo; an import undo appends a restore version, never deletes one |
-| **U5** | `point_restored` event | M | undo of a removal restores the *same* id, values, time and version; one event per undo; `bench check` green; redo removes it again |
-| **U6** | Remove is one action, no ceremony | S | one click from the menu; status `Removed · Undo`; no reason prompt; CLI/agent may still record a reason |
+| **U4** | One undo/redo history for the tab | M | **partial 2026-10-20** — a removal, its undo and its redo are one history: `Ctrl+Z` picks the later of the window's last append and the last removal, `Ctrl+Shift+Z`/`Ctrl+Y` redo, the bar's one undo names the act it would reverse (**Undo removal** / **Undo added point**) and the status carries **Redo removal** after an undo, a new action clears the redo branch, and one reset seam (`resetTabHistory`) drops the point and both stacks together on every view change — opening another tab, another project, a watched redraw, or a tab built from the dialog — so the bar never offers an act against a point the current drawing did not show; a text field keeps its own undo. Not done: undo of a correction, tab delete, and an import's restore version. Evidence: `app/renderer/history.js` (the stacks, `nextUndo`, `resetTabHistory`), `entry.js` (`undoLastAction`/`redoLastAction` and the writes they make), `app.js`/`tabs.js`/`import.js` (the one reset seam on every view change), capture's remove → undo → redo, keyboard, tab-switch and new-tab checks |
+| **U5** | `point_restored` event | M | **done 2026-10-20** — `point_restored` carries `dataset`, `restores` (the retraction event) and `version`; it repeats no values, so the same id, values, observation time and version come back. The fold applies it only to the retraction in force, counts it in the version it happened in, and `bench check` reports a chain that does not resolve. One event per undo; `Workspace.restorePoint` refuses an active point, and a caller that names a retraction gets that act reversed or a refusal when it is no longer the one in force. Evidence: `src/core/events.ts`, `binder.ts`, `workspace.ts`, `tests/binder.test.ts`, `tests/workspace.test.ts`, `tests/shell.test.ts`, `tests/cli.test.ts`, [ADR 0016](adr/0016-point-restore.md) |
+| **U6** | Remove is one action, no ceremony | S | **done 2026-10-20** — one click in the menu; the status reads `Removed · 14 points left in this tab` and the bar's undo reads **Undo removal**; no reason is asked for and none is recorded (the capture asserts `reason === undefined`); the CLI can still pass one. Evidence: `entry.js` `removePoint`, `copy.status.removed`, capture's `removed` check |
 | **U7** | Tab delete is recoverable | S | moves to `views/.trash/<slug>-<timestamp>.json`; Undo restores the exact file and reopens the tab; no log event; trash is bounded and disposable |
 
 ### 6.3 Time, imports, confirmation

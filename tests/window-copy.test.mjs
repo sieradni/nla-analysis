@@ -166,6 +166,52 @@ describe('a panel', () => {
   })
 })
 
+describe('a point\u2019s menu', () => {
+  it('offers three verbs in a person\u2019s words', () => {
+    expect(copy.pointMenu.copy).toBe('Copy details')
+    expect(copy.pointMenu.correct).toBe('Correct\u2026')
+    expect(copy.pointMenu.remove).toBe('Remove')
+    // The menu's accessible name is a sentence about the point, not a key or an event.
+    expect(copy.pointMenu.label).toBe('Actions for this point')
+    Object.values(copy.pointMenu).forEach((label) => expectPlain(label, `menu ${label}`))
+  })
+
+  it('copies one line that identifies the point without being read as an id first', () => {
+    const detail = {
+      id: POINT_ID,
+      fields: [
+        { name: 'x', type: 'number' },
+        { name: 'y', type: 'number', unit: '°C' },
+      ],
+      values: { x: 3, y: 8.09 },
+      tObserved: '2026-10-19T06:00:00.000Z',
+      corrections: 0,
+      recipePanels: [],
+    }
+    const text = copy.copiedDetails(detail)
+    expect(text).toBe('x 3 · y 8.09 °C · observed 19 Oct 2026, 06:00 · record ' + POINT_ID)
+    // The values and the time are the sentence; the id is appended, once, so another session can
+    // find the record. Everything a person would read comes first.
+    expect(text.match(ULID)).toHaveLength(1)
+    expect(text.endsWith('record ' + POINT_ID)).toBe(true)
+    expect(text).not.toContain('main')
+    expect(text).not.toContain('point_')
+    // A nil count is not a fact worth copying, and a missing value is not a zero.
+    expect(copy.copiedDetails({ ...detail, fields: [{ name: 'y', type: 'number', unit: '°C' }], values: { y: null } })).toBe(
+      'observed 19 Oct 2026, 06:00 · record ' + POINT_ID,
+    )
+    // A designated time field is said once, as "observed", not repeated as a value.
+    const timed = copy.copiedDetails({
+      ...detail,
+      timeField: 'taken_at',
+      fields: [{ name: 'taken_at', type: 'instant' }, ...detail.fields],
+      values: { taken_at: '2026-10-19T06:00:00.000Z', x: 3, y: 8.09 },
+    })
+    expect(timed).toBe('x 3 · y 8.09 °C · observed 19 Oct 2026, 06:00 · record ' + POINT_ID)
+    expect(copy.copiedDetails(null)).toBe('')
+  })
+})
+
 describe('the entry bar', () => {
   const values = { x: 6.5, y: 16.4 }
 
@@ -174,9 +220,16 @@ describe('the entry bar', () => {
       copy.status.saved({ active: 15, warnings: ['field `temprature` is not in the shape'], reread: true }),
       copy.status.corrected({ active: 15, stalePanels: 1 }),
       copy.status.removed({ active: 14 }),
+      copy.status.restored({ active: 15 }),
+      copy.status.copied(),
+      copy.status.stillSaving(),
       copy.status.editing({ values, panel }),
       copy.status.correctionRow({ values, observed: '2026-10-19T06:00:00.000Z', corrections: 0, stalePanels: 0 }),
-      copy.status.undoTitle({ id: POINT_ID }),
+      copy.status.undoLabel({ kind: 'removal' }),
+      copy.status.undoLabel({ kind: 'point' }),
+      copy.status.undoLabel(null),
+      copy.status.undoTitle({ kind: 'removal' }),
+      copy.status.undoTitle({ kind: 'point' }),
       copy.status.undoTitle(null),
       copy.status.readoutTitle(),
       copy.status.idleHint(),
@@ -193,6 +246,10 @@ describe('the entry bar', () => {
     ]
     said.forEach((text, index) => expectPlain(text, `status ${index}: ${text}`))
     expect(copy.status.removed({ active: 14 })).toBe('Removed · 14 points left in this tab')
+    // Undo is a button beside this word, not a sentence about one; the status says what happened.
+    expect(copy.status.restored({ active: 15 })).toBe('Restored · 15 points in this tab')
+    expect(copy.status.copied()).toContain('Copied')
+    expect(copy.status.stillSaving()).toBe('Still saving — try again in a moment.')
     expect(copy.status.editing({ values, panel })).toContain('Editing x 6.5 · y 16.4')
   })
 
@@ -201,6 +258,55 @@ describe('the entry bar', () => {
       expect(label).not.toMatch(/…$/)
       expectPlain(label, `label ${label}`)
     })
+  })
+})
+
+describe('a refusal', () => {
+  // The core writes for an agent and names the record, dataset or shape it checked. Those are how
+  // the log is addressed, not what the person was doing, so they never reach the strip.
+  const core = [
+    `no point with id "${POINT_ID}"`,
+    `point "${POINT_ID}" is already retracted`,
+    `point "${POINT_ID}" is not retracted`,
+    `dataset "main" has no active points`,
+    'no dataset "main"',
+    'missing required field "y" for shape xy.v1',
+    'field "x" expects a finite number, got "seven"',
+    'that removal is no longer the one in force',
+    'no point with id "01M58Y41VF83K6TQ8XWWK9VN0S"',
+    'shape "xy.v1" is not the latest version',
+    'dataset "main" has no version 2',
+    'nothing to retract; `bench list` shows active points',
+  ]
+
+  it('says the consequence, never the handle the core used', () => {
+    core.forEach((message) => {
+      const text = copy.refusal(message)
+      expectPlain(text, `refusal: ${message}`)
+      expect(text.length, `refusal: ${message}`).toBeGreaterThan(8)
+      // No stray punctuation where a name was taken out.
+      expect(text, `refusal: ${message}`).not.toMatch(/\s{2}|\s[,.;:]|"\s*"/)
+    })
+  })
+
+  it('keeps the two refusals a person can act on', () => {
+    expect(copy.refusal(core[1])).toBe('That point has already been removed')
+    expect(copy.refusal(core[2])).toBe('That point is still in the data')
+    expect(copy.refusal(core[3])).toBe('That dataset has no points yet')
+    expect(copy.refusal(core[4])).toBe('That dataset is not in the project')
+    expect(copy.refusal('nothing to retract; `bench list` shows active points')).toBe('Nothing to retract')
+    // A field name is the person's own word, so it stays; only the shape it was checked against goes.
+    expect(copy.refusal(core[6])).toBe('Field "x" expects a finite number, got "seven"')
+    expect(copy.refusal(core[5])).toBe('Missing required field "y"')
+    expect(copy.refusal('')).toBe('That point was not saved.')
+  })
+
+  it('labels the one undo with the act it would reverse', () => {
+    expect(copy.status.undoLabel({ kind: 'removal' })).toBe('Undo removal')
+    expect(copy.status.undoLabel({ kind: 'point' })).toBe('Undo added point')
+    expect(copy.status.undoLabel(null)).toBe('Undo')
+    expect(copy.status.undoTitle({ kind: 'removal' })).toContain('removed')
+    expect(copy.status.undoTitle(null)).toContain('Nothing to undo')
   })
 })
 

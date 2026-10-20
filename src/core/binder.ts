@@ -25,6 +25,13 @@ export interface Point {
   /** When it was withdrawn. Kept so an analysis can tell what left the evidence set, and when. */
   retractedAt?: IsoTime
   retractionReason?: string
+  /** When it was brought back by a restore. Absent means it has never been restored. */
+  restoredAt?: IsoTime
+  /**
+   * The retraction currently in force — the one a restore has to reverse to take effect. Absent for
+   * an active point, so a second restore cannot re-open a record that was withdrawn again.
+   */
+  retractedBy?: string
 }
 
 /**
@@ -119,6 +126,11 @@ const byTime = (a: Point, b: Point): number => {
  */
 interface PointFold {
   points: Map<string, Point>
+  /**
+   * Retraction event id → the point it withdrew. A restore names the retraction, not the point, so
+   * the fold has to resolve that reference the same way a reader would: through the log.
+   */
+  retractions: Map<string, string>
   /** Rows and changes above this version are not part of the fold. */
   upTo: number
   /** Unknown ids and unannounced versions, when the caller is building current state. */
@@ -182,9 +194,54 @@ function applyRetracted(fold: PointFold, event: Extract<BenchEvent, { type: 'poi
     fold.problems?.push(`retraction ${event.id} targets unknown point ${event.supersedes}`)
     return
   }
-  target.status = 'retracted'
-  if (target.retractedAt === undefined || event.at > target.retractedAt) target.retractedAt = event.at
+  fold.retractions.set(event.id, event.supersedes)
+  // The log is append-only but replay need not be in timestamp order; the later act wins, and a tie
+  // goes to the one folded later, which is the later line in the file.
+  if (target.retractedAt === undefined || event.at >= target.retractedAt) {
+    target.retractedAt = event.at
+    target.retractedBy = event.id
+    if (target.restoredAt === undefined || event.at >= target.restoredAt) target.status = 'retracted'
+  }
   if (event.reason !== undefined) target.retractionReason = event.reason
+}
+
+/**
+ * Bring a withdrawn record back as itself. The values, observation time and version are the ones it
+ * already has: a restore that carried values would be a second record claiming to be the first.
+ */
+function applyRestored(fold: PointFold, event: Extract<BenchEvent, { type: 'point_restored' }>): void {
+  if ((event.version ?? 1) > fold.upTo) return
+  const pointId = fold.retractions.get(event.restores)
+  if (pointId === undefined) {
+    fold.problems?.push(`restore ${event.id} reverses unknown retraction ${event.restores}`)
+    return
+  }
+  const target = fold.points.get(pointId)
+  if (!target) {
+    fold.problems?.push(`restore ${event.id} targets unknown point ${pointId}`)
+    return
+  }
+  // A restore names one dataset, and the retraction it reverses names the record. Two writers that
+  // disagree about which dataset the record lives in is a log problem, not a coin toss.
+  if (target.dataset !== event.dataset) {
+    fold.problems?.push(
+      `restore ${event.id} says dataset "${event.dataset}", but point ${pointId} is in "${target.dataset}"`,
+    )
+    return
+  }
+  // A restore may only reverse the retraction standing in the way. Restoring an older one would be
+  // a stale undo quietly re-opening a record that was withdrawn again since.
+  if (target.retractedBy !== event.restores) {
+    fold.problems?.push(
+      `restore ${event.id} reverses retraction ${event.restores}, which is not in force for point ${pointId}`,
+    )
+    return
+  }
+  if (target.restoredAt === undefined || event.at >= target.restoredAt) {
+    target.restoredAt = event.at
+    delete target.retractedBy
+    target.status = 'active'
+  }
 }
 
 /**
@@ -204,7 +261,12 @@ export function bind(events: BenchEvent[]): ProjectState {
   }
 
   const points = new Map<string, Point>()
-  const fold: PointFold = { points, upTo: Number.POSITIVE_INFINITY, problems: state.problems }
+  const fold: PointFold = {
+    points,
+    retractions: new Map(),
+    upTo: Number.POSITIVE_INFINITY,
+    problems: state.problems,
+  }
 
   const ensureDataset = (id: string, shape: string): DatasetState => {
     const existing = state.datasets.get(id)
@@ -300,6 +362,10 @@ export function bind(events: BenchEvent[]): ProjectState {
 
       case 'point_retracted':
         applyRetracted(fold, event)
+        break
+
+      case 'point_restored':
+        applyRestored(fold, event)
         break
 
       case 'dataset_version_created': {
@@ -403,10 +469,13 @@ export function foldVersion(
   const points = new Map<string, Point>()
   // No `problems`: a past version is a question about rows, not an audit of the log. A correction
   // whose target is not in this horizon simply has nothing to apply to.
-  const fold: PointFold = { points, upTo }
+  const fold: PointFold = { points, retractions: new Map(), upTo }
   for (const event of events) {
     if (
-      (event.type === 'point_recorded' || event.type === 'point_corrected' || event.type === 'point_retracted') &&
+      (event.type === 'point_recorded' ||
+        event.type === 'point_corrected' ||
+        event.type === 'point_retracted' ||
+        event.type === 'point_restored') &&
       event.dataset !== datasetId
     ) {
       continue
@@ -420,6 +489,9 @@ export function foldVersion(
         break
       case 'point_retracted':
         applyRetracted(fold, event)
+        break
+      case 'point_restored':
+        applyRestored(fold, event)
         break
       default:
         break

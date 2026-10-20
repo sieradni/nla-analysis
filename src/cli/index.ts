@@ -10,6 +10,7 @@ import {
   type AnalysisOutcome,
   type ErrorKind,
   type PointCorrection,
+  type PointRestoration,
   type PointRetraction,
   type RecordedPoint,
 } from '../core/workspace.ts'
@@ -107,8 +108,9 @@ Usage
                                         append a field as the shape's next version
   bench shape designate <id> --time-field <name>
                                         make one instant field the observation time
-  bench correct <id> --values '{"y":3}'  supersede a point (never overwrites)
+  bench  correct <id> --values '{"y":3}'  supersede a point (never overwrites)
   bench retract <id> [--reason text]    withdraw a point from analysis
+  bench restore <id>                    bring a withdrawn point back, as the same record
   bench list [--dataset id] [--json]    list active points
   bench state [--json]                  regenerate and print STATE.md
   bench check [--json]                  validate the log and shapes
@@ -1086,6 +1088,39 @@ async function main(): Promise<void> {
         process.stdout.write(
           `corrected ${id}  ${summary}${corrected.tObserved === undefined ? '' : `  at ${corrected.tObserved}`}  (original record preserved)\n`,
         )
+      }
+      return
+    }
+
+    case 'restore': {
+      const id = args[0]
+      if (!id) die('missing point id', EXIT_INVALID, 'run `bench list --json` to see ids')
+      const workspace = await openWorkspace(values.project)
+      let restored: PointRestoration
+      try {
+        restored = await workspace.restorePoint(id)
+      } catch (error) {
+        fail(error)
+      }
+      await workspace.writeStateBrief()
+      if (asJson) {
+        process.stdout.write(
+          JSON.stringify(
+            {
+              ok: true,
+              data: {
+                event: restored.event.id,
+                restored: id,
+                reverses: restored.retraction,
+                active: restored.active,
+              },
+            },
+            null,
+            2,
+          ) + '\n',
+        )
+      } else {
+        process.stdout.write(`restored ${id}  (${restored.active} active in ${restored.dataset})\n`)
       }
       return
     }

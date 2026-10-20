@@ -67,6 +67,10 @@ deep-copying it.
    record stays in the log; the dataset's active set drops back. The visible proof that this is the
    right shape: after an append the fitted panel is `stale`, and after the undo both panels return to
    `current`, because the input fingerprint matches what the file was drawn from again.
+
+   **Later, 2026-10-20:** a point removed from its own menu has its own inverse. Undo there writes
+   `point_restored` and brings the same record back; the bar's undo still covers only the point this
+   window appended, and it still carries that reason. See [ADR 0016](0016-point-restore.md).
 7. **Invalid input keeps what was typed.** The window parses text only far enough to guess a type;
    anything it cannot parse is passed through to the core so the shape's own validation produces the
    message the CLI would (`field "x" expects a finite number, got "seven"`). The bar marks the named
