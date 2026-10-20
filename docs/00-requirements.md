@@ -63,40 +63,60 @@ explicit, recorded, and reversible.
 
 One JSON object per line: `{v, id (ULID), type, at, session, payload}`.
 
-Types as built: `project_created`, `shape_defined`, `dataset_created`,
-`dataset_version_created`, `point_recorded`, `point_corrected`, `point_retracted`,
-`import_completed`, `analysis_run`, `decision_recorded`.
+Types as built: `project_created`, `shape_defined`, `shape_extended`, `shape_time_designated`,
+`dataset_created`, `dataset_version_created`, `point_recorded`, `point_corrected`,
+`point_retracted`, `import_completed`, `analysis_run`, `decision_recorded`.
 
-`shape_extended` arrives with shape extension (deferred, §3.3 and plan 2.2). `dataset_replaced` was
-superseded by `dataset_version_created` ([ADR 0012](adr/0012-dataset-versions.md)). Views record no
-events at all ([ADR 0004](adr/0004-views-and-projects.md)), and a note or tag travels on the point
-event rather than in separate `note_added`/`tag_added` events.
+`dataset_replaced` was superseded by `dataset_version_created` ([ADR
+0012](adr/0012-dataset-versions.md)). Views record no events at all ([ADR
+0004](adr/0004-views-and-projects.md)), and a note or tag travels on the point event rather than in
+separate `note_added`/`tag_added` events.
 
 A point carries: `dataset`, `shape`, `values{}`, `t_observed`, `version`, `note`, `tags`; a
 correction names the point it `supersedes`. `sources` and `confidence` are not in the model. They
 were specified and never decided; adding either is a new decision, not an existing promise.
 
 **`t_observed` is first-class and distinct from `at` (recording time).** Conflating them makes
-"does this drift over time" unanswerable. An import must name a time column in both doors — `bench import` refuses a file without
-one, and the window's sheet asks for it — never filled from `at` or the moment of import. A single
-`bench add` may omit `--at`; it is stamped once, at the moment it is recorded.
+"does this drift over time" unanswerable. An import must name a time column in both doors — `bench
+import` refuses a file without one, and the window's sheet asks for it — never filled from `at` or
+the moment of import. A single `bench add` may omit `--at`; it is stamped once, at the moment it is
+recorded.
+
+A shape may instead designate one of its own fields as the observation time ([ADR
+0014](adr/0014-observation-time.md)). Once it does, that field is the only source: `bench add`,
+`bench correct` and both import doors canonicalise its value to UTC and use the same instant for
+`t_observed`, so the field and the instant cannot disagree. An explicit `--at` or a second import
+time column is still accepted when it names the same instant, and refused when it does not. Shapes
+that designate nothing, and events written before a designation, keep the rules above exactly; a
+designation never rewrites a point.
 
 ### 3.3 Shapes
 
 Shapes are declared by `shape_defined` events in the log, so there is no separate registry file that
 can drift out of sync with the data. A shape is referenced by id (`reading.v1`). Extending one
-(specified, **not built yet** — only shape definition and validation exist today):
+([ADR 0013](adr/0013-shape-extension.md)):
 
-- appends `shape_extended` with the new field and a backfill rule (`null` | `const` | transform),
-- writes a migration under `migrations/`,
-- bumps the version (`reading.v1 → reading.v2`).
+- appends `shape_extended` with the complete next declaration and the one appended field,
+- bumps the version (`reading.v1 → reading.v2`), and
+- moves the dataset to the new declaration while every old point keeps the shape id it was recorded
+  with.
 
-Old events keep their original shape. The **binder** upcasts everything to the current version and
-records where each value came from, so a query for a post-migration field reports
-*"n=0 before 2026-10-18"* instead of pretending the field always existed.
+There is no backfill and no upcast. A field added later has no value on older points, and a query
+reports it as absent rather than inventing `null` or a default; that is the observable form of
+"never mix observed and derived values". A rename, retype, unit change or reorder is refused: it is a
+different shape, not an extension.
 
-Every field name used by an event is validated against the registry. A typo becomes a warning from
-`bench check`, not a silently split dataset.
+A shape may designate a required `instant` field as its observation time ([ADR
+0014](adr/0014-observation-time.md)). The declaration is its own event, `shape_time_designated`,
+and its own version: the field list is unchanged, the dataset moves to the new declaration, and
+every existing point keeps the shape it was recorded with. `bench shape designate <id> --time-field
+<name>` is the only door. An extension preserves the designation; moving it is refused because it
+would reinterpret points already written. With a designation in place, the field is not a second
+opinion about the time: it is the time, canonicalised in the row and in `t_observed` together.
+
+Every field name used by an event is validated against the declaration that was current when the
+point was recorded. A typo becomes a warning from `bench check`, not a silently split dataset, and
+a later extension cannot make an older row retroactively incomplete.
 
 ### 3.4 Dataset versions
 
@@ -132,12 +152,15 @@ the open question in §14). A project today has no `index.sqlite`.
 
 ## 4. Views
 
-A **view** is JSON: a grid of panels, each `{dataset, version|latest, query, chart spec, recipe?,
-params}`. A tab is a view. Views are files, so the agent writes and the UI renders the same artifact.
+A **view** is JSON: a grid of panels, each `{dataset, version|latest, query, x_field?, y_field?, chart
+spec, recipe?, params}`. A tab is a view. Views are files, so the agent writes and the UI renders the
+same artifact. A plain plot may name its fields; absent `x_field`/`y_field` mean the historical `x`
+and `y`.
 
 **Implemented** ([ADR 0004](adr/0004-views-and-projects.md)): one file per tab in `views/<slug>.json`,
 written by `bench view new|add|save` and read by `bench view show|render`. A panel stores the question
-(`dataset`, `version`, `query`, `recipe`, `params`) *and* the answer (`chart`, `verdict`, `n`), plus
+(`dataset`, `version`, `query`, `x_field`/`y_field`, `recipe`, `params`) *and* the answer (`chart`,
+`verdict`, `n`), plus
 fingerprints of the rows and recipe it consumed — so a saved tab renders without Python, and still says
 when it has gone stale. `query` selects rows (`field`/`op`/`value`, all clauses required) and never
 computes: anything derived belongs in a recipe, where it is hashed and reported. `version` pins the
@@ -146,10 +169,10 @@ version the panel was drawn from; a hand-written view may say `latest`
 machine-level registry, so a window has something to switch between.
 
 Charts are a **restricted declarative spec** (select → transform → marks → encodings), rendered by
-the core as SVG today — diffable, agent-authorable, undoable, and fast enough at 10k points except
-when a point rescales the axes. Canvas is the measured next step and is not built (plan 5.6). Escape
-hatch: a raw component for exotic visuals. Keep the renderer swappable; don't marry Vega-Lite and
-then die on performance.
+the core as SVG — diffable, agent-authorable, undoable, and fast enough at 10k points. The window
+paints the marks on a canvas between two halves of that SVG, so the artifact stays one document and
+a rescale does not build ten thousand nodes (plan 5.6). Escape hatch: a raw component for exotic
+visuals. Keep the renderer swappable; don't marry Vega-Lite and then die on performance.
 
 ---
 
@@ -214,11 +237,18 @@ Targets: keystroke→paint < 100 ms; re-render < 50 ms at 10k points; cold start
 100 points in under 60 s.
 
 **Measured 2026-10-19** in the window (`pnpm app:measure`, 10,000 points, one plot panel, eight typed
-points): keystroke→paint a median of **24.6 ms** (p90 40.1 ms) when the point lands inside the axes the
-tab already draws — the log append is 14.1 ms of it, the mark rebuild 1.1 ms, and the paint 8.8 ms. A
-point that *rescales* the axes is a full redraw at 133.8 ms, which is over this budget and is the
-measured trigger for the canvas renderer. The tab's saved file catches up 33.6 ms after the paint,
-off the keystroke path. See [ADR 0006](adr/0006-window-write-path.md).
+points per run): keystroke→paint a median of **22.2–25.8 ms** across runs (p90 28.0–32.4 ms) when the
+point lands inside the axes the tab already draws — the log append is 12–16 ms of it, the mark rebuild
+0.1–0.2 ms, and the paint 2–9 ms. A point that *rescales* the axes is a full redraw at **35.1–47.4 ms**
+across runs (rebuild 12–18, paint 11–14), **within the 50 ms re-render budget**: the marks are painted
+on a canvas between two halves of the core's SVG, so ten thousand observations cost one draw rather
+than ten thousand DOM nodes. The pre-canvas renderer took 147.0–173.6 ms for the same sample, which is
+what triggered the change. The tab's saved file catches up 20–22 ms after the paint, off the keystroke
+path. `pnpm app:measure` now exits non-zero when either budget misses, when no full-redraw
+sample arrived, when the window patched a rescale instead of redrawing it, or when an entry had to be
+submitted programmatically rather than typed. See
+[ADR 0006](adr/0006-window-write-path.md) and the evidence table in
+[03-roadmap.md](03-roadmap.md#verified-on-this-tree-2026-10-19).
 
 ---
 
@@ -310,11 +340,11 @@ reviewable code instead of a hand-rolled TypeScript statistics library.
 |---|---|---|
 | shell | **Electron** ([ADR 0005](adr/0005-desktop-shell.md)) — the core is TypeScript and must run in process; ~370 MB dev install, ~490 MB working set, no installer built yet. Tauri 2 was the earlier plan; it needs a Node sidecar to host this core | **in use, unbuilt for distribution** (`pnpm app`) |
 | UI | hand-written HTML/CSS/JS in `app/renderer`, no framework yet. Svelte 5 remains the plan if the renderer outgrows it | **in use**: projects, tabs, hover, pan/zoom, point entry and undo |
-| charts | restricted declarative spec; the core's SVG today, zoom/pan by `viewBox`, and a typed point drawn as one mark the core placed — canvas when a measurement says so (133.8 ms for a rescale) | **in use** (`bench chart`, the window) |
+| charts | restricted declarative spec; the core's SVG for axes, grid, fits and labels, zoom/pan by `viewBox`, and the marks on a canvas between the two SVG halves (37–43 ms for a 10k rescale, 2026-10-19). `bench chart` still writes the whole drawing as one SVG | **in use** (`bench chart`, the window) |
 | analysis | **Python** sidecar, pinned env, JSON envelope, no Python in the entry path | **in use** (`bench run`) |
 | storage | JSONL event log (truth) | **in use** |
 | index | SQLite derived projection | deferred until a measured query is slow |
-| shapes | declared by log events, validated on write | **in use** (extend/migrate not built) |
+| shapes | declared by log events, validated on write | **in use** (extend and observation-time designation; value migrations not built) |
 | agent | repo agent only; no in-app LLM, no API keys in the hot path | **in use** |
 
 Windows from day one: DPI at 100/125/150/200% and fractional scaling, long paths, CRLF tolerance.

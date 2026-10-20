@@ -38,10 +38,10 @@ deep-copying it.
 
 ## Decision
 
-1. **The window writes through `Workspace`, in process.** `app/core.entry.ts` keeps one `Workspace`
-   per open project and exposes exactly three write calls: record a point, retract a point, refresh
-   a tab. There is no general "run this" channel, so the window cannot grow a write path the core
-   has not agreed to. The preload exposes those three and nothing else.
+1. **The window writes through `Workspace`, in process.** `app/workspace-session.ts` keeps one
+   `Workspace` per open project; `app/view-session.ts` owns the tab from construction through the
+   deferred save. The facade exposes the window's writes and no general "run this" channel, so the
+   window cannot grow a write path the core has not agreed to.
 2. **The point lands as one appended mark.** `chart.ts` exports `incrementalMark`, which draws one
    observation against the scales a chart *already has*, using the same code that draws a whole
    chart. When the new point is inside the drawn domain, the window inserts that markup after the
@@ -86,10 +86,19 @@ deep-copying it.
   first said two megabytes, which was an estimate, not a measurement). That is disk churn a snapshot
   format would avoid, and it is the price of "a tab is a file".
 
+## Update 2026-10-19
+
+The 135 ms cost above is history. The marks are now painted on a canvas between two halves of the
+same SVG, so a 10k rescale measures 35.1–47.4 ms (`pnpm app:measure` fails over 50). The incremental
+path still appends one mark, but the core now returns its projected `{cx, cy, id}` and the window
+paints it; no SVG markup is inserted. The tab file still catches up after the paint, through
+`persistView`, and the measured 1.14 MB write is unchanged.
+
 ## Revisit if
 
 - The rescale case becomes common (a window that is usually showing a point the user is about to
-  leave behind). Then the answer is a canvas renderer with a fixed cost, not a cleverer patch.
+  leave behind). It is already a full redraw on the canvas painter; revisit only if that fixed cost
+  stops fitting the budget on the machines people use.
 - Someone needs a window that is *not* the only writer — a second window, an agent mid-session.
   Writes are safe now (ADR 0007); what does not exist is a *live* window, one that shows another
   writer's work without being asked to.

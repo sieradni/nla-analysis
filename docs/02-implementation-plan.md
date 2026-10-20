@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: Phases 0-3 complete (2026-10-19); the in-process seam ([ADR 0003](adr/0003-in-process-core.md)), the tab/project layer ([ADR 0004](adr/0004-views-and-projects.md)), a first desktop window ([ADR 0005](adr/0005-desktop-shell.md)), its write path ([ADR 0006](adr/0006-window-write-path.md)) and dataset versions ([ADR 0012](adr/0012-dataset-versions.md)) landed; the shape registry is next, and the window's frames are waiting on a visual verdict.
+Status: Phases 0-3 complete (2026-10-19); the in-process seam ([ADR 0003](adr/0003-in-process-core.md)), the tab/project layer ([ADR 0004](adr/0004-views-and-projects.md)), a first desktop window ([ADR 0005](adr/0005-desktop-shell.md)), its write path ([ADR 0006](adr/0006-window-write-path.md)) and dataset versions ([ADR 0012](adr/0012-dataset-versions.md)) landed, and a portable Windows build now ships from a version tag. The **open work is itemised in [03-roadmap.md](03-roadmap.md)**, which is updated in the same commit as each slice; this file keeps the phase structure and the history.
 Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 
 Where an early phase below says Tauri, `src/ui`, or `bench/perf.ts`, the shipped tree is Electron
@@ -18,7 +18,7 @@ those passages as the plan as it was written, not as a description of today's la
 | 1.3 chart artifact | done | `bench chart` writes SVG; renderer is a core module, not CLI glue |
 | 1.4 entry ergonomics | **partial** | ADR 0002 made v1 agent-only; the bar, optimistic append, correction, undo and its Ctrl+Z/Esc keys landed with the window (5.4). Paste, stream and auto-advance are not built |
 | 2.1 corrections + retractions | done early | `bench correct` / `bench retract`; original records preserved in the log |
-| 2.2 shapes registry + validation | partial | read + validate exist; `shape extend` and migrations do not |
+| 2.2 shapes registry + validation | done | read, validate, append-only extension, and observation-time designation exist; value migrations are deliberately out of scope ([ADR 0013](adr/0013-shape-extension.md), [ADR 0014](adr/0014-observation-time.md)) |
 | 3.1 Python runner | done | JSON over stdio, `uv`-pinned 3.13 env, id echoed, crash contained |
 | 3.2 one honest fit recipe | done | band, DOF, F test, verdict; refuses to draw when DOF ≤ 0 |
 | 3.3 cache / debounce / cancel | **not done** | every run recomputes; fine at this scale, needed for live sliders |
@@ -29,22 +29,36 @@ those passages as the plan as it was written, not as a description of today's la
 | 4.5 artifact identity + provenance | done | `ChartSpec.points[].id` and `provenance`; both recipes echo ids; `data-point-id` on every mark, covered by tests |
 | 4.6 project registry | done | [ADR 0004](adr/0004-views-and-projects.md); `bench projects`, recents, `--project <name>`, `--scan`; atomic writes, tolerant reads |
 | 4.7 view files (§4) | done | `views/<slug>.json` with materialized specs; `view list\|show\|new\|add\|save\|render`; per-panel `input_hash`/`recipe_hash` staleness; grid render needs no Python |
+| 4.8 field-pair plotting | done | one resolver ([axes.ts](../src/core/axes.ts)) for `bench chart`, saved panels, and the window's tab dialog; `x_field`/`y_field` default to `x`/`y`; numeric pairs and an `instant` time axis (clock ticks, one-day domain for a single point). QP Stats' two views are the live evidence |
 | 5.1 UI write path | decided | in process, not through the CLI: 15.7 ms versus 160 ms+ per command (ADR 0003) |
 | 5.2 shell: Electron vs Tauri+sidecar | decided | [ADR 0005](adr/0005-desktop-shell.md): Electron, because the core is TypeScript and stays in one process. Measured here: 369 MB dev install, 205–242 ms cold start, 466–514 MB working set (summed, so an upper bound) |
 | 5.3 first window slice | done | `pnpm app`: projects and tabs switch, a tab's panels draw from their stored specs, hover resolves a mark to its record id, wheel zoom and pan move the `viewBox`. Frames in `docs/ui-review/`, waiting on the user's verdict |
 | 5.4 window write path | done | [ADR 0006](adr/0006-window-write-path.md): the entry bar appends through `Workspace` in process, a point inside the drawn axes arrives as one mark the core placed (0.8 ms), a point that rescales the axes asks for a full redraw, the tab file catches up after the paint, and undo is a `point_retracted` event. Refusals keep the typed values and name the field |
-| 5.5 entry-path measurement | done | `pnpm app:measure` builds a 10k-point project and types into the real window: **median 24.6 ms** keystroke→paint (p90 40.1) against the 100 ms budget; record 14.1 · rebuild 1.1 · paint 8.8, tab file 33.6 ms later. A rescale is 133.8 ms — see 5.6 |
-| 5.6 canvas renderer | not done | the measured trigger is now real: 133.8 ms for a point that moves the axes, and paint growing with the point count. §4 expects canvas at 10k |
-| 5.7 installer / signing | not done | no packaging, no code signing; `pnpm app` is how it runs |
+| 5.5 entry-path measurement | done | `pnpm app:measure` builds a 10k-point project and types into the real window: **median 22.2–25.8 ms** keystroke→paint (p90 28.0–32.4 across runs) against the 100 ms budget; record 12–16 · rebuild 0.1–0.2 · paint 2–9, tab file 20–22 ms later. The rescale sample is 35.1–47.4 ms — see 5.6. The first run recorded 24.6 / 133.8 ms; the pre-canvas rescale was 147.0–173.6 ms. The harness fails when either budget misses, when the full-redraw sample is missing or was patched, and when any entry had to be submitted programmatically. |
+| 5.6 canvas renderer | done | `src/core/chart.ts` splits a chart into the layers before and after its marks and packs the projected marks (`Float32Array`), the point values and the ids; `app/renderer/chart.js` parses two small SVGs and paints every mark on a canvas between them, with hit-testing, hover, selection, zoom/pan and the incremental one-mark path. A 10k full redraw measures **35.1–47.4 ms** (rebuild 12–18 · paint 11–14), down from 147–174; `pnpm app:measure` exits non-zero over 50 ms and refuses a missing or patched full-redraw sample, and `pnpm app:capture` asserts the canvas covers the drawing and paints 3,589 pixels. The window's tab file is now saved after the paint (`persistView`), not on the keystroke path |
+| 5.7 installer / signing | **partial** | [docs/packaging.md](packaging.md): `pnpm app:package` writes a portable `artifacts/bench-win32-x64/` with the CLI beside it, and `.github/workflows/release.yml` builds, tests and zips it on a `v*` tag. Still missing: code signing, an installer, auto-update (roadmap §4) |
+| 5.9 CI release | done | [run 39245803884](https://github.com/sieradni/nla-analysis/actions/runs/39245803884): verify, package, CLI smoke, zip (147.4 MB) and artifact upload are green; the release step is skipped on manual dispatch |
 | 5.8 entry extras (paste, stream, auto-advance) | not done | the entry bar and its undo keys are built; these are not |
 | 4.x Tauri shell / views UI | superseded | the shell landed as Electron instead ([ADR 0005](adr/0005-desktop-shell.md)) |
 | windowed / rolling fit | not done | the third item on the time-variation menu |
 | 2.4 dataset versions / replace / diff | done | [ADR 0012](adr/0012-dataset-versions.md): an import into a populated dataset writes `dataset_version_created` with a parent and a `+n −n ~n` diff, the parent's rows are retracted/corrected rather than rewritten, and `foldVersion` rebuilds any older version from the log. Runs and panels pin `(dataset, version)`; `bench dataset versions\|diff` and the window's sheet read the same plan; an import with no observation time is refused in both doors, and the sheet picks the column that holds it |
 | 2.5 fixture matrix | not done | the committed drift-sensor project plus duplicate-time and re-export cases exist; 2-point, 1e5-point, unicode, missing-value, garbage-paste and post-migration fixtures do not |
-| `shape extend` + migrations | not done | next; shape 2.2 is read-only today |
+| `shape extend` | done | [ADR 0013](adr/0013-shape-extension.md): `shape_extended` appends a full next declaration plus one field; old points keep their shape, datasets move forward, and `bench check` re-validates every extension. No backfill. The window flow and value migrations are not built |
+| observation-time designation | done | [ADR 0014](adr/0014-observation-time.md): `shape_time_designated` names one required `instant` field; `add`, `correct` and `import` derive and canonicalise `t_observed` from it and refuse a contradiction. Shapes without a designation keep the old `--at`/time-column rules. `tests/observation.test.ts` (19), `tests/import.test.ts`, `tests/cli.test.ts`; QP Stats at `qp_stats.v3` with its original point untouched |
 | chart golden snapshots | not done | no snapshot tests; fits are checked numerically against closed-form results. Nothing in docs/ decides the format |
 
-Verification so far: 212 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
+## Window structure (2026-10-19)
+
+The desktop shell has two layers. `app/main.js` owns the Electron window, the watcher and the IPC
+surface; `app/harness/` holds the capture, measure and smoke runs that drive it. The renderer is split
+by concern in `app/renderer/`: `state.js` (shared state and the guarded core call), `format.js` (text
+and accessible names), `rail.js` (projects, tabs, folder), `panels.js` (panel mount, statuses,
+watcher), `entry.js` (typing, correction, undo), `tabs.js` (tab sheet and axes), `projects.js` (project
+sheet and shape flow), `import.js` (import sheet), `navigation.js` (the few cross-module shell
+actions), and `app.js` (wiring and the open-view lifecycle only). New window work lands in the module
+that owns its surface rather than in `app.js`.
+
+Verification so far: 264 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
 (`pnpm app:build`) before the suite, because the desktop shell loads that bundle rather than `src/core`,
 and a bundle that is only exercised by launching an app breaks silently — it did, once. The entry path is measured, not
 assumed: 15.7 ms keystroke→paint in process at 10k points against a 100 ms budget (ADR 0003), and
@@ -104,7 +118,9 @@ the integration risk can be retired in the first step instead of the last.
 - **Tests**: logic gets a test that would fail if the behavior regressed. Stats get numeric
   assertions against closed-form or reference values, not shape checks.
 - **Perf harness exists from step 4 and never regresses**: `pnpm app:measure` measures
-  keystroke→paint at 10k points in the real window and exits non-zero when the median is over budget.
+  keystroke→paint at 10k points in the real window and exits non-zero when the median is over budget;
+  it also fails when no full-redraw sample arrived, when that sample was patched, or when an entry
+  was submitted programmatically.
 - **Visual steps**: screenshot at 100/125/150% + a two-line "what to look at" note, logged in
   [ui-review-log.md](ui-review-log.md). I never self-approve.
 - **`bench check` green** at the end of every phase.

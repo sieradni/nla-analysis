@@ -22,7 +22,8 @@ refusal is. The window is a viewport onto the log, not a second writer (ADR 0003
 The window opens a sheet on the preview, one row per shape field with the column choices, and calls
 the same `planImport` and `commitImport` the CLI calls. A bad row or an unmappable column is refused
 before the first event, so a half-imported file cannot exist. `bench import` keeps its `--map` flags
-and now shares the code; `src/cli/index.ts` is the thin door it always was.
+and now shares the code; `src/cli/import.ts` is its thin command door, and
+`src/core/import-columns.ts` owns the mapping and undeclared-column policy both doors use.
 
 **Consequences.**
 

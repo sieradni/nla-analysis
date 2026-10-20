@@ -47,8 +47,9 @@
   <body>
     <h1>bench desktop shell — review frames</h1>
     <p>
-      Captured from the real Electron window by <code>pnpm app:capture</code> (project:
-      fixtures/projects/drift-sensor, tab: “drift over time”).
+      Captured from the real Electron window by <code>pnpm app:capture</code> — the default run on
+      fixtures/projects/drift-sensor, tab “drift over time”, then a read-only axis run on the live
+      QP Stats project for the field-pair frames at the end.
     </p>
     <figure>
       <figcaption>100% scaling — app-100.png</figcaption>
@@ -91,8 +92,24 @@
       <img src="app-new-tab.png" alt="bench window showing a tab created from the dataset and recipe dialog" />
     </figure>
     <figure>
-      <figcaption>a project created with its own shape: load.v1 (mass, extension), one point typed — app-new-project.png</figcaption>
+      <figcaption>the new project's first tab, created before any point: n = 0, axes mass/extension, and the shape's own add command — app-empty-tab-100.png</figcaption>
+      <img src="app-empty-tab-100.png" alt="bench window showing an empty first tab for a custom shape" />
+    </figure>
+    <figure>
+      <figcaption>the same empty tab at 125% — app-empty-tab-125.png</figcaption>
+      <img src="app-empty-tab-125.png" alt="bench window showing the empty first tab at 125% scaling" />
+    </figure>
+    <figure>
+      <figcaption>the same empty tab at 150% — app-empty-tab-150.png</figcaption>
+      <img src="app-empty-tab-150.png" alt="bench window showing the empty first tab at 150% scaling" />
+    </figure>
+    <figure>
+      <figcaption>a project created with its own shape: load.v1 (mass, extension), one point typed into its first tab — app-new-project.png</figcaption>
       <img src="app-new-project.png" alt="bench window showing a newly created project and its first point" />
+    </figure>
+    <figure>
+      <figcaption>a custom-axis tab driven through the window: mass/extension, the first redraw, a patched second point, and a third point that moves the axes — app-custom-axis.png</figcaption>
+      <img src="app-custom-axis.png" alt="bench window showing a custom-axis tab with three painted points and axes mass and extension" />
     </figure>
     <figure>
       <figcaption>the CLI appended while it sat idle: n = 15 and 15 marks, without a keystroke — app-live.png</figcaption>
@@ -129,6 +146,38 @@
     <figure>
       <figcaption>the packaged build, launched with no Python on the machine — app-packaged.png</figcaption>
       <img src="app-packaged.png" alt="bench window captured from the standalone packaged executable" />
+    </figure>
+    <figure>
+      <figcaption>QP Stats at 100%: altitude against its date field, one mark on a clock axis — app-field-pair-altitude-100.png</figcaption>
+      <img src="app-field-pair-altitude-100.png" alt="bench window plotting altitude against date for a single QP Stats observation" />
+    </figure>
+    <figure>
+      <figcaption>the same tab at 125% — app-field-pair-altitude-125.png</figcaption>
+      <img src="app-field-pair-altitude-125.png" alt="bench window plotting altitude against date at 125% scaling" />
+    </figure>
+    <figure>
+      <figcaption>the same tab at 150% — app-field-pair-altitude-150.png</figcaption>
+      <img src="app-field-pair-altitude-150.png" alt="bench window plotting altitude against date at 150% scaling" />
+    </figure>
+    <figure>
+      <figcaption>QP Stats at 100%: app against pps, the same one observed row on numeric axes — app-field-pair-100.png</figcaption>
+      <img src="app-field-pair-100.png" alt="bench window plotting app against pps for a single QP Stats observation" />
+    </figure>
+    <figure>
+      <figcaption>the numeric pair at 125% — app-field-pair-125.png</figcaption>
+      <img src="app-field-pair-125.png" alt="bench window plotting app against pps at 125% scaling" />
+    </figure>
+    <figure>
+      <figcaption>the numeric pair at 150% — app-field-pair-150.png</figcaption>
+      <img src="app-field-pair-150.png" alt="bench window plotting app against pps at 150% scaling" />
+    </figure>
+    <figure>
+      <figcaption>the tab dialog offers the selected shape's own fields, with date and altitude chosen — app-field-pair-dialog-100.png</figcaption>
+      <img src="app-field-pair-dialog-100.png" alt="bench new-tab dialog with horizontal and vertical field pickers populated from the QP Stats shape" />
+    </figure>
+    <figure>
+      <figcaption>the same dialog at 150%, unclipped — app-field-pair-dialog-150.png</figcaption>
+      <img src="app-field-pair-dialog-150.png" alt="bench new-tab dialog with QP Stats fields at 150% scaling" />
     </figure>
   </body>
 </html>

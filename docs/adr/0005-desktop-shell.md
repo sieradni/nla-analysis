@@ -58,7 +58,9 @@ number this project refuses elsewhere, so it is written as a documented expectat
    `APP_ROOT` was two directories too high, and every recipe read as missing.
 3. **The window does not know how to read a project.** `app/core.entry.ts` is a thin facade over
    `src/core`: list projects, open one, list its tabs, open a tab, hand back the view file plus one
-   SVG per panel. Anything the window wants that the facade cannot answer belongs in the core.
+   SVG per panel. `app/workspace-session.ts` keeps the open `Workspace`; `app/view-session.ts` owns
+   the view from construction through its cached, staged and saved states. The facade never owns
+   that state itself. Anything the window wants that the facade cannot answer belongs in the core.
 4. **Charts are the core's SVG, transformed — not redrawn.** Pan and zoom move the SVG's `viewBox`,
    so zooming is a crop of the same drawing: coordinates, labels and `data-point-id` attributes stay
    exactly where the core put them, and nothing is re-rendered per frame. Requirements §4 expects a
@@ -90,11 +92,18 @@ number this project refuses elsewhere, so it is written as a documented expectat
   `app/core.bundle.mjs` is possible if someone runs the app without `pnpm app:build`; the script and
   `pnpm app` both rebuild it first.
 
+## Update 2026-10-19
+
+Chart marks are now painted on a canvas between two SVG layers; zoom and pan still move one shared
+`viewBox`, and hover hit-tests the core's projected marks. The 28-mark measurement behind items 4
+and 5 is history: at 10k a rescale measures 35.1–47.4 ms (`pnpm app:measure`). The decision that the
+window is a viewport onto the core's drawing, not a second renderer, is unchanged.
+
 ## Revisit if
 
 - Installer size becomes the deciding constraint. Then build one Electron installer *and* one Tauri
   sidecar prototype, measure both, and re-decide on numbers rather than on this ADR.
-- The charts need to hold 10k points at 60 fps: that is the measured trigger to write a canvas
-  renderer, and the spec the core already emits is what it would draw.
+- The charts outgrow the canvas mark layer. It already holds 10k points inside the 50 ms redraw
+  budget; a different painter would need a measurement that says so, not a different style.
 - The core ever moves to Rust (ADR 0001 warned about exactly this drift): the sidecar question
   disappears and Tauri becomes the cheaper shell.

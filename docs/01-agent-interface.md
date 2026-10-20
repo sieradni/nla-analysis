@@ -7,7 +7,7 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 
 | working | specified, not built |
 |---|---|
-| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `dataset list\|versions\|diff`, `view list\|show\|new\|add\|save\|render` | `dataset replace\|show\|export`, `shape *`, `annotate`, `add --stdin`, `view create\|open`, `recipe show` |
+| `init`, `add`, `correct`, `retract`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `dataset list\|versions\|diff`, `shape extend`, `shape designate`, `view list\|show\|new\|add\|save\|render` | `dataset replace\|show\|export`, `shape list\|validate`, `annotate`, `add --stdin`, `view create\|open`, `recipe show` |
 
 Available recipes: `fit` (curve, band, verdict) and `drift` (does the relationship change over time).
 
@@ -59,7 +59,7 @@ A **view is the tab format** ([ADR 0004](adr/0004-views-and-projects.md)): one J
 |---|---|
 | `bench view list [--json]` | views in this project, with panel counts and recipes |
 | `bench view show <name> [--json]` | the view plus one status per panel: `current`, `stale`, `missing`, `unchecked` |
-| `bench view new <name> [--dataset] [--recipe] [--param] [--query] [--title] [--columns] [--force]` | create a one-panel tab from the data or a recipe |
+| `bench view new <name> [--dataset] [--x-field] [--y-field] [--recipe] [--param] [--query] [--title] [--columns] [--force]` | create a one-panel tab from the data or a recipe |
 | `bench view add <name> [flags]` | append a panel to an existing tab |
 | `bench view save [name] --file <json\|->` | validate and store a hand-written view (stdin allowed) |
 | `bench view render <name> [--refresh] [--out]` | draw the saved specs to `artifacts/view-<name>.svg` |
@@ -69,6 +69,20 @@ the data, re-runs any recipe, and rewrites the file. Panels store fingerprint ha
 over the selected rows, `recipe_hash` over the recipe file), so `view show` notices moved data and an
 edited recipe without running anything. A view records **no** log events: `bench run` remains the way
 to record an analysis.
+
+A plain plot names its axes with `--x-field` and `--y-field` (`x_field`/`y_field` in the view file).
+Omitted, they are the historical `x` and `y`, so every older panel and chart reads unchanged. The
+horizontal field may be numeric or `instant`; the vertical field must be numeric. An `instant` axis
+is a real time axis: values are converted for the scale, the spec says `"format": "time"`, and ticks
+are clock labels rather than epoch milliseconds. A one-point series still draws its mark and gets a
+one-day domain. `src/core/axes.ts` is the only resolver, used by `bench chart`, panels, and the
+window's tab dialog; a recipe panel chooses its axes through its parameters and refuses these flags.
+
+A dataset with no active rows still renders a real tab: the axes are labelled, `n = 0`, and the plot
+area says no observations exist and prints the shape's own `add` command. `bench chart` writes that
+empty artifact instead of refusing; a recipe panel still refuses because there is nothing to model.
+The command in those hints, in `init`'s next line, and in the window's no-tabs state comes from
+[`src/core/hints.ts`](../src/core/hints.ts), not from a hardcoded `x`/`y` pair.
 
 The `query` is deliberately tiny — `field`, `op` (`> >= < <= == !=`), `value`, all clauses required.
 It selects rows; it never computes with them.
@@ -84,6 +98,17 @@ project logic of its own. Two consequences worth knowing when reading this docum
 - The seam raises refusals instead of exiting, so the CLI — and only the CLI — turns them into exit
   codes. A `--dataset` that does not exist is therefore refused by name everywhere, instead of being
   reported as a dataset that happens to have no points.
+
+The concerns around the seam each have one owner: `src/core/shapes.ts` for shape declarations and
+version transitions, `src/core/axes.ts` for which fields an axis can read,
+`src/core/hints.ts` for the next command a shape allows, `src/core/observation.ts` for a point's
+observation time, and `src/core/import-columns.ts` for import mapping and column policy. The tab
+file format and storage are `src/core/views.ts`; panel selection, materialization, and staleness are
+`src/core/panels.ts`. `src/cli/shape.ts`, `import.ts`, and `view.ts` are command doors over those
+owners, and `app/core.entry.ts` is the window facade over the same seam. In the window,
+`app/workspace-session.ts` owns the open `Workspace`, `app/view-session.ts` owns a view from
+construction through its cached, staged and saved states, and `src/core/panels.ts` owns the pure
+panel request, projection and rebuild policy.
 
 ## Contract rules
 
@@ -131,7 +156,8 @@ exist, which analyses are stale, what the last decisions were, and what is unres
 | `bench correct <point-id> --values '{"y":3.5}' --reason "typo"` | supersede a point |
 | `bench retract <point-id> --reason` | mark as withdrawn (kept, excluded from analysis) |
 | `bench annotate <point-id> --note/--tag` | add context without changing values. **Not built**; notes and tags are set when a point is added or corrected. |
-| `bench import <file> [--map field=column]… [--time <col>] [--format csv\|tsv\|jsonl] [--dry-run] [--force]` | preserve in `data/raw/`, then load |
+| `bench import <file> [--map field=column]… [--time <col>] [--format csv\|tsv\|jsonl] [--ignore-unmapped <col>]… [--dry-run] [--force]` | preserve in `data/raw/`, then load |
+| `bench chart [--x-field <field>] [--y-field <field>] [--out file.svg]` | render the active points to an SVG artifact |
 
 #### Import behaviour, as built
 
@@ -143,16 +169,24 @@ exist, which analyses are stale, what the last decisions were, and what is unres
   is never read again. The name is content-addressed (`<hash12>-<name>`), so re-importing the same
   bytes lands on the same path instead of accumulating near-duplicates, and a project rebuilt from
   its own script reproduces the same tree. The log records the file, the row count, the full
-  content hash, the columns, and the field-to-column mapping.
+  content hash, the columns, the field-to-column mapping, and any explicitly ignored columns.
+- **An undeclared column is a refusal, not a silent drop.** Every source column must be claimed by a
+  shape field or the observation-time column. A column the shape cannot hold stops the import and
+  names itself and the exact flags that would let it pass: `--ignore-unmapped <column>`, repeatable
+  and per invocation. That opt-out is printed in both the dry run and the apply output, and is
+  recorded as `ignored_columns` on `import_completed`, so a later reader can see the choice.
 - **A duplicate is refused, not silently repeated.** If an `import_completed` event with the same
   hash and dataset exists, the import stops and says so. `--force` is the way to mean it.
 - **The time column is required.** `--time <column>` names it; otherwise the first header that
   looks like one wins (`t_observed`, `observed_at`, `timestamp`, `time`, `date`, `t`, in that
-  order). If neither finds one, the import is refused and the error names the file's columns and the
-  flag: a row is identified by its instant, so stamping every row with the moment of import would
-  make a re-import read as every row leaving and every replacement arriving. The window's sheet has
-  the same decision as a picker and passes the same `time` into the plan. A column that cannot be
-  parsed as a time is an error, never a silent fallback to now.
+  order). If the shape designates an observation-time field, the column mapped to that field is the
+  time column instead, and `--time` may only name the same column or a second one that must agree
+  with it row by row. If neither finds one, the import is refused and the error names the file's
+  columns and the flag: a row is identified by its instant, so stamping every row with the moment
+  of import would make a re-import read as every row leaving and every replacement arriving. The
+  window's sheet has the same decision as a picker and passes the same `time` into the plan. A
+  column that cannot be parsed as a time, or that disagrees with the designated field, is an error,
+  never a silent fallback to now.
 - **Metadata preambles are skipped and counted.** Lines starting with `#` or `//` are dropped and
   reported in the output, because a skipped line could just as easily be a broken row.
 - **`--dry-run` writes nothing at all** — no events, no copy under `data/raw/` — and prints the
@@ -177,14 +211,31 @@ replace` command to duplicate that path ([ADR 0012](adr/0012-dataset-versions.md
 
 ### Shapes
 
-None of these commands exist yet: the registry is read and validated, but `bench` has no `shape`
-subcommand.
+`shape extend` appends a declaration; it never rewrites a point. The event is `shape_extended`
+with the shape it extends, the complete new declaration, and the one appended field. Old points keep
+the shape id they were recorded with; the dataset moves to the new declaration, so `add` and
+`import` accept the field immediately. There is no backfill.
 
 | command | purpose |
 |---|---|
-| `bench shape list` / `show <id>` | registry |
-| `bench shape extend <id> --field temp:C [--backfill null\|const:0\|expr]` | new version + migration |
-| `bench shape validate` | field names against the registry, units, duplicates |
+| `bench shape extend <id> --field <name> --type <type> [--unit <unit>] [--optional]` | append one field as the next shape version |
+| `bench shape designate <id> --time-field <name>` | make a required `instant` field the observation time, as the next shape version |
+| `bench shape list` / `show <id>` | registry. **Not built.** |
+| `bench shape validate` | field names against the registry, units, duplicates. **Not built.** |
+
+`--type` is required: `number`, `integer`, `string`, `instant`, or `boolean`. The name must be new,
+the old fields must stay in the same order, and the extended shape must be the newest version of
+its base. A duplicate, a retype, an older-version fork, or a missing type is refused before anything
+is appended. `bench check` re-validates every recorded extension, so a hand-edited log fails there
+rather than quietly changing how a dataset reads. [ADR 0013](adr/0013-shape-extension.md) records
+the reasoning.
+
+`shape designate` is the observation-time door ([ADR 0014](adr/0014-observation-time.md)). It
+appends `shape_time_designated` with the complete next declaration and the field name; the field
+list cannot change and an existing designation cannot move. After it, `bench add`, `bench correct`
+and `bench import` derive `t_observed` from that field, canonicalise the field in `values`, and
+refuse a value that disagrees. A shape that designates nothing, and every point recorded before a
+designation, keep the old `--at`/time-column behaviour.
 
 ### Analysis
 
