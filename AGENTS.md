@@ -155,7 +155,8 @@ app/                the desktop shell (ADR 0005): Electron main + preload + rend
                     IPC facade over them. main.js is the window, the IPC surface and the boot
                     switch; harness/ holds capture, measure and smoke, which drive that window.
 app/renderer/       the viewport, split by concern. app.js is wiring and the open-view lifecycle
-                    only; state.js owns shared state and the core call; format.js owns text;
+                    only; state.js owns shared state and the core call; copy.js owns every word
+                    a person reads (ADR 0015) and no other module composes a sentence;
                     rail.js owns projects/tabs/folder; panels.js owns the panel mount and statuses;
                     entry.js owns typing, correction and undo; tabs.js owns the tab sheet;
                     projects.js owns the project sheet; import.js owns the import sheet;

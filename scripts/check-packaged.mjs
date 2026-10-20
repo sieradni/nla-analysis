@@ -106,7 +106,7 @@ console.log(`  recipes offered=${report.recipes.offered.length} problem=${report
 console.log(`  tab dialog options=${report.tabDialog.options.join(',')} note="${report.tabDialog.note}"`)
 console.log(
   `  custom axis: typed to n = ${report.custom.saved.n} on ${report.custom.saved.x}/${report.custom.saved.y}` +
-    `, hover ${report.custom.hover.id}, ${report.custom.selection}`,
+    `, hover "${report.custom.hover.tooltip}", strip "${report.custom.selection}"`,
 )
 console.log(`  ${elapsed} ms from spawn to report, then exit ${code}`)
 
@@ -118,10 +118,24 @@ if (!/resources[\\/]app[\\/]renderer[\\/]index\.html$/i.test(report.url)) {
 }
 if (!report.facts.panels || !report.facts.marks) fail('the build painted no chart')
 if (!report.facts.fields.length) fail('the entry bar offered no fields')
-// The strip names the dataset *and the version it was drawn from*: a panel drawn before the last
-// import has to be able to say which rows it is about, not only which dataset.
-if (!/main · v\d+/.test(report.facts.meta ?? '')) {
-  fail(`the strip does not name a dataset version: "${report.facts.meta}"`)
+// The strip is a count, not a version list: what differs between panels is said by each panel's own
+// state word, and a dataset named `main` in a single-dataset project is not information (ADR 0015).
+if (!/^\d+ panels? · \d+ points?$/.test(report.facts.meta ?? '')) {
+  fail(`the strip is not the plain count: "${report.facts.meta}"`)
+}
+
+// The shipped build speaks to the person. A record id, an event name, a dataset or shape id, a
+// version or a command in one of these strings is the defect this check exists to catch.
+const LOG_VOCABULARY =
+  /\b01[0-9A-HJKMNP-TV-Z]{24}\b|point_(recorded|corrected|retracted|restored)|dataset_version_created|shape_(defined|extended|time_designated)|analysis_run|import_completed|decision_recorded|project_created|\bmain\b|\b[a-z][a-z0-9_]*\.v\d+\b|\bbench\s+(?:--|init|add|correct|retract|import|view|chart|state|check|run|dataset|shape|decide|projects|recipes)\b|\bv\d+\b/
+for (const [surface, value] of [
+  ['tab strip', report.facts.meta],
+  ['hover', report.custom.hover.tooltip],
+  ['correction strip', report.custom.selection],
+]) {
+  if (LOG_VOCABULARY.test(value ?? '')) {
+    fail(`log vocabulary in the ${surface}: "${value}"`)
+  }
 }
 if (report.recipes.offered.length !== 0) fail('a recipe was offered without the analysis runtime')
 if (!report.recipes.problem) fail('no recipe was offered and no reason was given')
@@ -332,6 +346,8 @@ function stable(value) {
     return value
       .replace(/[0-9A-HJKMNP-TV-Z]{26}/g, '<point-id>')
       .replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/g, '<recorded-at>')
+      // The window reads an instant as `20 Oct 2026, 10:22`; the minute is the run's, not the build's.
+      .replace(/\d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2}/g, '<recorded-at>')
   }
   if (Array.isArray(value)) return value.map(stable)
   if (value && typeof value === 'object') {

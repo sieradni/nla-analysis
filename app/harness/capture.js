@@ -81,7 +81,120 @@ export async function capture() {
   // Content-Security-Policy violations are counted rather than printed: the core's chart markup sets
   // `font-variant-numeric` as an inline style, which the shell's `style-src 'self'` blocks, so every
   // axis label reports one and a stack of them buries whatever else the renderer said.
-  let cspViolations = 0
+  /**
+ * The window speaks to the person (ADR 0015). Every surface this harness photographs is read back
+ * and refused if a record id, an event name, a dataset or shape id, a version or a command reached
+ * it. This is the end-to-end half of `tests/window-copy.test.mjs`: that test holds the copy module,
+ * this one holds the window.
+ */
+const LOG_VOCABULARY = /\b01[0-9A-HJKMNP-TV-Z]{24}\b|point_(recorded|corrected|retracted|restored)|dataset_version_created|shape_(defined|extended|time_designated)|analysis_run|import_completed|decision_recorded|project_created|\bmain\b|\b[a-z][a-z0-9_]*\.v\d+\b|\bbench\s+(?:--|init|add|correct|retract|import|view|chart|state|check|run|dataset|shape|decide|projects|recipes)\b|\bv\d+\b|\bDOF\b|\(s\)|\bversion \d|\+\d+ −\d+ ~\d+/
+
+async function assertPlainSurface(where) {
+  const seen = JSON.parse(
+    await window.webContents.executeJavaScript(`(() => JSON.stringify({
+      tooltip: document.getElementById('tooltip').textContent,
+      status: document.getElementById('entry-status').textContent,
+      readout: document.getElementById('entry-readout').textContent,
+      meta: document.getElementById('view-meta').textContent,
+      notice: document.getElementById('notice').textContent,
+      facts: Array.prototype.map.call(document.querySelectorAll('.panel-facts'), (n) => n.textContent).join(' | '),
+      badges: Array.prototype.map.call(document.querySelectorAll('.panel-strip .badge'), (n) => n.textContent).join(' | '),
+      labels: Array.prototype.map.call(document.querySelectorAll('.panel-chart'), (n) => n.getAttribute('aria-label') || '').join(' | '),
+      charts: Array.prototype.map.call(document.querySelectorAll('.panel-chart svg text'), (n) => n.textContent).join(' | '),
+      evidence: Array.prototype.map.call(document.querySelectorAll('.panel-evidence'), (n) => n.textContent).join(' | '),
+      empty: Array.prototype.map.call(document.querySelectorAll('.panel-empty'), (n) => n.textContent).join(' | '),
+      sheet: (() => {
+        const dialog = document.getElementById('import-dialog')
+        if (!dialog || !dialog.open) return ''
+        // The sheet's own words, not the chosen file's path or the sample cells: a file legitimately
+        // called lab-export-v2.csv is not log vocabulary.
+        return ['import-summary', 'import-plan', 'import-apply', 'import-time', 'import-error']
+          .map((id) => {
+            const element = document.getElementById(id)
+            return element ? element.textContent : ''
+          })
+          .join(' | ')
+      })(),
+    }))()`),
+  )
+  // Every visible word, including the drawing's own text and the evidence line under it. The
+  // drawing is plain now — axes, grid, fits, marks, caption — so an id, a dataset name or a shape
+  // version in it is a leak, not a frame this guard has not reached yet.
+  for (const [surface, value] of Object.entries(seen)) {
+    if (LOG_VOCABULARY.test(value)) {
+      throw new Error(`log vocabulary in the ${surface} at ${where}: "${value}"`)
+    }
+  }
+}
+
+/**
+ * Type one value into one entry field, proving the focus landed first. Writing a tab re-renders the
+ * bar, and a keystroke sent during that repaint lands wherever the browser restores focus — which
+ * showed up three steps later as a point missing its first field. The check is the fix.
+ */
+async function typeIntoField(index, text, name) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let focused = false
+    for (let waited = 0; waited < 20 && !focused; waited += 1) {
+      focused = await focusField(index)
+      if (!focused) await sleep(50)
+    }
+    if (!focused) throw new Error(`entry field ${index} (${name}) could not take focus`)
+    typeText(text)
+    if ((await fieldValue(name)) === text) return
+    // The bar re-renders when a point lands, replacing the input mid-keystroke. Clear what arrived
+    // and type again into the input that is on screen now.
+    await window.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('input[data-field="${name}"]')
+      if (!input) return
+      input.value = ''
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    await sleep(100)
+  }
+  throw new Error(`entry field ${name} did not receive "${text}": "${await fieldValue(name)}"`)
+}
+
+/**
+ * The verdict chip explains itself on hover and on keyboard focus, in a sentence a newcomer reads
+ * without a glossary. Both paths are exercised, because a hover-only explanation is invisible to a
+ * keyboard reader and this window has to work without a pointer.
+ */
+async function assertVerdictExplained(where) {
+  // A hidden window does not take DOM focus, so a keyboard check has to be run against the shown
+  // window — the same one the typing checks use.
+  await focusWindowForInput()
+  const seen = JSON.parse(
+    await window.webContents.executeJavaScript(`(() => {
+      const chip = document.querySelector('.panel-evidence .verdict')
+      const tooltip = document.getElementById('tooltip')
+      const read = () => (tooltip.hidden ? '' : tooltip.textContent)
+      const result = { label: chip ? chip.textContent : '', hover: '', focus: '', focusable: false }
+      if (!chip) return JSON.stringify(result)
+      chip.dispatchEvent(new PointerEvent('pointerenter'))
+      result.hover = read()
+      chip.dispatchEvent(new PointerEvent('pointerleave'))
+      result.focusable = chip.tabIndex >= 0 && document.activeElement !== chip
+      chip.focus()
+      result.focus = read()
+      result.left = document.activeElement !== chip
+      chip.blur()
+      return JSON.stringify(result)
+    })()`),
+  )
+  if (seen.label === '') throw new Error(`no verdict chip on the drawing at ${where}`)
+  if (seen.hover === '') throw new Error(`the verdict "${seen.label}" explains nothing on hover at ${where}`)
+  if (!seen.focusable) throw new Error(`the verdict chip cannot be reached from the keyboard at ${where}`)
+  if (seen.focus !== seen.hover) throw new Error(`the verdict reads differently on focus at ${where}: "${seen.focus}"`)
+  if (seen.hover.length < 40 || !/[.!]/.test(seen.hover)) {
+    throw new Error(`the verdict explanation is not a sentence at ${where}: "${seen.hover}"`)
+  }
+  if (LOG_VOCABULARY.test(seen.hover)) {
+    throw new Error(`log vocabulary in the verdict explanation at ${where}: "${seen.hover}"`)
+  }
+}
+
+let cspViolations = 0
   window.webContents.on('console-message', (_event, level, message) => {
     if (/Content Security Policy/.test(message)) {
       cspViolations += 1
@@ -214,7 +327,9 @@ export async function capture() {
     if (!seenInteraction.aligned) throw new Error('the mark canvas does not cover the drawing')
     if (!(seenInteraction.marksPainted > 0)) throw new Error('the mark canvas painted no marks')
     if (seenInteraction.hoveredMark !== 'visible') throw new Error('hover did not draw its ring')
+    await assertPlainSurface('hover')
   }
+  await assertVerdictExplained('the first drawing')
   await new Promise((done) => setTimeout(done, 300))
   await writeFile(join(captureDir, 'app-interaction.png'), (await window.webContents.capturePage()).toPNG())
 
@@ -256,6 +371,16 @@ export async function capture() {
     await new Promise((done) => setTimeout(done, 300))
     console.log('[bench] entry ' + JSON.stringify(timing))
     console.log('[bench] entry-state ' + (await entryState()))
+    // The evidence line under the drawing is DOM the window updates on the keystroke path: the new
+    // point has to reach it without a redraw, and without touching the SVG.
+    const evidenceAfter = await window.webContents.executeJavaScript(
+      "Array.prototype.map.call(document.querySelectorAll('.panel-evidence .evidence-text'), (n) => n.textContent).join(' | ')",
+    )
+    console.log('[bench] entry-evidence ' + JSON.stringify(evidenceAfter))
+    if (!/n = 15\b/.test(evidenceAfter)) {
+      throw new Error('the evidence line did not pick up the point that was typed: ' + evidenceAfter)
+    }
+    await assertPlainSurface('after entry')
     await writeFile(join(captureDir, 'app-entry.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
@@ -270,6 +395,7 @@ export async function capture() {
     }
     await new Promise((done) => setTimeout(done, 300))
     console.log('[bench] undo-state ' + (await entryState()))
+    await assertPlainSurface('after undo')
     await writeFile(join(captureDir, 'app-undo.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
@@ -323,8 +449,8 @@ export async function capture() {
     )
     // The frame is only worth anything if it shows the repair: the count has to include the row this
     // window never saw arrive, the bar has to say it reread, and the saved tab must agree.
-    if (!/the log had changed on disk/.test(settledState.status || '')) {
-      throw new Error('the window did not say it reread the log before writing')
+    if (!/changed on disk/.test(settledState.status || '')) {
+      throw new Error('the window did not say it reread the project before writing')
     }
     if (!/n = 16/.test(settledState.readout)) {
       throw new Error(`the bar should read n = 16, it reads "${settledState.readout}"`)
@@ -368,7 +494,7 @@ export async function capture() {
       throw new Error('the correction strip was not prefilled from the log')
     }
     // The correction row adds a line to a strip that already holds fields, a button and a readout.
-    // Overflow here would clip the record id, which is the one thing the row exists to name.
+    // Overflow here would clip the measurement the row exists to name.
     const overflowX = await window.webContents.executeJavaScript(`(() => {
       const label = document.getElementById('entry-correct-label')
       return label.scrollWidth - Math.round(label.getBoundingClientRect().width)
@@ -409,11 +535,38 @@ export async function capture() {
     if (!/n = 16/.test(correctedState.readout)) {
       throw new Error(`correcting a point must not change the count: "${correctedState.readout}"`)
     }
-    if (!/stale/.test(correctedState.status || '')) {
-      throw new Error('the correction did not say the recipe panel is now stale')
+    if (!/out of date/.test(correctedState.status || '')) {
+      throw new Error('the correction did not say the recipe panel is now out of date')
     }
+    await assertPlainSurface('after a correction')
     await writeFile(join(captureDir, 'app-corrected.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
+
+    // The notice's action is a button, not a command: refresh redraws what the core can redraw and
+    // says plainly what it could not (a recipe panel needs its analysis run again).
+    const noticeAction = await window.webContents.executeJavaScript(`(() => {
+      const notice = document.getElementById('notice')
+      const button = notice.querySelector('.notice-refresh')
+      return JSON.stringify({ visible: !notice.hidden, button: Boolean(button), text: notice.textContent })
+    })()`)
+    console.log('[bench] notice ' + noticeAction)
+    const seenNotice = JSON.parse(noticeAction)
+    if (!seenNotice.visible) throw new Error('a stale panel produced no notice')
+    if (!seenNotice.button) throw new Error('the notice offers no action')
+    await window.webContents.executeJavaScript(
+      "document.querySelector('#notice .notice-refresh').click()",
+    )
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Refreshed/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const refreshedStatus = JSON.parse(await entryState()).status || ''
+    console.log('[bench] refreshed ' + refreshedStatus)
+    if (!/^Refreshed/.test(refreshedStatus)) {
+      throw new Error('the notice\u2019s Refresh button did not run: ' + refreshedStatus)
+    }
+    await assertPlainSurface('after refresh')
 
     // A tab built from the dialog: a name, a dataset, a recipe. It runs against a second, untouched
     // copy of the fixture — the frames above appended and corrected points, and a verdict computed
@@ -485,9 +638,25 @@ export async function capture() {
         }),
     )
     if (tabFile.panels[0].recipe !== 'drift') throw new Error('the tab was not built by the recipe')
-    if (!tabState.badges.every((badge) => badge === 'current')) {
-      throw new Error('a freshly built tab must be current')
+    // Up to date is silence: a badge that asks nothing is not shown (ADR 0015).
+    if (!tabState.badges.every((badge) => badge === '')) {
+      throw new Error('a freshly built tab still shows a status word: ' + JSON.stringify(tabState.badges))
     }
+    if (!/^\d+ panels? · \d+ points?$/.test(tabState.meta || '')) {
+      throw new Error('the tab strip is not the plain count: ' + tabState.meta)
+    }
+    await assertPlainSurface('after creating a tab')
+    await assertVerdictExplained('the tab the window built')
+    // The frame the review protocol asks for: the word and the sentence it opens.
+    await window.webContents.executeJavaScript(
+      "document.querySelector('.panel-evidence .verdict').dispatchEvent(new PointerEvent('pointerenter'))",
+    )
+    await sleep(250)
+    await writeFile(join(captureDir, 'app-verdict.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+    await window.webContents.executeJavaScript(
+      "document.querySelector('.panel-evidence .verdict').dispatchEvent(new PointerEvent('pointerleave'))",
+    )
     if (!tabNames.includes('regimes')) throw new Error('the new tab is not in the rail')
     await writeFile(join(captureDir, 'app-new-tab.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
@@ -612,6 +781,22 @@ export async function capture() {
     console.log('[bench] empty-tab ' + JSON.stringify({ status: emptyState.status, readout: emptyState.readout, axes: emptyPanel.chart.x.label + '/' + emptyPanel.chart.y.label }))
     if (!/n = 0/.test(emptyState.readout || '')) throw new Error('the empty-tab readout is not n = 0: ' + emptyState.readout)
     if (emptyState.marks !== 0) throw new Error(`the empty tab drew ${emptyState.marks} marks`)
+    // A brand-new project's first panel: no shape id, no dataset, and no command to copy.
+    const emptySeen = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => JSON.stringify({
+        sentence: Array.prototype.map.call(document.querySelectorAll('.panel-empty'), (n) => n.textContent).join(' '),
+        drawn: Array.prototype.map.call(document.querySelectorAll('.panel-chart svg text'), (n) => n.textContent).join(' '),
+      }))()`),
+    )
+    console.log('[bench] empty-panel ' + JSON.stringify(emptySeen))
+    if (!/No observations yet\. Add the first point below\./.test(emptySeen.sentence || '')) {
+      throw new Error('the empty panel does not teach the button: ' + emptySeen.sentence)
+    }
+    // The sentence is DOM from the copy owner; the drawing itself says nothing on an empty frame.
+    if (/observations|point below/.test(emptySeen.drawn || '')) {
+      throw new Error('the empty drawing still composes its own sentence: ' + emptySeen.drawn)
+    }
+    await assertPlainSurface('the empty first panel')
     for (const [label, factor] of [['100', 1], ['125', 1.25], ['150', 1.5]]) {
       window.webContents.setZoomFactor(factor)
       await sleep(600)
@@ -622,14 +807,12 @@ export async function capture() {
     await sleep(400)
 
     // The same bar types into the new project: the door is only open if a point can follow the shape.
-    await focusField(0)
-    typeText('2.5')
-    await focusField(1)
-    typeText('12')
+    await typeIntoField(0, '2.5', 'mass')
+    await typeIntoField(1, '12', 'extension')
     pressEnter()
     for (let waited = 0; waited < 50; waited += 1) {
       const state = JSON.parse(await entryState())
-      if (/^Recorded /.test(state.status || '')) break
+      if (/^Saved /.test(state.status || '')) break
       await sleep(100)
     }
     await sleep(300)
@@ -638,7 +821,7 @@ export async function capture() {
       '[bench] project-first-point ' +
         JSON.stringify({ status: firstPoint.status, readout: firstPoint.readout, typed: firstPoint.typed }),
     )
-    if (!/^Recorded /.test(firstPoint.status || '')) {
+    if (!/^Saved /.test(firstPoint.status || '')) {
       throw new Error('the first point in the new project was not recorded')
     }
     if (!/n = 1/.test(firstPoint.readout)) {
@@ -668,15 +851,13 @@ export async function capture() {
     if (!/x mass, y extension/.test(customImage.name)) {
       throw new Error(`the custom-axis accessible name lost its axes: ${customImage.name}`)
     }
-    if (!/n = 1/.test(customImage.name)) {
+    if (!/1 point/.test(customImage.name)) {
       throw new Error(`the custom-axis accessible name lost its count: ${customImage.name}`)
     }
 
     if (!(await focusWindowForInput())) throw new Error('the window never took focus for the custom-axis point')
-    await focusField(0)
-    typeText('2.6')
-    await focusField(1)
-    typeText('12.2')
+    await typeIntoField(0, '2.6', 'mass')
+    await typeIntoField(1, '12.2', 'extension')
     pressEnter()
     let customPatched = customBefore
     for (let waited = 0; waited < 60; waited += 1) {
@@ -695,10 +876,8 @@ export async function capture() {
     }
 
     if (!(await focusWindowForInput())) throw new Error('the window never took focus for the redraw')
-    await focusField(0)
-    typeText('1000')
-    await focusField(1)
-    typeText('5000')
+    await typeIntoField(0, '1000', 'mass')
+    await typeIntoField(1, '5000', 'extension')
     pressEnter()
     let customRedrawn = customPatched
     for (let waited = 0; waited < 80; waited += 1) {
@@ -869,7 +1048,7 @@ export async function capture() {
     console.log('[bench] import-dialog ' + importSheet)
     if (!sheetState.open || !sheetState.apply) throw new Error('the import sheet did not open with a preview')
     if (!/lab-export\.csv$/.test(sheetState.path)) throw new Error('the sheet names the wrong file: ' + sheetState.path)
-    if (!/5 row\(s\)/.test(sheetState.summary) || !/2 comment line\(s\) skipped/.test(sheetState.summary)) {
+    if (!/^5 rows · 5 columns · 2 comment lines skipped/.test(sheetState.summary || '')) {
       throw new Error('the sheet does not report what the core read: ' + sheetState.summary)
     }
     if (!/map a column onto x, y/.test(sheetState.summary)) {
@@ -930,12 +1109,13 @@ export async function capture() {
       "(() => document.getElementById('import-plan').textContent)()",
     )
     console.log('[bench] import-plan ' + JSON.stringify(sheetPlan))
-    if (!/version 3 replaces version 2 · \+5 −14 ~0/.test(sheetPlan)) {
-      throw new Error('the sheet did not name the version it would create: ' + sheetPlan)
+    if (!/^5 rows · 5 added, 14 removed, none changed/.test(sheetPlan || '')) {
+      throw new Error('the sheet did not say what the import changes: ' + sheetPlan)
     }
-    if (!/14 row\(s\) not in this file are withdrawn/.test(sheetPlan)) {
+    if (!/14 rows not in this file will be withdrawn, not deleted/.test(sheetPlan)) {
       throw new Error('the sheet did not say which rows leave: ' + sheetPlan)
     }
+    await assertPlainSurface('the import sheet')
 
     // The frame the verdict is about: the sheet with a real mapping on it, before anything is
     // written. Captured after the import the dialog is gone, which is a screenshot of the wrong state.
@@ -996,10 +1176,10 @@ export async function capture() {
           identical: preservedText === chosenText,
         }),
     )
-    if (!/^Imported 5 row\(s\) into main as version 3 \(\+5 −14 ~0, replacing version 2\)/.test(importedState.status || '')) {
-      throw new Error('the bar did not report the version the import created: ' + importedState.status)
+    if (!/^Imported 5 rows · 5 added, 14 removed, none changed/.test(importedState.status || '')) {
+      throw new Error('the bar did not report what the import changed: ' + importedState.status)
     }
-    if (!/14 row\(s\) not in the file were withdrawn from version 3; version 2 still holds them/.test(importedState.status || '')) {
+    if (!/14 rows not in the file were withdrawn; the earlier version still holds them/.test(importedState.status || '')) {
       throw new Error('the bar did not account for the rows that left: ' + importedState.status)
     }
     if (!importedState.importClosed) throw new Error('the import sheet stayed open after a successful import')
@@ -1069,9 +1249,10 @@ export async function capture() {
       "(() => document.getElementById('import-plan').textContent)()",
     )
     console.log('[bench] import-plan-v2 ' + JSON.stringify(correctionPlan))
-    if (!/version 4 replaces version 3 · \+1 −2 ~1/.test(correctionPlan)) {
-      throw new Error('the corrected re-export was not planned as version 4: ' + correctionPlan)
+    if (!/^4 rows · 1 added, 2 removed, 1 changed/.test(correctionPlan || '')) {
+      throw new Error('the corrected re-export was not planned as a change: ' + correctionPlan)
     }
+    await assertPlainSurface('the corrected re-export plan')
     await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
     for (let waited = 0; waited < 100; waited += 1) {
       const state = JSON.parse(await entryState())
@@ -1092,23 +1273,21 @@ export async function capture() {
       readout: reExportedState.readout,
       strip: stripAfterReExport,
     }))
-    if (!/as version 4 \(\+1 −2 ~1, replacing version 3\)/.test(reExportedState.status || '')) {
-      throw new Error('the corrected re-export was not reported as version 4: ' + reExportedState.status)
+    if (!/^Imported 4 rows · 1 added, 2 removed, 1 changed/.test(reExportedState.status || '')) {
+      throw new Error('the corrected re-export was not reported as a change: ' + reExportedState.status)
     }
-    if (!/2 row\(s\) not in the file were withdrawn from version 4; version 3 still holds them/.test(reExportedState.status || '')) {
+    if (!/2 rows not in the file were withdrawn; the earlier version still holds them/.test(reExportedState.status || '')) {
       throw new Error('the corrected re-export did not account for what left: ' + reExportedState.status)
     }
     if (!/n = 4/.test(reExportedState.readout || '')) {
       throw new Error(`the corrected re-export should leave n = 4, it reads "${reExportedState.readout}"`)
     }
-    // The strip names every version on the tab: the plot panel was refreshed to v4 by the import,
-    // while the recipe panel stayed at v2 because the window will not rerun it here. Saying only
-    // `v2` would hide the panel that is current; saying only `v4` would hide the one that is not.
-    if (!/main · v2, v4/.test(stripAfterReExport)) {
-      throw new Error(
-        'the strip does not name every version the tab was drawn from: ' + stripAfterReExport,
-      )
+    // The strip is a count, not a version list: what differs between the panels is said by each
+    // panel's own state word, and the versions themselves are agent vocabulary.
+    if (!/^2 panels · 4 points$/.test(stripAfterReExport)) {
+      throw new Error('the strip is not the plain count: ' + stripAfterReExport)
     }
+    await assertPlainSurface('after a re-export')
     await writeFile(join(captureDir, 'app-version-diff.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
@@ -1304,9 +1483,10 @@ export async function capture() {
       "(() => document.getElementById('import-plan').textContent)()",
     )
     console.log('[bench] import-named-time ' + JSON.stringify(namedPlan))
-    if (!/version 5 replaces version 4 · \+1 −0 ~0/.test(namedPlan)) {
-      throw new Error('the named time column was not planned as a correct version: ' + namedPlan)
+    if (!/^5 rows · 1 added, none removed, none changed/.test(namedPlan || '')) {
+      throw new Error('the named time column was not planned as one added row: ' + namedPlan)
     }
+    await assertPlainSurface('the named time column sheet')
     await writeFile(join(captureDir, 'app-import-time.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
     await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
@@ -1320,8 +1500,8 @@ export async function capture() {
       '[bench] import-named-time-result ' +
         JSON.stringify({ status: namedState.status, readout: namedState.readout }),
     )
-    if (!/as version 5 \(\+1 −0 ~0, replacing version 4\)/.test(namedState.status || '')) {
-      throw new Error('the named time column was not imported as version 5: ' + namedState.status)
+    if (!/^Imported 5 rows · 1 added, none removed, none changed/.test(namedState.status || '')) {
+      throw new Error('the named time column was not imported as one added row: ' + namedState.status)
     }
     const namedVersions = await readCli(['dataset', 'versions', 'main'], importProject)
     const namedDiff = await readCli(['dataset', 'diff', 'main', '4', '5'], importProject)
@@ -1369,12 +1549,16 @@ export async function capture() {
       "(() => JSON.stringify(Array.prototype.map.call(document.querySelectorAll('.panel-strip .badge'), (badge) => badge.textContent)))()",
     )
     console.log('[bench] mixed-versions ' + JSON.stringify({ strip: mixedStrip, badges: JSON.parse(mixedBadges) }))
-    if (!/main · v2, v3 \(now v4\)/.test(mixedStrip)) {
-      throw new Error('the strip does not name every version the tab was drawn from: ' + mixedStrip)
+    if (!/^2 panels · 16 points$/.test(mixedStrip)) {
+      throw new Error('the strip is not the plain count: ' + mixedStrip)
     }
     if (JSON.parse(mixedBadges).length !== 2) {
       throw new Error('the mixed tab did not paint two panels: ' + mixedBadges)
     }
+    if (!JSON.parse(mixedBadges).every((badge) => badge === 'Out of date')) {
+      throw new Error('a panel drawn from older data does not say so: ' + mixedBadges)
+    }
+    await assertPlainSurface('a tab drawn from two versions')
     await writeFile(join(captureDir, 'app-mixed-versions.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
   }

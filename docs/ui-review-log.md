@@ -111,6 +111,11 @@ The full reasoning and the resulting decisions are [ADR 0015](adr/0015-user-surf
 | 2026-10-19 | Field-pair plotting on a custom shape | QP Stats' `altitude over time` on a clock axis and `app against pps` on numeric axes; the dialog offers the shape's own six fields | **closed by direction 2026-10-20** | U12, U20: verdict hover and the 150% layout |
 | 2026-10-20 | One column below 980 px of viewport | At 150% the grid drops to one 519 px panel per row instead of two ~170 px ones; 125% keeps two; the capture checks the computed column count | **closed by direction 2026-10-20** | implemented in `a3888b4`; no follow-up |
 
+| 2026-10-20 | Plain words in the window (`app-interaction`, `app-corrected`, `app-mixed-versions`) | **Screen:** the window with a point hovered, after a correction, and on a tab drawn from two versions. **Check:** does the hover show only the values you measured, does the correction strip name the measurement rather than a long code, and is the quiet `current` label gone? **Wrong looks like:** a string of letters and digits on hover, a file or version named in a status, or a badge that asks nothing. **Your call:** keep this wording, or should a status be shorter still? | **awaiting your review** | none; every window string now comes from `app/renderer/copy.js`, and the capture refuses log vocabulary on hover, status, facts, badges and accessible names |
+
+| 2026-10-20 | A first run: an empty project, its first panel, and the first import (`app-empty-tab-100/125/150`, `app-import`, `app-import-time`) | **Screen:** a brand-new project with one empty tab, then the import sheet with a real file mapped. **Check:** does the empty panel say what to do in words, and does the sheet tell you what the click will do without a version number or a `+1 −2` count? **Wrong looks like:** the empty panel prints a command to copy, the sheet prints `version 4 replaces version 3`, or the button just says `Import`. **Your call:** keep this wording, or should the empty panel say less? | **awaiting your review** | none; `copy.panelEmpty`, `copy.importSummary`, `copy.importPlan` and `copy.importButton` own these words |
+| 2026-10-20 | The drawing says its own evidence, and the verdict explains itself (`app-new-tab`, `app-verdict`) | **Screen:** a tab built from the dialog, then the same panel with the verdict's explanation open. **Check:** can you tell what the curve is fitted to (`n`, degrees of freedom) without a dataset, shape or version name anywhere in the picture, and does the verdict word tell you what to do next when you hover or tab to it? **Wrong looks like:** `main · drift` above the plot, `DOF 10` in a footer, or a verdict chip that says nothing when you point at it. **Your call:** is `Tentative` the right word, and does the sentence say enough? | **awaiting your review** | none; the drawing is plain (`renderChartLayers(spec, { plain: true })`), `copy.panelEvidence` and `copy.verdictExplanation` own the words, and the capture refuses names in the drawing and checks the sentence on hover and on focus |
+
 **Note on the 2026-10-20 review.** The user did not approve these frames individually; they reviewed
 the window and its frames, found the problems the stills had not made legible (ids in tooltips, duplicated
 facts, commands in empty states, unreadable numbers, `New…`/`Open…` spacing), and directed the next
@@ -138,8 +143,10 @@ pair — and that is the finding.
 
 - **Rail (left):** projects most-recent-first, the open one marked, tabs under them with a panel
   count. A missing project folder is hidden behind a count rather than shown as a broken entry.
-- **Stage:** one card per panel, each drawing the core's chart. The chart's heading, footer and caption
-  are inside the drawing; the strip repeats only the facts that zooming could hide.
+- **Stage:** one card per panel. The strip carries the panel's title, method and point count; the
+  drawing itself is the picture only — axes, grid, fits, marks and the recipe's caption — with the
+  evidence line and the verdict chip as DOM under it. The verdict chip explains itself on hover and
+  on keyboard focus.
 - **Scaling:** 100% and 125% keep two panels side by side; below 980 px of viewport the grid uses one
   column, so 150% gets a readable 519 px panel instead of two ~170 px ones. A 150% user on a wide
   screen still gets two, because the rule is the viewport, not the scaling.
@@ -158,8 +165,14 @@ one page at 100%, 125% and 150% of natural size, with the file's own comment hea
 images are deliberately not committed.
 
 `pnpm app:capture` builds the shell's core bundle, launches the real window, captures it at
-100/125/150%, then drives hover, wheel zoom and a keyboard pan and captures that frame last. Its PNGs
-are git-ignored too; `docs/ui-review/index.html` is the tracked contact sheet that shows them.
+100/125/150%, then drives it with real events: types a point, undoes it, types a refused value, opens
+the import sheet and a version diff, forces an external write and refreshes, and runs the packaged
+build. Its PNGs are git-ignored; `docs/ui-review/index.html` is the tracked contact sheet that shows
+them. It also asserts what a person must see — values on hover, no log vocabulary in any surface, an
+evidence line, a verdict that explains itself, one column at 150% — and exits non-zero when a check
+fails, so a run is a gate rather than a pile of pictures. The harness re-focuses the live input and
+retries typing when the entry bar re-renders mid-keystroke: that re-render was the real cause of the
+intermittent focus failures, and the retry still fails unless the field holds the value it must.
 
 ## Standing questions for every review
 

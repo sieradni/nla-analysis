@@ -3,6 +3,12 @@ import { state, ui, node, bridge, call, showFailure } from './state.js'
 import { renderTabs } from './rail.js'
 import { renderView, captureRestore } from './panels.js'
 import { renderEntry, setStatus, focusFirstField } from './entry.js'
+import {
+  importButton,
+  importPlan as importPlanText,
+  importSummary,
+  status as copyStatus,
+} from './copy.js'
 
 export function fileBase(path) {
   return String(path || '').split(/[\\/]/).pop() || path
@@ -24,21 +30,6 @@ export function showImportError(error) {
  * they appear in the file, and one row per shape field with the type it will be validated as.
  */
 export function renderImportPreview(preview) {
-  var notes = [
-    preview.rows + ' row(s)',
-    preview.columns.length + ' column(s)',
-    'into ' + preview.dataset + ' (' + preview.shape + ')',
-  ]
-  if (preview.comments > 0) notes.push(preview.comments + ' comment line(s) skipped')
-  if (preview.raggedRows > 0) notes.push(preview.raggedRows + ' row(s) with a different field count')
-  if (preview.duplicate) notes.push('these exact contents are already in this dataset')
-  // The version this becomes, said before the mapping is chosen: an import into a dataset that
-  // already holds rows replaces them, and that is not something to discover afterwards.
-  notes.push(
-    preview.parent === null
-      ? 'creates version 1'
-      : 'replaces version ' + preview.parent + ' (' + preview.parentRows + ' row(s)) as version ' + preview.version,
-  )
   var unmapped = preview.fields
     .filter(function (field) {
       return !field.optional && !preview.suggested[field.name]
@@ -46,8 +37,8 @@ export function renderImportPreview(preview) {
     .map(function (field) {
       return field.name
     })
-  if (unmapped.length > 0) notes.push('map a column onto ' + unmapped.join(', '))
-  ui.importSummary.textContent = notes.join(' · ')
+  // What the file holds and what the write would do, before any mapping is promised.
+  ui.importSummary.textContent = importSummary(preview, unmapped)
 
   ui.importPreview.textContent = ''
   var table = document.createElement('table')
@@ -167,6 +158,7 @@ export function importIgnoreColumns() {
 
 /** The planned version and diff, or the word a refusal deserves, in one line. */
 export function renderImportPlan(planned, refusal) {
+  ui.importApply.querySelector('span').textContent = importButton(planned)
   if (refusal) {
     ui.importPlan.hidden = false
     ui.importPlan.className = 'import-plan is-error'
@@ -181,34 +173,8 @@ export function renderImportPlan(planned, refusal) {
   }
   ui.importPlan.className = 'import-plan'
   ui.importPlan.hidden = false
-  var counts =
-    '+' + planned.diff.added + ' \u2212' + planned.diff.removed + ' ~' + planned.diff.changed
-  var parts = [
-    planned.parent === null
-      ? 'version 1 · ' + planned.rows + ' row(s)'
-      : 'version ' + planned.version + ' replaces version ' + planned.parent + ' · ' + counts,
-  ]
-  if (planned.removedRows.length > 0) {
-    var leaving = planned.removedRows.slice(0, 3).map(function (row) {
-      return shortTime(row.t)
-    })
-    parts.push(
-      planned.removedRows.length +
-        ' row(s) not in this file are withdrawn (' +
-        leaving.join(', ') +
-        (planned.removedRows.length > leaving.length ? ', \u2026' : '') +
-        '), not deleted',
-    )
-  }
-  if (planned.ignoredColumns.length > 0) parts.push('ignoring ' + planned.ignoredColumns.join(', '))
-  if (planned.warnings.length > 0) parts.push(planned.warnings[0])
-  ui.importPlan.textContent = parts.join(' \u00b7 ')
-}
-
-/** `2026-01-05T09:04:00.000Z` → `2026-01-05 09:04`, because a row is named by its instant. */
-export function shortTime(value) {
-  if (typeof value !== 'string' || value.length < 16) return String(value)
-  return value.slice(0, 10) + ' ' + value.slice(11, 16)
+  ui.importPlan.textContent = importPlanText(planned)
+  ui.importApply.querySelector('span').textContent = importButton(planned)
 }
 
 /**
@@ -326,37 +292,19 @@ export async function submitImport(event) {
     state.datasets.forEach(function (dataset) {
       if (dataset.id === imported.dataset) dataset.active = imported.active
     })
-    var counts =
-      '+' + imported.diff.added + ' \u2212' + imported.diff.removed + ' ~' + imported.diff.changed
-    var note =
-      'Imported ' +
-      imported.rows +
-      ' row(s) into ' +
-      imported.dataset +
-      ' as version ' +
-      imported.version +
-      ' (' +
-      (imported.parent === null ? 'first version' : counts + ', replacing version ' + imported.parent) +
-      ') from ' +
-      fileBase(state.importFile) +
-      '. The original is preserved at ' +
-      imported.preserved +
-      '.'
-    if (imported.parent !== null && imported.removedRows.length > 0) {
-      note +=
-        ' ' +
-        imported.removedRows.length +
-        ' row(s) not in the file were withdrawn from version ' +
-        imported.version +
-        '; version ' +
-        imported.parent +
-        ' still holds them.'
-    }
-    if (imported.ignoredColumns.length > 0) {
-      note += ' Ignored ' + imported.ignoredColumns.join(', ') + ' (no shape field).'
-    }
-    if (imported.warnings.length > 0) note += ' warning: ' + imported.warnings[0]
-    setStatus('ok', note)
+    setStatus(
+      'ok',
+      copyStatus.imported({
+        rows: imported.rows,
+        first: imported.parent === null,
+        added: imported.diff.added,
+        removed: imported.diff.removed,
+        changed: imported.diff.changed,
+        removedRows: imported.removedRows.length,
+        ignoredColumns: imported.ignoredColumns,
+        warnings: imported.warnings,
+      }),
+    )
     focusFirstField()
   } catch (error) {
     ui.importApply.disabled = false

@@ -3,7 +3,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { ulid } from './ids.ts'
-import type { ChartPoint, ChartSpec } from './chart.ts'
+import type { ChartEvidence, ChartPoint, ChartSpec } from './chart.ts'
 import type { Verdict } from './events.ts'
 
 /**
@@ -322,6 +322,10 @@ function finite(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
 /**
  * Numeric pairs, carrying the point's identity through when the recipe supplied one. An id that is not
  * a non-empty string is dropped rather than coerced: a chart mark pointing at "[object 3]" is worse
@@ -346,6 +350,42 @@ function pairs(value: unknown, keys: ['x', 'y']): ChartPoint[] | undefined {
     })
   }
   return out.length > 0 ? out : undefined
+}
+
+/**
+ * The numbers behind the evidence line, kept only when the record makes sense: the window composes a
+ * sentence from them, so a missing or mistyped field is dropped rather than rendered as `undefined`.
+ */
+function evidenceOf(value: unknown): ChartEvidence | undefined {
+  if (!isRecord(value)) return undefined
+  const points = finite(value.points)
+  if (points === undefined) return undefined
+  const parameters = finite(value.parameters)
+  const regimes = finite(value.regimes)
+  const dof = finite(value.dof)
+  const needed = finite(value.needed)
+  const noCurve =
+    value.noCurve === 'unmodelled' || value.noCurve === 'insufficient' || value.noCurve === 'segments'
+      ? value.noCurve
+      : undefined
+  const level = isRecord(value.band) ? finite(value.band.level) : undefined
+  const kind = isRecord(value.band) && typeof value.band.kind === 'string' ? value.band.kind : ''
+  const skipped = isRecord(value.skipped) ? value.skipped : undefined
+  const skippedPoints = skipped === undefined ? undefined : finite(skipped.points)
+  const skippedX = skipped !== undefined && typeof skipped.x === 'string' ? skipped.x : ''
+  const skippedY = skipped !== undefined && typeof skipped.y === 'string' ? skipped.y : ''
+  return {
+    points,
+    ...(parameters === undefined ? {} : { parameters }),
+    ...(regimes === undefined ? {} : { regimes }),
+    ...(dof === undefined ? {} : { dof }),
+    ...(noCurve === undefined ? {} : { noCurve }),
+    ...(needed === undefined ? {} : { needed }),
+    ...(level === undefined || kind === '' ? {} : { band: { level, kind } }),
+    ...(skippedPoints === undefined || skippedX === '' || skippedY === ''
+      ? {}
+      : { skipped: { points: skippedPoints, x: skippedX, y: skippedY } }),
+  }
 }
 
 /**
@@ -397,6 +437,8 @@ export function coerceChartSpec(value: unknown): ChartSpec {
     }
   }
 
+  const evidence = evidenceOf(source.evidence)
+
   return {
     x: axisOf('x'),
     y: axisOf('y'),
@@ -407,5 +449,6 @@ export function coerceChartSpec(value: unknown): ChartSpec {
     ...(lines.length > 0 ? { lines } : {}),
     ...(band.length > 1 ? { band } : {}),
     ...(typeof source.footer === 'string' ? { footer: source.footer } : {}),
+    ...(evidence === undefined ? {} : { evidence }),
   }
 }

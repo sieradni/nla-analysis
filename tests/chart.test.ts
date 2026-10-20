@@ -343,3 +343,52 @@ describe('renderChart', () => {
     expect(svg).not.toContain('Infinity')
   })
 })
+
+describe('the window\u2019s plain drawing', () => {
+  const dressed = {
+    x: { label: 'x' },
+    y: { label: 'y' },
+    title: 'drift over time',
+    subtitle: 'main \u00b7 drift',
+    footer: 'n = 3 \u00b7 2 parameters \u00b7 DOF 1 \u00b7 tentative',
+    empty: 'No observations in main yet. Add one: add --values \'{"x":1.2}\'',
+    caption: 'Slope 2.05 before the split.',
+    points: [
+      { x: 1, y: 2, id: 'p1' },
+      { x: 2, y: 4, id: 'p2' },
+      { x: 3, y: 6, id: 'p3' },
+    ],
+    provenance: { dataset: 'main', shape: 'xy.v1', version: 2 },
+  }
+
+  it('leaves every word that names the data to the window\u2019s copy owner', () => {
+    const layers = renderChartLayers(dressed, { plain: true })
+    const drawn = layers.under + layers.over
+    for (const leaked of ['drift', 'main', 'xy.v1', 'DOF', 'No observations', 'n = 3', 'data-dataset', 'data-shape']) {
+      expect(drawn).not.toContain(leaked)
+    }
+    // The part that is still the drawing: axes, a caption, the marks.
+    expect(drawn).toContain('Slope 2.05 before the split.')
+    expect(drawn).toContain('x')
+    expect(layers.marks).toHaveLength(6)
+  })
+
+  it('is one image, not a nested one with a worse label', () => {
+    const layers = renderChartLayers(dressed, { plain: true })
+    expect(layers.under).toContain('aria-hidden="true"')
+    expect(layers.under).not.toContain('role="img"')
+    // The artifact keeps its own accessible name: it is opened on its own, with nothing around it.
+    const artifact = renderChart(dressed)
+    expect(artifact).toContain('role="img"')
+    expect(artifact).toContain('aria-label="drift over time"')
+  })
+
+  it('draws nothing but an empty frame and no ticks when there is no data', () => {
+    const layers = renderChartLayers({ ...dressed, points: [] }, { plain: true })
+    const drawn = layers.under + layers.over
+    expect(drawn).not.toContain('No observations')
+    // No `0 … 1` scale either: an unlabeled frame must not look like data.
+    expect(drawn).not.toContain('>0.2<')
+    expect(layers.marks).toHaveLength(0)
+  })
+})

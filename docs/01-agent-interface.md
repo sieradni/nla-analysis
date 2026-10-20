@@ -51,7 +51,7 @@ A **view is the tab format** ([ADR 0004](adr/0004-views-and-projects.md)): one J
       "query": { "where": [{ "field": "y", "op": ">", "value": 0 }] },
       "recipe": "drift",
       "params": { "split": "auto" },
-      "chart": { "x": { "label": "x" }, "y": { "label": "y" }, "points": [{ "x": 1, "y": 2.55, "id": "01J..." }], "provenance": { "dataset": "main", "shape": "xy.v1", "version": 2 } },
+      "chart": { "x": { "label": "x" }, "y": { "label": "y" }, "points": [{ "x": 1, "y": 2.55, "id": "01J..." }], "provenance": { "dataset": "main", "shape": "xy.v1", "version": 2 }, "footer": "n = 14 · 2 regimes of 2 parameters · DOF 10 · tentative", "evidence": { "points": 14, "parameters": 2, "regimes": 2, "dof": 10, "band": { "level": 0.95, "kind": "confidence" } } },
       "verdict": "tentative",
       "n": 14,
       "recipe_hash": "…",
@@ -75,6 +75,15 @@ the data, re-runs any recipe, and rewrites the file. Panels store fingerprint ha
 over the selected rows, `recipe_hash` over the recipe file), so `view show` notices moved data and an
 edited recipe without running anything. A view records **no** log events: `bench run` remains the way
 to record an analysis.
+
+A chart spec carries its evidence twice, and the two are not alternatives. `footer` is the artifact's
+sentence — what `bench chart`, `bench view render` and anyone opening the SVG later reads. `evidence`
+is the same facts as numbers: points, parameters, regimes, degrees of freedom, the band's level and
+kind, why no curve was drawn (`unmodelled`, `insufficient`, `segments` plus `needed`), and rows the
+axes skipped for a missing field. A client composes its own words from it instead of parsing the
+footer; the desktop window ignores `footer` entirely and builds the line under the drawing from these
+numbers ([ADR 0015](adr/0015-user-surface.md)). Both are derived, so a refresh rewrites them and a
+hand-written view may omit them.
 
 A plain plot names its axes with `--x-field` and `--y-field` (`x_field`/`y_field` in the view file).
 Omitted, they are the historical `x` and `y`, so every older panel and chart reads unchanged. The

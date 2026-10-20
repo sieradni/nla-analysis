@@ -1,6 +1,6 @@
 /* The entry bar: type a point, correct a point, retract the last one, and catch the tab file up. */
-import { state, ui, node, bridge, call, shortDate } from './state.js'
-import { factsFor, describeValues } from './format.js'
+import { state, ui, node, bridge, call } from './state.js'
+import { labels, panelEvidence, panelFacts, refusal, status as copyStatus } from './copy.js'
 import { renderTabs } from './rail.js'
 import { renderView, captureRestore, renderMeta, renderStatuses, renderPanelLabels } from './panels.js'
 
@@ -108,9 +108,7 @@ export function renderStatus() {
   ui.entryStatus.textContent = ''
   if (!status) {
     if (state.view && state.correction === null) {
-      ui.entryStatus.appendChild(
-        node('span', 'idle', 'Click a point to correct it, or Shift+Arrow in a chart to step through them.'),
-      )
+      ui.entryStatus.appendChild(node('span', 'idle', copyStatus.idleHint()))
     }
     return
   }
@@ -144,27 +142,22 @@ export function renderEntry() {
   var correction = state.correction
   ui.entry.classList.toggle('correcting', correction !== null)
   ui.entryCorrect.hidden = correction === null
-  ui.entryAdd.querySelector('span').textContent = correction === null ? 'Add point' : 'Save correction'
+  ui.entryAdd.querySelector('span').textContent =
+    correction === null ? labels.addPoint : labels.saveCorrection
   ui.entryUndo.hidden = correction !== null
   if (correction !== null) {
     ui.entryCorrectLabel.textContent = ''
-    ui.entryCorrectLabel.appendChild(node('span', null, 'Correcting '))
-    ui.entryCorrectLabel.appendChild(node('span', 'id', correction.id))
+    ui.entryCorrectLabel.appendChild(node('span', null, 'Editing '))
     ui.entryCorrectLabel.appendChild(
       node(
         'span',
         'note',
-        ' · recorded ' +
-          shortDate(correction.tObserved) +
-          ' · ' +
-          (correction.corrections === 0
-            ? 'no corrections yet'
-            : correction.corrections + ' corrections already') +
-          (correction.recipePanels.length > 0
-            ? ' · panel ' +
-              (correction.recipePanels[0] + 1) +
-              ' was drawn by a recipe and will go stale'
-            : ''),
+        copyStatus.correctionRow({
+          values: correction.values,
+          observed: correction.tObserved,
+          corrections: correction.corrections,
+          stalePanels: correction.recipePanels.length,
+        }),
       ),
     )
   }
@@ -176,17 +169,14 @@ export function renderEntry() {
   )
   ui.entryAdd.disabled = state.busy
   ui.entryUndo.disabled = state.busy || !state.lastPoint
-  ui.entryUndo.title = state.lastPoint
-    ? 'Retract ' + state.lastPoint.id + ' with a logged event (Ctrl+Z in an empty bar)'
-    : 'Nothing to undo: no point has been added from this window'
+  ui.entryUndo.title = copyStatus.undoTitle(state.lastPoint)
 
   if (state.timing !== null) {
     ui.entryReadout.appendChild(node('b', null, state.timing + ' ms'))
     ui.entryReadout.appendChild(document.createTextNode(' · '))
   }
   ui.entryReadout.appendChild(document.createTextNode('n = ' + entry.active))
-  ui.entryReadout.title =
-    'n is the active points in ' + entry.dataset + '. The ms figure is Enter → painted frame, budget 100 ms (ADR 0003).'
+  ui.entryReadout.title = copyStatus.readoutTitle()
   renderStatus()
 }
 
@@ -245,20 +235,14 @@ export async function submitEntry(event) {
     })
     focusFirstField()
 
-    var note =
-      'Recorded ' +
-      recorded.id +
-      ' · ' +
-      describeValues(recorded.values) +
-      ' · ' +
-      recorded.active +
-      ' active in ' +
-      recorded.dataset
-    if (recorded.warnings.length > 0) note += ' · warning: ' + recorded.warnings.join('; ')
-    if (recorded.reread) {
-      note += ' · the log had changed on disk, so it was reread before this point was added'
-    }
-    setStatus('ok', note)
+    setStatus(
+      'ok',
+      copyStatus.saved({
+        active: recorded.active,
+        warnings: recorded.warnings,
+        reread: recorded.reread,
+      }),
+    )
 
     // Enter → painted frame, not Enter → DOM updated: two frames put the measurement after the
     // paint that shows the new mark. The same figure is what the bar displays.
@@ -292,7 +276,7 @@ export async function submitEntry(event) {
     var firstInvalid = markProblems(problems)
     setStatus(
       'error',
-      (error && error.message) || 'the core refused the point',
+      refusal(error && error.message),
       problems.length > 0 ? problems : error && error.hint ? [error.hint] : [],
     )
     if (firstInvalid) firstInvalid.focus()
@@ -319,7 +303,7 @@ export function applyMarks(marks, active) {
     if (panel && typeof panel.n === 'number') panel.n += 1
     var figure = ui.grid.children[mark.index]
     var facts = figure && figure.querySelector('.panel-facts')
-    if (facts && panel) facts.textContent = factsFor(panel)
+    if (facts && panel) facts.textContent = panelFacts(panel)
   })
   if (state.opened && state.opened.entry) state.opened.entry.active = active
   renderMeta()
@@ -345,18 +329,13 @@ export async function catchUp() {
         state.view = again.view
         renderTabs()
         renderView(captureRestore())
-        setStatus(
-          'error',
-          'The log changed on disk while this tab was open — it was reread and the tab redrawn. ' +
-            'Anything the other writer added is in that drawing, not in the one before it.',
-        )
+        setStatus('error', copyStatus.rereadAfterWrite())
         return
       }
       if (persisted.saved === false) {
         setStatus(
           'error',
-          'The point is recorded, but this tab could not be saved: its rebuilt drawing was no longer waiting. ' +
-            'Reopen the tab to rebuild it.',
+          copyStatus.couldNotSave('its rebuilt drawing was no longer waiting. Reopen the tab to rebuild it.'),
         )
         return
       }
@@ -375,11 +354,7 @@ export async function catchUp() {
       state.view = settled.view
       renderTabs()
       renderView(captureRestore())
-      setStatus(
-        'error',
-        'The log changed on disk while this tab was open — it was reread and the tab redrawn. ' +
-          'Anything the other writer added is in that drawing, not in the one before it.',
-      )
+      setStatus('error', copyStatus.rereadAfterWrite())
       return
     }
     state.opened = settled
@@ -390,11 +365,13 @@ export async function catchUp() {
       var figure = ui.grid.children[index]
       if (!figure || !panel) return
       var facts = figure.querySelector('.panel-facts')
-      if (facts) facts.textContent = factsFor(panel)
-      var footer = figure.querySelector('svg text.footer')
-      var text = settled.footers[index]
-      if (footer && typeof text === 'string') footer.textContent = text
-      if (panel && typeof text === 'string') panel.chart.footer = text
+      if (facts) facts.textContent = panelFacts(panel)
+      // The evidence is the window's DOM, not the drawing: take the core's new numbers, update the
+      // line the copy owner composes, and leave the SVG alone.
+      var evidence = settled.evidence[index]
+      if (panel && evidence) panel.chart.evidence = evidence
+      var line = figure.querySelector('.panel-evidence .evidence-text')
+      if (line && panel) line.textContent = panelEvidence(panel)
     })
     renderMeta()
     renderStatuses(settled.statuses)
@@ -402,10 +379,7 @@ export async function catchUp() {
       window.__benchTiming.commit = performance.now() - startedAt
     }
   } catch (error) {
-    setStatus(
-      'error',
-      'The point is recorded, but this tab could not be saved: ' + ((error && error.message) || error),
-    )
+    setStatus('error', copyStatus.couldNotSave((error && error.message) || String(error)))
   }
 }
 
@@ -434,12 +408,7 @@ export async function selectPoint(id, index) {
     state.timing = null
     state.status = {
       kind: 'ok',
-      text:
-        'Editing ' +
-        detail.id +
-        ' · ' +
-        describeValues(detail.values) +
-        ' · Escape cancels',
+      text: copyStatus.editing({ values: detail.values, panel: state.view.panels[index] }),
       problems: [],
     }
     state.busy = false
@@ -488,24 +457,10 @@ export async function submitCorrection() {
     renderTabs()
     renderView(captureRestore())
     var stale = corrected.view.kept
-    var note =
-      'Corrected ' +
-      corrected.id +
-      ' · ' +
-      describeValues(corrected.values) +
-      ' · ' +
-      corrected.active +
-      ' active in ' +
-      corrected.dataset +
-      '. A point_corrected event supersedes the original; the log keeps both.'
-    if (stale.length > 0) {
-      note +=
-        ' Panel ' +
-        (stale[0].index + 1) +
-        ' was drawn by a recipe, so it is stale until it is rerun — ' +
-        'the window will not claim it still holds.'
-    }
-    setStatus(stale.length > 0 ? 'error' : 'ok', note)
+    setStatus(
+      stale.length > 0 ? 'error' : 'ok',
+      copyStatus.corrected({ active: corrected.active, stalePanels: stale.length }),
+    )
     focusFirstField()
   } catch (error) {
     var firstInvalid = markProblems((error && error.problems) || [])
@@ -537,14 +492,7 @@ export async function undoPoint() {
       if (state.projectEntry) state.projectEntry.active = retracted.active
       state.busy = false
       renderEntry()
-      setStatus(
-        'ok',
-        'Retracted ' +
-          target.id +
-          ' with a point_retracted event. It stays in the log; the dataset is back to ' +
-          retracted.active +
-          ' active.',
-      )
+      setStatus('ok', copyStatus.removed({ active: retracted.active }))
       return
     }
     var refreshed = await call(bridge.refreshView(state.project.dir, state.view.name))
@@ -554,14 +502,8 @@ export async function undoPoint() {
     renderTabs()
     renderView(captureRestore())
     focusFirstField()
-    var active = refreshed.entry ? refreshed.entry.active : null
-    setStatus(
-      'ok',
-      'Retracted ' +
-        target.id +
-        ' with a point_retracted event. It stays in the log' +
-        (active === null ? '.' : '; the dataset is back to ' + active + ' active.'),
-    )
+    var active = refreshed.entry ? refreshed.entry.active : 0
+    setStatus('ok', copyStatus.removed({ active: active }))
   } catch (error) {
     setStatus('error', (error && error.message) || 'the core refused the retraction', (error && error.problems) || [])
   } finally {

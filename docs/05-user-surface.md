@@ -1,8 +1,14 @@
 # The user surface — findings, decisions, and the work they create
 
-Status: **decided 2026-10-20** from the user's review of the desktop window. Nothing in this file is
-implemented yet unless it says so; the work list is [03-roadmap.md](03-roadmap.md) §6, keyed by the
-same `U` numbers. The principle is [ADR 0015](adr/0015-user-surface.md).
+Status: **decided 2026-10-20** from the user's review of the desktop window. **Built 2026-10-20:**
+U1 (hover), U3 (statuses and the correction strip), U10 (the import sheet's words), U12 (the state
+words, the spelled-out degrees of freedom and the verdict that explains itself), U14 (a plain drawing
+and an evidence line built from numbers) and U22 (the empty first panel). U13, U17, U18 and U21 are
+partly built — the number formats, the rail labels, the deduplicated facts and the **Refresh** action
+— and the roadmap row for each names what is left. Everything a person reads is composed by one
+module, `app/renderer/copy.js`; the rest of the list is still open and the roadmap row says so. The
+work list is [03-roadmap.md](03-roadmap.md) §6, keyed by the same `U` numbers. The principle is
+[ADR 0015](adr/0015-user-surface.md).
 
 This file exists because the same review kept producing "open questions" that were not really open.
 They came from describing the log to the person who uses the window. Once the question is "what does
@@ -249,6 +255,10 @@ words on the chart.
   `contradicted` says what won; `insufficient` says how many points are needed. `DOF` is spelled
   "degrees of freedom" in the hover, never as a bare abbreviation in a caption.
 
+  Built 2026-10-20: the chip is under the drawing, `Tentative`, `Supported`, `Contradicted` or
+  `Not enough data`; hover and keyboard focus both open the sentence, which names what would change
+  the answer. The same sentence is in the panel's accessible name.
+
 **Done when:** a person can hover any status word and learn (a) what it means, (b) whether they need
 to do anything, (c) what that action is; no panel shows a badge that requires no action.
 
@@ -280,10 +290,19 @@ dataset and a recipe, not a title.
 information (it is not the tab name and not the recipe name). The recipe's name is a method label, not
 a title: `Linear fit` or `Change over time`, in the panel's facts and in the hover, never concatenated
 with the dataset. The caption leads with the conclusion in one sentence, then the numbers. `n` appears
-once per panel (the chart's own footer is the authority); the strip does not repeat it.
+once per panel (the evidence line under the drawing is the authority); the strip does not repeat it.
 
 **Done when:** no frame shows the same title twice, no panel title is `main <recipe>`, and every
 number in a caption has a word saying what it is.
+
+**Built 2026-10-20:** the drawing no longer composes any of its own chrome. The core's plain mode
+(`renderChartLayers(spec, { plain: true })`) leaves out the title, the `main · drift` subtitle, the
+footer and the provenance attributes, so the picture is axes, grid, fits, marks and the recipe's
+caption. The strip owns the title, `copy.panelEvidence` owns the evidence line under the drawing and
+`copy.verdictWord`/`verdictExplanation` own the verdict chip. Nothing is rewritten after mount, and
+nothing is parsed back out of prose: the core writes the evidence as numbers (`chart.evidence`: point
+count, regimes, parameters, degrees of freedom, band, or why no curve is drawn) and `copy.js` composes
+the sentence from them. The recipes' `footer` stays for the SVG artifact and `bench chart`.
 
 ### U15. Keyboard hints say what happens
 
@@ -342,9 +361,9 @@ at tab level.
   label; when a tab spans versions, each panel carries `v4` only if it differs from the tab's newest.
   No comma lists of versions at tab level.
 - **Tab name:** rail item and stage header only; the panel title is omitted when equal.
-- **Counts:** the chart's own footer owns `n`; the stage shows the dataset's point count only when
-  panels disagree with it (e.g. a filtered panel); the entry readout shows the active count only when
-  there is no chart to carry it.
+- **Counts:** the drawing's evidence line owns `n`; the stage shows the dataset's point count only
+  when panels disagree with it (e.g. a filtered panel); the entry readout shows the active count only
+  when there is no chart to carry it.
 - **Method:** recipe name and parameters once, in the panel's facts or hover, not in the title.
 
 **Done when:** a screenshot of a single-dataset project contains `main` zero times; no number is

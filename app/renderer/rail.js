@@ -1,5 +1,6 @@
 /* The left rail: projects, saved tabs, and the folder the open project lives in. */
-import { state, ui, node, shortDate } from './state.js'
+import { state, ui, node } from './state.js'
+import { formatDay } from './copy.js'
 import { actions } from './navigation.js'
 
 export function renderProjects() {
@@ -32,7 +33,7 @@ export function renderProjects() {
       node(
         'span',
         'item-sub',
-        project.exists ? 'opened ' + shortDate(project.lastOpened) : project.dir,
+        project.exists ? 'opened ' + formatDay(project.lastOpened) : project.dir,
       ),
     )
     if (!project.exists) button.appendChild(node('span', 'item-flag', 'missing'))

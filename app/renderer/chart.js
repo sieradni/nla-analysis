@@ -7,33 +7,15 @@
  * SVG. Both halves share one `viewBox`, so zooming is still a crop of the same drawing.
  *
  * The scale is the core's. Marks arrive already projected into the chart's 760×440 units; this file
- * only maps those units onto the canvas. Hover finds the nearest mark in the crop and names it by id.
+ * only maps those units onto the canvas. Hover finds the nearest mark in the crop and reads it out
+ * through `copy.js`, so the tooltip cannot grow a second vocabulary.
  */
-;(function () {
-  'use strict'
+import { tooltipLines } from './copy.js'
 
   var SVG_NS = 'http://www.w3.org/2000/svg'
   var MIN_ZOOM = 1
   var MAX_ZOOM = 8
   var HOVER_RADIUS_PX = 13
-
-  function format(value) {
-    if (typeof value !== 'number' || !isFinite(value)) return '—'
-    var magnitude = Math.abs(value)
-    if (magnitude === 0) return '0'
-    if (magnitude >= 1e6 || magnitude < 1e-3) return value.toExponential(2).replace('e+', 'e')
-    if (magnitude >= 100) return value.toFixed(0)
-    if (magnitude >= 10) return value.toFixed(1).replace(/\.0$/, '')
-    return value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
-  }
-
-  /** A tooltip reads the same quantity the axis does: an instant as a clock, not as epoch millis. */
-  function formatAxis(value, axis) {
-    if (axis && axis.format === 'time' && typeof value === 'number' && isFinite(value)) {
-      return new Date(value).toISOString().slice(0, 19).replace('T', ' ')
-    }
-    return format(value)
-  }
 
   /**
    * Build one of the drawing's halves. The HTML parser builds SVG content in place, in the
@@ -56,7 +38,7 @@
    * `drawing` is `{ under, over, marks, style }` from the core: two SVG halves and the projected
    * marks that belong between them.
    */
-  function mount(host, panel, drawing, options) {
+  export function mount(host, panel, drawing, options) {
     host.textContent = ''
     var under = insertSvg(host, drawing.under, 'afterbegin')
     under.classList.add('layer-under')
@@ -301,29 +283,14 @@
 
       var tooltip = options.tooltip
       tooltip.textContent = ''
-      var id = document.createElement('span')
-      id.className = 't-id'
-      id.textContent = mark.id
-      tooltip.appendChild(id)
-      if (point) {
-        var numbers = document.createElement('div')
-        numbers.className = 't-values'
-        numbers.textContent =
-          (panel.chart.x && panel.chart.x.label ? panel.chart.x.label : 'x') +
-          ' ' +
-          formatAxis(point.x, panel.chart.x) +
-          '   ' +
-          (panel.chart.y && panel.chart.y.label ? panel.chart.y.label : 'y') +
-          ' ' +
-          formatAxis(point.y, panel.chart.y)
-        tooltip.appendChild(numbers)
-      }
-      var hint = document.createElement('div')
-      hint.className = 't-hint'
-      hint.textContent = panel.chart.provenance && panel.chart.provenance.dataset
-        ? panel.chart.provenance.dataset + ' · ' + (panel.chart.provenance.shape || '')
-        : ''
-      if (hint.textContent) tooltip.appendChild(hint)
+      // Values, their labels and their units: the readout answers "what did this point measure?"
+      // and nothing about the record, the dataset or the shape that holds it.
+      tooltipLines(point || {}, panel).forEach(function (line, index) {
+        var row = document.createElement('div')
+        row.className = index === 0 ? 't-values' : 't-hint'
+        row.textContent = line
+        tooltip.appendChild(row)
+      })
 
       tooltip.hidden = false
       var width = tooltip.offsetWidth
@@ -513,6 +480,3 @@
     host.__benchChart = handle
     return handle
   }
-
-  window.BenchCharts = { mount: mount }
-})()

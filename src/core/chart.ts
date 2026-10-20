@@ -58,6 +58,26 @@ export interface ChartProvenance {
   version?: number
 }
 
+/**
+ * What the drawing stands on, as numbers rather than prose. The window composes its own evidence
+ * sentence from these (ADR 0015); the footer stays the artifact's line, so `bench chart` and anything
+ * that opens the file later reads the recipe's own words without a second renderer.
+ */
+export interface ChartEvidence {
+  points: number
+  /** Fitted parameters, per segment when `regimes` is set. */
+  parameters?: number
+  regimes?: number
+  dof?: number
+  /** Why the frame shows no curve: no model, too few observations, or too few in a segment. */
+  noCurve?: 'unmodelled' | 'insufficient' | 'segments'
+  /** Observations each segment needs, when `noCurve` is `segments`. */
+  needed?: number
+  band?: { level: number; kind: string }
+  /** Rows the axes could not place, when a required field was missing. */
+  skipped?: { points: number; x: string; y: string }
+}
+
 export interface ChartSpec {
   title?: string
   subtitle?: string
@@ -72,6 +92,8 @@ export interface ChartSpec {
   band?: { x: number; y0: number; y1: number }[]
   /** Evidence line, e.g. "n = 14 · 2 parameters · DOF 12 · tentative". Always shown when present. */
   footer?: string
+  /** The same evidence as numbers, for the window to put in its own words. */
+  evidence?: ChartEvidence
   /**
    * A chart with nothing to draw says so in the plot area and draws no tick numbers: an empty
    * frame with a `0 … 1` axis would look like data, and a fresh project has to be able to save a
@@ -386,7 +408,7 @@ export function incrementalMark(spec: ChartSpec, point: ChartPoint): ChartMark |
   }
 }
 
-function frame(spec: ChartSpec): ChartFrame {
+function frame(spec: ChartSpec, options: { silentEmpty?: boolean } = {}): ChartFrame {
   const {
     x0,
     x1,
@@ -409,7 +431,9 @@ function frame(spec: ChartSpec): ChartFrame {
   const under: string[] = [`<rect width="${WIDTH}" height="${HEIGHT}" fill="${PAPER}"/>`]
   const over: string[] = []
   const accessibleName = spec.title ?? `${yLabel} against ${xLabel}`
-  const desc = spec.empty ?? spec.footer ?? `${(spec.points ?? []).length} points plotted`
+  const desc = options.silentEmpty
+    ? `${(spec.points ?? []).length} points plotted`
+    : (spec.empty ?? spec.footer ?? `${(spec.points ?? []).length} points plotted`)
 
   if (spec.title) {
     under.push(
@@ -422,10 +446,8 @@ function frame(spec: ChartSpec): ChartFrame {
     )
   }
   if (spec.footer) {
-    // `class="footer"` so the window can rewrite this one line when it appends a point without a
-    // redraw: the count in it is the honest n, and it may not fall behind the marks.
     under.push(
-      `<text class="footer" x="${LEFT}" y="${footerY}" font-family="${NUMBERS}" font-size="10.5" fill="${MUTED}" style="font-variant-numeric:tabular-nums">${escapeXml(spec.footer)}</text>`,
+      `<text x="${LEFT}" y="${footerY}" font-family="${NUMBERS}" font-size="10.5" fill="${MUTED}" style="font-variant-numeric:tabular-nums">${escapeXml(spec.footer)}</text>`,
     )
   }
 
@@ -508,12 +530,12 @@ function frame(spec: ChartSpec): ChartFrame {
     cy: Number(sy(point.y).toFixed(2)),
   }))
 
-  if (spec.empty) {
+  if (spec.empty && !options.silentEmpty) {
     const lines = wrapCaption(spec.empty, 88, 3)
     const first = top + plotH / 2 - ((lines.length - 1) * 15) / 2 + 4
     lines.forEach((line, index) => {
       over.push(
-        `<text x="${(LEFT + plotW / 2).toFixed(2)}" y="${(first + index * 15).toFixed(2)}" text-anchor="middle" font-family="${LABELS}" font-size="12" fill="${MUTED}">${escapeXml(line)}</text>`,
+        `<text class="empty" x="${(LEFT + plotW / 2).toFixed(2)}" y="${(first + index * 15).toFixed(2)}" text-anchor="middle" font-family="${LABELS}" font-size="12" fill="${MUTED}">${escapeXml(line)}</text>`,
       )
     })
   }
@@ -544,9 +566,20 @@ function provenanceAttributes(spec: ChartSpec): string {
   ].join('')
 }
 
-function svgDocument(accessibleName: string, desc: string, parts: string[], spec: ChartSpec): string {
+function svgDocument(
+  accessibleName: string,
+  desc: string,
+  parts: string[],
+  spec: ChartSpec,
+  plain = false,
+): string {
+  // In the window the drawing is one half of an image whose DOM host carries the accessible name:
+  // a second `role="img"` inside it would be a nested image announced twice, with a worse label.
+  const identity = plain
+    ? ' aria-hidden="true"'
+    : ` role="img" aria-label="${escapeXml(accessibleName)}"`
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" role="img" aria-label="${escapeXml(accessibleName)}"${provenanceAttributes(spec)}>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}"${identity}${provenanceAttributes(spec)}>`,
     `<title>${escapeXml(accessibleName)}</title>`,
     `<desc>${escapeXml(desc)}</desc>`,
     ...parts,
@@ -586,8 +619,25 @@ export interface ChartLayers {
   style: ChartMarkStyle
 }
 
-export function renderChartLayers(spec: ChartSpec): ChartLayers {
-  const { accessibleName, desc, under, over, marks } = frame(spec)
+export interface ChartLayerOptions {
+  /**
+   * Leave the chrome out of the window's drawing: the title, the provenance subtitle, the footer and
+   * the empty-state sentence. Those are DOM the renderer composes from its one copy owner, so a
+   * screen reader and a sighted reader get the same sentence and nothing is rewritten after mount.
+   */
+  plain?: boolean
+}
+
+export function renderChartLayers(spec: ChartSpec, options: ChartLayerOptions = {}): ChartLayers {
+  // `plain` is the window's drawing: axes, grid, fits and marks only. The strip owns the title, the
+  // renderer's copy owner owns the evidence, the verdict and the empty sentence, so none of those
+  // words appear here — and neither does the provenance that names the dataset and shape.
+  // The empty sentence goes too, but `empty` itself stays: it is what tells the frame not to draw a
+  // `0 … 1` axis that would look like data.
+  const drawn = options.plain
+    ? { ...spec, title: undefined, subtitle: undefined, footer: undefined, provenance: undefined }
+    : spec
+  const { accessibleName, desc, under, over, marks } = frame(drawn, { silentEmpty: options.plain })
   const points = spec.points ?? []
   const packed = new Float32Array(marks.length * 2)
   const xs = new Float64Array(points.length)
@@ -603,8 +653,8 @@ export function renderChartLayers(spec: ChartSpec): ChartLayers {
     ids.push(point.id ?? '')
   })
   return {
-    under: svgDocument(accessibleName, desc, under, spec),
-    over: svgDocument(accessibleName, desc, over, spec),
+    under: svgDocument(accessibleName, desc, under, drawn, options.plain),
+    over: svgDocument(accessibleName, desc, over, drawn, options.plain),
     marks: packed,
     xs,
     ys,

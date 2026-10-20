@@ -31,3 +31,7 @@ Run the `state` command the same way and read the result. It is the brief the ne
 ## Before concluding anything
 
 Run the `check` command the same way. A clean log is not the same as a supported claim.
+
+## Shapes
+
+- `main` — xy.v1 (x:number, y:number)

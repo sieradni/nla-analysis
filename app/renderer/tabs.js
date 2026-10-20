@@ -1,6 +1,6 @@
 /* The tab dialog: choose a dataset, a recipe or a plot, and the axes a plot reads. */
 import { state, ui, node, bridge, call } from './state.js'
-import { factsFor } from './format.js'
+import { datasetOption, status as copyStatus } from './copy.js'
 import { renderTabs } from './rail.js'
 import { renderView } from './panels.js'
 import { setStatus, focusFirstField } from './entry.js'
@@ -9,7 +9,7 @@ import { setStatus, focusFirstField } from './entry.js'
 export function fillTabDialog() {
   ui.tabDataset.textContent = ''
   state.datasets.forEach(function (dataset) {
-    var option = node('option', null, dataset.id + ' · ' + dataset.shape + ' · ' + dataset.active + ' points')
+    var option = node('option', null, datasetOption(dataset, state.datasets.length))
     option.value = dataset.id
     ui.tabDataset.appendChild(option)
   })
@@ -154,15 +154,13 @@ export async function createTab(event) {
     renderTabs()
     renderView()
     focusFirstField()
-    var facts = opened.view.panels[0] ? factsFor(opened.view.panels[0]) : ''
     setStatus(
       'ok',
-      (draft.replace ? 'Replaced' : 'Created') +
-        ' tab “' +
-        opened.view.name +
-        '” · ' +
-        facts +
-        '. It is a view file, so the next session can draw it again.',
+      copyStatus.tabSaved({
+        name: opened.view.name,
+        replaced: draft.replace === true,
+        panel: opened.view.panels[0] || { n: 0 },
+      }),
     )
   } catch (error) {
     ui.tabError.hidden = false

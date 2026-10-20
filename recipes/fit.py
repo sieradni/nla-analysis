@@ -172,6 +172,12 @@ def _refusal(
                 f"n = {diagnostics['n']} · {diagnostics['parameters']} parameters · "
                 f"DOF {diagnostics['dof']} · insufficient · no curve drawn"
             ),
+            "evidence": {
+                "points": diagnostics["n"],
+                "parameters": diagnostics["parameters"],
+                "dof": diagnostics["dof"],
+                "noCurve": "insufficient",
+            },
         },
         "verdict": "insufficient",
         "diagnostics": diagnostics,
@@ -404,6 +410,7 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
                 for a, b, c in zip(grid, mean, half_width)
             ],
             "footer": f"n = {n} · {parameters} parameters · DOF {dof} · {verdict}",
+            "evidence": {"points": n, "parameters": parameters, "dof": dof},
         },
         "verdict": verdict,
         "diagnostics": diagnostics,

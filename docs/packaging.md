@@ -21,7 +21,11 @@ artifacts/bench-win32-x64/
     app/
       main.js  preload.cjs  core.bundle.mjs  package.json
       src/cli/index.mjs      the bundled CLI that bench.cmd runs
-      renderer/              index.html, app.js, chart.js, app.css, tokens.css
+      renderer/              index.html, app.css, tokens.css, and the ES modules the window loads:
+                              app.js, copy.js (every word a person reads), chart.js, state.js,
+                              rail.js, panels.js, entry.js, tabs.js, projects.js, import.js,
+                              navigation.js — the list is explicit in scripts/package-app.mjs, so a
+                              new module that is missing from it breaks the artifact, not the tests
       recipes/               runner.py, fit.py, drift.py, requirements.lock.txt
     app.asar                 (absent on purpose — the app is plain files)
 ```

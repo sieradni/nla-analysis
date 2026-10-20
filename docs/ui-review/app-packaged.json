@@ -6,8 +6,8 @@
     "panels": 2,
     "marks": 28,
     "badges": [
-      "current",
-      "current"
+      "",
+      ""
     ],
     "fields": [
       "x",
@@ -15,7 +15,7 @@
     ],
     "readout": "n = 14",
     "title": "drift over time",
-    "meta": "main · v2 · xy.v1   ·   2 panels   ·   14 points"
+    "meta": "2 panels · 14 points"
   },
   "tabDialog": {
     "open": true,
@@ -35,11 +35,10 @@
       "y": "extension"
     },
     "hover": {
-      "id": "01M5ATK2X6PC029C9Y1B0KZXCG",
-      "tooltip": "01M5ATK2X6PC029C9Y1B0KZXCGmass 1000   extension 5000main · load.v1"
+      "tooltip": "mass 1 000 · extension 5 000"
     },
-    "selection": "Correcting 01M5ATK2X6PC029C9Y1B0KZXCG · recorded 2026-10-19 19:35 · no corrections yet"
+    "selection": "Editing mass 1 000 · extension 5 000 · observed 20 Oct 2026, 10:22"
   },
-  "elapsedMs": 2804,
-  "artifactBytes": 386914331
+  "elapsedMs": 2684,
+  "artifactBytes": 386927525
 }

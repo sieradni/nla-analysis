@@ -29,9 +29,11 @@ missing, and what would closing it look like".
   re-render budget.- **Shipping:** `pnpm app:package` writes a portable Windows build with its own CLI; the release
   workflow is green through artifact upload, but no `v*` tag has been cut.
 - **User surface:** specified on 2026-10-20 ([ADR 0015](adr/0015-user-surface.md),
-  [05-user-surface.md](05-user-surface.md)) and **not built**. The window still shows record ids in
-  tooltips, has no redo, asks for a time column in a form, and offers CLI commands where a button
-  belongs. §6 is the list.
+  [05-user-surface.md](05-user-surface.md)) and **partly built**. The hover, the entry-bar statuses,
+  a panel's facts and state word, and the stale notice now speak plain words from one owner,
+  `app/renderer/copy.js`, and the tab strip no longer names a dataset, shape or version. The point
+  menu, removal, redo, tab management, the versions panel, the import wording, display labels and
+  the resizable rail are not built. §6 is the list.
 - **Not built:** the rows below — point retraction from the window, tab/project management, the
   versions panel, entry extras, the shape flow, a resizable rail, the user-surface pass, and the
   delivery items.
@@ -61,6 +63,11 @@ redrawing, and an entry submitted programmatically are each a failure, not an an
 packaged check **compares** against the tracked `docs/ui-review/app-packaged.json` and writes it only
 with `--record`, so a plain run leaves the tree clean; its frame is git-ignored.
 
+**These figures predate the 2026-10-20 plain-words pass.** That pass changed what the window says and
+which layer composes it, not how a mark is drawn or painted; the budgets are still the gate, but the
+numbers above have not been re-measured since, and a later session should run `pnpm app:measure`
+before quoting them for a release.
+
 ## How this stays current
 
 A plan document cannot prove itself current. These are the rules that keep it honest, and the honest
@@ -84,7 +91,7 @@ limit of each:
 | open and switch projects, hide missing ones | rail, `Open…` | done | `app/renderer/app.js`; `tests/shell.test.ts` |
 | create a project with a chosen shape | `New…` | done | `app-new-project.png`; shell test "creates a project with the shape the dialog chose" |
 | tabs: create a plot or a recipe panel | `New tab…` | done | `app-new-tab.png`, `app-version-diff.png` |
-| **hover tooltip: id, values, dataset · shape** | chart hover | **done, being replaced** | `chart.js` tooltip block; `app-interaction.png`. The id and the dataset/shape line are scheduled to go (U1), with **Copy details** in the point menu (U2) |
+| hover tooltip: values only | chart hover | **done 2026-10-20** | `copy.tooltipLines` composes the readout: values with the axis label and unit, the time only when it is not an axis, and no id, dataset, shape, recipe or version. `app-interaction.png` reads `x 3 · y 8.09`; `tests/window-copy.test.mjs`, and `pnpm app:capture` refuses log vocabulary in the hover |
 | wheel zoom, keyboard pan, hover ring | chart | done | `app-interaction.png` |
 | add a point from the entry bar | entry bar | done | `app-entry.png`; measured 22.2–25.8 ms median (2026-10-19) |
 | undo the last point (`Ctrl+Z` in an empty bar) | entry bar | done | `app-undo.png`; redo, correction undo and removal undo are U4/U5 |
@@ -141,7 +148,7 @@ row, and that is said in the row.
 ### How to check this plan
 
 ```bash
-pnpm verify                 # typecheck, bundle the core and CLI, 264 tests
+pnpm verify                 # typecheck, bundle the core and CLI, 286 tests
 pnpm app:measure            # real window at 10k; fails over either budget, a missing or patched
                             # redraw sample, or a non-keystroke submit
 pnpm app:package            # build the artifact from this tree
@@ -228,16 +235,17 @@ None of them is waiting on the user, and none should be reopened without changin
 ## 6. User surface — the backlog
 
 The details, the wording the user used, and the acceptance test for each row are in
-[05-user-surface.md](05-user-surface.md). This table is the order of work. Everything here is not
-started; nothing is waiting on a decision.
+[05-user-surface.md](05-user-surface.md). This table is the order of work. Rows U1, U3, U10, U12,
+U14 and U22 landed on 2026-10-20 through `app/renderer/copy.js`; U13, U17, U18 and U21 are partly
+built; the rest is not started, and nothing here is waiting on a decision.
 
 ### 6.1 A point, and what hovering one says
 
 | id | slice | size | done means |
 |---|---|---|---|
-| **U1** | Tooltip is a value readout | S | values with labels and units; time only when it is not an axis; no ULID, dataset, shape, recipe or version. `app-interaction` recaptured |
+| **U1** | Tooltip is a value readout | S | **done 2026-10-20** — values with labels and units, time only when it is not an axis, no id/dataset/shape/recipe/version. Evidence: `copy.tooltipLines`, `tests/window-copy.test.mjs`, the capture's `assertPlainSurface('hover')`, `app-interaction.png` (`x 3 · y 8.09`) |
 | **U2** | Point menu: Copy details / Correct… / Remove | S–M | right-click and Shift+F10 open it; copied text identifies the point without the person reading an id; keyboard reachable; Escape returns focus |
-| **U3** | Correction strip and statuses in plain words | S | `Editing x 6.5, y 16.4 · observed 19 Oct 06:00`; `Saved` / `Corrected` / `Removed`; no event names or ids in primary text |
+| **U3** | Correction strip and statuses in plain words | S | **done 2026-10-20** — the strip reads `Editing x 6.5 · y 16.4 · observed 19 Oct 2026, 06:00`; statuses read `Saved · 15 points in this tab`, `Corrected …`, `Removed · 14 points left in this tab`; the packaged check now records `Editing mass 1 000 · extension 5 000 …` instead of a ULID. Evidence: `copy.status.*`, `tests/window-copy.test.mjs`, the capture's `assertPlainSurface`, `docs/ui-review/app-packaged.json` |
 
 ### 6.2 Undo, redo, removal
 
@@ -254,16 +262,16 @@ started; nothing is waiting on a decision.
 |---|---|---|---|
 | **U8** | Time column is a stated guess | S | `Time: taken_at — change` above the preview; plans immediately; Change opens the full choice; no picker homework |
 | **U9** | Untimed files import with a labelled estimate | M | `No time column — use the file order (estimated)`; rows carry the estimate; diff says so; a real time can replace it; a file *with* a clock never falls back |
-| **U10** | Import summary in plain language | S | `5 rows · 1 added, none removed, none changed`; version and `+1 −0 ~0` behind **Details**; button says `Import 5 rows` |
+| **U10** | Import summary in plain language | S | **done 2026-10-20** — the sheet reads `5 rows · 5 columns · 2 comment lines skipped · replaces the 14 rows here now`; the plan reads `5 rows · 5 added, 14 removed, none changed · 14 rows not in this file will be withdrawn, not deleted`; the button says `Import 5 rows`. No version number, no `+1 −2 ~1`, no dataset or shape id anywhere in the sheet. Evidence: `copy.importSummary`/`importPlan`/`importButton`, `tests/window-copy.test.mjs`, capture assertions and `assertPlainSurface('the import sheet')` |
 | **U11** | Correct the observation time from the window | S–M | a date/time input in the correction row; an estimated time can be replaced; the mark moves on a time axis; status says what changed |
 
 ### 6.4 Explanation: badges, captions, numbers
 
 | id | slice | size | done means |
 |---|---|---|---|
-| **U12** | No `current`; explain the rest | S | silence when current; `Out of date` + **Refresh** + why; `Data gone` + action; verdict hover says what it means and what would strengthen it; DOF spelled out |
-| **U13** | One number format | S | one module for tooltips, axes, captions, statuses: 3 significant digits, thousands separators, `1.23 to 2.35`, units, `19 Oct 2026, 06:00`, `1 point`/`14 points` |
-| **U14** | One title, and numbers with names | S | no duplicate title; no `main <recipe>` panel title; the caption leads with the conclusion; every number has a word saying what it is |
+| **U12** | No `current`; explain the rest | S | **done 2026-10-20** — `current` is silence, `Out of date` carries a hover sentence and a working **Refresh**, `Data gone` and `Cannot tell` are explained, and `DOF` is always written `degrees of freedom`. The verdict is its own chip under the drawing and explains itself in consequences on hover *and* on keyboard focus (`Tentative. The data cannot rule out no trend yet. More observations would make this test meaningful.`), and the same sentence is in the accessible name. Evidence: `copy.panelStatus`, `copy.notice`, `copy.panelEvidence` (degrees of freedom from the drawing's own numbers), `copy.verdictExplanation`, capture `assertVerdictExplained` (hover, focus, reachable, a sentence, no vocabulary) and `app-verdict.png` |
+| **U13** | One number format | S | **partial 2026-10-20** — `copy.formatValue`/`formatInstant`/`plural` now format the hover, statuses, readouts and the rail's date. Not done: the core still formats axis ticks and captions itself, so a caption's interval is still bracketed. Evidence: `tests/window-copy.test.mjs` |
+| **U14** | One title, and numbers with names | S | **done 2026-10-20** — the drawing is plain: no title, no `main · drift` subtitle, no footer, no provenance attributes, so the strip is the one place the panel is named. The evidence line under it reads `n = 14 · 2 regimes of 2 parameters · 10 degrees of freedom`, and the caption leads with the conclusion. The evidence line is composed from `chart.evidence` — point count, regimes, parameters, degrees of freedom, band, or the reason no curve is drawn — so no module parses the artifact's footer prose. Evidence: `renderChartLayers(spec, { plain: true })`, `tests/chart.test.ts` (the plain drawing names nothing), `tests/window-copy.test.mjs` (every evidence shape, and the no-footer-read guard), `copy.panelEvidence`, capture's `charts` and `evidence` surfaces |
 | **U15** | Hints that say what happens | S | `Click a point to edit it`; a **?** help sheet; Shift+Arrow described as next/previous *point*; every shortcut in the sheet |
 | **U16** | Truncated text is readable | S | app tooltip with the full value on hover; context-menu **Copy**; rail paths, tab names, panel titles, long statuses |
 
@@ -271,8 +279,8 @@ started; nothing is waiting on a decision.
 
 | id | slice | size | done means |
 |---|---|---|---|
-| **U17** | Rail controls that do not look broken | S | `New project` / `Open project` / `New tab`, no ellipsis, grouped with their headings, readable at 100/125/150% |
-| **U18** | Deduplicate the facts | M | `main` absent from a single-dataset project; tab name not repeated in the panel; `n` once per panel; stage count only when panels disagree; per-panel version only where it differs |
+| **U17** | Rail controls that do not look broken | S | **partial 2026-10-20** — the labels are `New project` / `Open project` / `New tab` / `Import file`, applied from `copy.labels` at boot, so no label ends in `…`. Not done: the header's grouping and spacing. Evidence: `app/renderer/copy.js` `applyStatic`, `app-100/125/150.png` |
+| **U18** | Deduplicate the facts | M | **partial 2026-10-20** — `main`, the shape id and the version list are gone from the tab strip and the panel facts (`2 panels · 14 points`); the tab sheet names a dataset only when there is more than one; the verdict is said once, as the chip beside the evidence, not again in the facts; and the drawing no longer repeats the panel's title. Not done: the entry readout still repeats the count. Evidence: `copy.tabFacts`, `copy.datasetOption`, `copy.panelFacts`, capture's strip and drawing assertions |
 | **U19** | Resizable, collapsible rail; hideable entry | M | drag + keyboard resize, `Ctrl+B`, min/max, width in `$BENCH_HOME/ui.json`, persisted; entry bar collapses to one line with undo still reachable; no layout shift |
 | **U20** | 150% keeps pairs side by side | S | axis pickers and entry fields stay in a row at 150% (stack only when genuinely narrow); the sheet fits the viewport; measured at all three scalings |
 | **U27** | Accessible names say the conclusion | S | title, axes with units, `n`, verdict in visible words, one interaction hint; under ~25 words; no id or internal name; caption available as a description |
@@ -282,8 +290,8 @@ started; nothing is waiting on a decision.
 
 | id | slice | size | done means |
 |---|---|---|---|
-| **U21** | The window offers the action | M | stale plot refreshes itself after a write; stale recipe offers **Refresh** and says why; CLI text only in a collapsed **For agents** detail; every error ends with an action |
-| **U22** | The empty first tab teaches by doing | S | one sentence, cursor in the first field, **Add the first point**, **Import…**, **Create a tab…**; no command in primary text; zero to first mark without a terminal |
+| **U21** | The window offers the action | M | **partial 2026-10-20** — the stale notice is a sentence plus a working **Refresh** button (capture clicks it and reads `Refreshed the panels it could. 1 panel still needs its analysis run again.`); the empty-tab, tab-gone and no-project states no longer print a command. Not done: a stale plot does not refresh itself, and an error from the core still ends with the core's words. Evidence: capture `notice`/`refreshed`; `app.js` `actions.refreshTab` |
+| **U22** | The empty first tab teaches by doing | S | **done 2026-10-20** — the first panel draws `No observations yet. Add the first point below.` from `copy.panelEmpty`, with no command, dataset or shape id; the cursor is in the first field and the bar adds the point. The core's own sentence (which names `add --values …`) is rewritten from the copy owner after mount, and the accessible name uses the same sentence. Evidence: `tests/window-copy.test.mjs`, capture `empty-panel` read and `assertPlainSurface('the empty first panel')` |
 
 ### 6.7 The agent's half of the contract
 

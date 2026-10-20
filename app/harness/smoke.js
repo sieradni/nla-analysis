@@ -77,8 +77,8 @@ async function customAxes() {
     `the saved tab lost its axes: ${panel.chart.x.label}/${panel.chart.y.label}`,
   )
 
-  // Hover and selection through the drawing's own pointer handlers: the tooltip and the correction
-  // strip must name the same record the mark stands for.
+  // Hover and selection through the drawing's own pointer handlers: the hover reads out the values
+  // and the correction strip names the same measurement, both without the record's id.
   const target = await window.webContents.executeJavaScript(`(() => {
     const host = document.querySelector('.panel-chart')
     const marks = host.__benchChart.marks()
@@ -90,11 +90,11 @@ async function customAxes() {
   const hovered = JSON.parse(target)
   expect(hovered.id, 'the redrawn custom-axis chart exposed no mark id')
   expect(
-    hovered.tooltip.includes(hovered.id),
-    `hover named no record: tooltip was "${hovered.tooltip}"`,
+    !hovered.tooltip.includes(hovered.id),
+    `hover still shows the record id: "${hovered.tooltip}"`,
   )
   expect(
-    /mass/.test(hovered.tooltip) && /extension/.test(hovered.tooltip),
+    /mass \S/.test(hovered.tooltip) && /extension \S/.test(hovered.tooltip),
     `hover lost the custom fields: "${hovered.tooltip}"`,
   )
 
@@ -119,16 +119,20 @@ async function customAxes() {
     const label = await window.webContents.executeJavaScript(
       "document.getElementById('entry-correct-label').textContent",
     )
-    return label.includes(selected) ? label : null
+    return /Editing/.test(label) ? label : null
   })
   expect(
-    /Correcting/.test(correction),
-    `selection did not open the correction strip: "${correction}"`,
+    !correction.includes(selected),
+    `the correction strip still shows the record id: "${correction}"`,
+  )
+  expect(
+    /mass \S/.test(correction) && /extension \S/.test(correction),
+    `the correction strip lost the measurement: "${correction}"`,
   )
 
   return {
     saved: { n: panel.n, x: panel.chart.x.label, y: panel.chart.y.label },
-    hover: { id: hovered.id, tooltip: hovered.tooltip },
+    hover: { tooltip: hovered.tooltip },
     selection: correction,
   }
 }

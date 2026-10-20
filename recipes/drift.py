@@ -228,6 +228,11 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
                 "y": y_axis,
                 "points": points,
                 "footer": f"n = {n} · segments need {2 * min_segment} points · {verdict}",
+                "evidence": {
+                    "points": n,
+                    "noCurve": "segments",
+                    "needed": 2 * min_segment,
+                },
             },
             "verdict": verdict,
             "diagnostics": diagnostics,
@@ -390,6 +395,12 @@ def run(input_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         "y": y_axis,
         "points": points,
         "footer": f"n = {n} · 2 regimes of {parameters_per_segment} parameters · DOF {dof} · {verdict}",
+        "evidence": {
+            "points": n,
+            "regimes": 2,
+            "parameters": parameters_per_segment,
+            "dof": dof,
+        },
     }
     if chart_series:
         chart["lines"] = chart_series

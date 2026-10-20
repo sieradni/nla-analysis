@@ -169,6 +169,7 @@ describe('materializing a panel', () => {
     expect(panel.n).toBe(6)
     expect(panel.recipe).toBeUndefined()
     expect(panel.chart.footer).toContain('no fit — unmodelled')
+    expect(panel.chart.evidence).toMatchObject({ points: 6, noCurve: 'unmodelled' })
   })
 
   it('plots a custom shape on named axes, including an instant horizontal axis', async () => {

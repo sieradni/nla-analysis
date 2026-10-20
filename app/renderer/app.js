@@ -2,12 +2,13 @@
  * The window shell: which project is open, which tab is showing, and what happens when either moves.
  *
  * Everything it displays comes from the core through `window.bench`. It formats nothing itself:
- * `format.js` names a panel, `panels.js` draws it, `entry.js` owns typing, and `rail.js` owns the
+ * `copy.js` owns every word, `panels.js` draws it, `entry.js` owns typing, and `rail.js` owns the
  * left side. This file is the wiring and the open-view lifecycle, not a second renderer.
  */
 import { state, ui, bridge, call, showFailure, showEmpty } from './state.js'
 import { renderProjects, renderTabs, renderFoot } from './rail.js'
 import { renderView, watchOpenTab, captureRestore } from './panels.js'
+import { applyStatic, builtInShape, empty as emptyCopy, status as copyStatus } from './copy.js'
 import {
   renderEntry,
   setStatus,
@@ -29,6 +30,26 @@ actions.renderEntry = renderEntry
 actions.selectPoint = selectPoint
 actions.setStatus = setStatus
 
+/**
+ * Rebuild the panels a write has invalidated, because the notice's only action is a button. The
+ * core decides which panels it can redraw without Python; anything it keeps stays visibly out of
+ * date rather than being claimed as current.
+ */
+actions.refreshTab = async function () {
+  if (!state.view || state.busy) return
+  var restore = captureRestore()
+  try {
+    var refreshed = await call(bridge.refreshView(state.project.dir, state.view.name, { draw: true }))
+    state.opened = refreshed
+    state.view = refreshed.view
+    renderTabs()
+    renderView(restore)
+    setStatus('ok', copyStatus.refreshed(refreshed.statuses))
+  } catch (error) {
+    setStatus('error', copyStatus.refreshFailed((error && error.message) || String(error)))
+  }
+}
+
 var settled = false
 
 export async function openView(name) {
@@ -43,12 +64,7 @@ export async function openView(name) {
     state.entryKey = null
     renderTabs()
     renderView()
-    if (state.opened.reread) {
-      setStatus(
-        'ok',
-        'The log had changed on disk since this window read it, so it was reread before this tab was drawn.',
-      )
-    }
+    if (state.opened.reread) setStatus('ok', copyStatus.rereadTab())
     // The product is typing a number. Opening a tab puts the cursor where that happens; Tab still
     // reaches the panel for keyboard pan and zoom.
     focusFirstField()
@@ -96,14 +112,10 @@ export async function afterOpen(opened) {
   // The core derived this from the declared shape: a custom project is not taught a recipe or
   // `x`/`y` it does not have, and a shape that cannot plot says what to add instead.
   var next = opened.entry && opened.entry.nextTab
-  showEmpty(
-    'No saved tabs',
-    next && next.problem
-      ? next.problem
-      : 'A tab is a saved question: which dataset it reads and which of its fields it plots.',
-    next && next.command ? 'bench --project "' + opened.dir + '" ' + next.command : null,
-    { label: 'Create a tab…', run: openTabDialog },
-  )
+  showEmpty('No saved tabs', emptyCopy.noTabs(next && next.problem), null, {
+    label: 'Create a tab…',
+    run: openTabDialog,
+  })
   // A project with no tabs can still take a point: the empty state hid the bar, so put it back and
   // leave the cursor where typing goes.
   renderEntry()
@@ -118,11 +130,10 @@ export async function afterOpen(opened) {
 export function applyChange(change) {
   if (!state.project || change.dir !== state.project.dir) return
   // A write is in flight: its own response is about to draw the state after that write, and the
-  // main process asks again once the call settles. Repainting underneath it would race both.
-  if (state.busy) return
+  // main process asks again once the call settles. Repainting underneath it would race both.    if (state.busy) return
 
   if (change.state === 'error') {
-    setStatus('error', 'The project changed on disk, but this tab could not be reread: ' + change.message)
+    setStatus('error', copyStatus.couldNotReread(change.message))
     return
   }
 
@@ -142,14 +153,10 @@ export function applyChange(change) {
     if (change.entry) state.projectEntry = change.entry
     watchOpenTab()
     renderTabs()
-    showEmpty(
-      'This tab was removed',
-      '“' +
-        change.name +
-        '” is no longer in views/. Another writer replaced or deleted it; the project is still open.',
-      'bench --project "' + state.project.dir + '" view list',
-      { label: 'Create a tab…', run: openTabDialog },
-    )
+    showEmpty('This tab was removed', emptyCopy.tabRemoved(change.name), null, {
+      label: 'Create a tab…',
+      run: openTabDialog,
+    })
     // The empty state hid the bar; the project can still take a point, and a field that was being
     // typed into gets its cursor back.
     renderEntry()
@@ -157,13 +164,7 @@ export function applyChange(change) {
       var input = ui.entryFields.querySelector('input[data-field="' + hadFocus + '"]')
       if (input) input.focus()
     }
-    setStatus(
-      'ok',
-      '“' +
-        change.name +
-        '” was removed on disk. ' +
-        (change.views.length === 0 ? 'This project has no tabs left.' : change.views.length + ' other tab(s) remain.'),
-    )
+    setStatus('ok', copyStatus.tabRemoved({ name: change.name, remaining: change.views.length }))
     return
   }
 
@@ -181,11 +182,10 @@ export function applyChange(change) {
   if (!state.status || state.status.kind !== 'error') {
     setStatus(
       'ok',
-      'The project changed on disk: “' +
-        state.view.name +
-        '” was reread and redrawn' +
-        (change.view.entry ? ' · ' + change.view.entry.active + ' active in ' + change.view.entry.dataset : '') +
-        '.',
+      copyStatus.tabChanged({
+        name: state.view.name,
+        active: change.view.entry ? change.view.entry.active : undefined,
+      }),
     )
   }
 }
@@ -202,6 +202,7 @@ export function wire() {
 }
 
 export async function boot() {
+  applyStatic(ui)
   wire()
   if (!bridge) {
     showFailure('The window cannot reach the core', new Error('preload bridge missing'))
@@ -219,14 +220,7 @@ export async function boot() {
   // name and fields are the core's, so the option is labelled from here rather than hardcoded.
   try {
     state.shapeChoice = await call(bridge.shapeChoice())
-    ui.projectShape.options[0].textContent =
-      state.shapeChoice.id +
-      ' · ' +
-      state.shapeChoice.fields
-        .map(function (field) {
-          return field.name + ' (' + field.type + ')'
-        })
-        .join(', ')
+    ui.projectShape.options[0].textContent = builtInShape(state.shapeChoice.fields)
   } catch (error) {
     /* the dialog still works; it just cannot name the shipped shape */
   }
@@ -238,7 +232,7 @@ export async function boot() {
     renderProjects()
     if (state.problem) {
       ui.notice.hidden = false
-      ui.notice.textContent = state.problem + ' — the project list is app state and can be deleted.'
+      ui.notice.textContent = copyStatus.projectListProblem(state.problem)
     }
 
     var target = startup.projectDir
@@ -251,12 +245,10 @@ export async function boot() {
 
     if (target) await openProject(target)
     else {
-      showEmpty(
-        'No projects yet',
-        'A project is a folder with an append-only log. Create one here, or open a folder the CLI made.',
-        'bench init C:\\data\\sensor',
-        { label: 'Create a project…', run: openProjectDialog },
-      )
+      showEmpty('No projects yet', emptyCopy.noProjects(), null, {
+        label: 'Create a project…',
+        run: openProjectDialog,
+      })
       renderFoot()
     }
   } catch (error) {

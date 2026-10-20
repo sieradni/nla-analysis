@@ -17,7 +17,7 @@
 import { stat } from 'node:fs/promises'
 import { APP_ROOT, assessRuns } from '../src/core/analysis.ts'
 import { renderChartLayers } from '../src/core/chart.ts'
-import type { ChartLayers } from '../src/core/chart.ts'
+import type { ChartEvidence, ChartLayers } from '../src/core/chart.ts'
 import { BenchError } from '../src/core/errors.ts'
 import type { PointValue, ShapeField } from '../src/core/events.ts'
 import { plotHint, type PlotHint } from '../src/core/hints.ts'
@@ -181,7 +181,10 @@ function windowView(view: ViewFile): ViewFile {
     ...view,
     panels: view.panels.map((panel) => {
       const chart = { ...panel.chart }
+      // The marks come from the canvas layers, and the artifact's prose line is the CLI's: the
+      // window composes its own words from `evidence` and never sees the footer.
       delete chart.points
+      delete chart.footer
       return { ...panel, chart }
     }),
   }
@@ -193,7 +196,10 @@ async function describe(workspace: Workspace, view: ViewFile, reread: boolean): 
   return {
     view: windowView(view),
     statuses,
-    drawings: view.panels.map((panel) => renderChartLayers(panel.chart)),
+    // The window draws its own subtitle-free chart and renders the evidence line and the empty
+    // sentence as DOM, from the renderer's copy owner. Nothing in the SVG needs rewriting after
+    // mount, and no dataset or shape name reaches the drawing.
+    drawings: view.panels.map((panel) => renderChartLayers(panel.chart, { plain: true })),
     staleRuns: [...freshness.values()].filter((entry) => entry.status !== 'fresh').length,
     entry: entryTarget(workspace, view),
     reread,
@@ -424,8 +430,8 @@ export interface RefreshedView {
   kept: { index: number; reason: string }[]
   /** Active points per panel after the rebuild, for a strip that must not keep saying the old n. */
   counts: number[]
-  /** Each panel's evidence line after the rebuild, for a drawing that was patched rather than redrawn. */
-  footers: (string | null)[]
+  /** Each panel's evidence after the rebuild, for a drawing that was patched rather than redrawn. */
+  evidence: (ChartEvidence | null)[]
   /** True when the log had changed on disk and was reread before this rebuild. */
   reread: boolean
 }
@@ -483,13 +489,15 @@ export async function refreshView(
   return {
     view: windowView(view),
     statuses,
-    drawings: draw ? view.panels.map((panel) => renderChartLayers(panel.chart)) : null,
+    drawings: draw
+      ? view.panels.map((panel) => renderChartLayers(panel.chart, { plain: true }))
+      : null,
     staleRuns: freshness === null ? 0 : [...freshness.values()].filter((entry) => entry.status !== 'fresh').length,
     entry: entryTarget(workspace, view),
     refreshed,
     kept,
     counts: view.panels.map((panel) => (typeof panel.n === 'number' ? panel.n : 0)),
-    footers: view.panels.map((panel) => panel.chart.footer ?? null),
+    evidence: view.panels.map((panel) => panel.chart.evidence ?? null),
     reread,
   }
 }

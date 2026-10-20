@@ -1,7 +1,44 @@
 /* The drawing surface: one panel per figure, its accessible name, and the statuses beside it. */
 import { state, ui, node, bridge, call } from './state.js'
-import { factsFor, chartAccessibleLabel } from './format.js'
+import { mount } from './chart.js'
+import {
+  accessibleLabel,
+  labels,
+  notice as noticeText,
+  panelEmpty,
+  panelEvidence,
+  panelFacts,
+  panelStatus,
+  status as copyStatus,
+  tabFacts,
+  verdictExplanation,
+  verdictWord,
+} from './copy.js'
 import { actions } from './navigation.js'
+
+/*
+ * A word that needs a sentence: show it on hover and on keyboard focus in the window's own tooltip,
+ * because a native title is slow, cannot wrap, and is invisible to a keyboard-only reader.
+ */
+function explain(element, text) {
+  function show() {
+    ui.tooltip.textContent = text
+    ui.tooltip.hidden = false
+    var box = element.getBoundingClientRect()
+    var left = Math.min(box.left, window.innerWidth - ui.tooltip.offsetWidth - 8)
+    var top = box.top - ui.tooltip.offsetHeight - 8
+    ui.tooltip.style.left = Math.max(8, left) + 'px'
+    ui.tooltip.style.top = (top < 8 ? box.bottom + 8 : top) + 'px'
+  }
+  function hide() {
+    ui.tooltip.hidden = true
+    ui.tooltip.textContent = ''
+  }
+  element.addEventListener('pointerenter', show)
+  element.addEventListener('pointerleave', hide)
+  element.addEventListener('focus', show)
+  element.addEventListener('blur', hide)
+}
 
 /** Recompute every panel's accessible name from the state currently on screen. */
 export function renderPanelLabels() {
@@ -16,88 +53,44 @@ export function renderPanelLabels() {
     var status = statuses[index] || { state: 'unchecked' }
     host.setAttribute(
       'aria-label',
-      chartAccessibleLabel(panel, title.textContent, facts.textContent, status.state),
+      accessibleLabel(panel, title.textContent, facts.textContent, panelStatus(status.state).label),
     )
   })
 }
 
-/** The dataset count, not a sum of panel counts: two panels reading `main` used to add up to
- * twice the points in it, and a stale panel then made the total a number that was never true. */
+/** The tab's facts, once: how many panels and how many points. The dataset's name is not
+ * information in a project with one dataset, and a version list belongs to the agent. */
 export function renderMeta() {
   var view = state.view
   var entry = state.opened && state.opened.entry
   var total = view.panels.reduce(function (sum, panel) {
     return sum + (typeof panel.n === 'number' ? panel.n : 0)
   }, 0)
-  var provenance = (view.panels[0] && view.panels[0].chart.provenance) || {}
   var active = entry ? entry.active : total
-  // Which version the drawing came from is part of what the tab is claiming, so it sits beside
-  // the dataset name rather than in a tooltip: `main \u00b7 v2` or `main \u00b7 v1 (now v2)`.
-  // A tab may hold panels pinned to different versions — a refresh only repins the panels it
-  // redraws — so the label names every version present, not whichever panel happens to be first.
-  var dataset = provenance.dataset
-  var pinned = []
-  view.panels.forEach(function (panel) {
-    if (panel.dataset !== dataset) return
-    if (typeof panel.version !== 'number') return
-    if (pinned.indexOf(panel.version) === -1) pinned.push(panel.version)
-  })
-  var now = entry && typeof entry.version === 'number' ? entry.version : undefined
-  var versionLabel = null
-  if (dataset && pinned.length > 0) {
-    pinned.sort(function (left, right) {
-      return left - right
-    })
-    var label =
-      pinned.length === 1
-        ? 'v' + pinned[0]
-        : pinned
-            .map(function (version) {
-              return 'v' + version
-            })
-            .join(', ')
-    // `now` is a fact about the dataset; it is worth saying only when no panel is drawn from it.
-    var behind = typeof now === 'number' && pinned.indexOf(now) === -1
-    versionLabel = label + (behind ? ' (now v' + now + ')' : '')
-  }
-  var meta = [
-    provenance.dataset
-      ? provenance.dataset + ' \u00b7 ' + (versionLabel ? versionLabel + ' \u00b7 ' : '') + (provenance.shape || '')
-      : null,
-    view.panels.length + ' panel' + (view.panels.length === 1 ? '' : 's'),
-    active + ' point' + (active === 1 ? '' : 's'),
-  ].filter(Boolean)
-  ui.meta.textContent = meta.join('   \u00b7   ')
+  ui.meta.textContent = tabFacts(view.panels.length, active)
 }
 
-/** Staleness, said once, in the words a person would use. Shown from the statuses, never guessed. */
+/**
+ * Staleness, said once, in the words a person would use — and with the one action that fixes it.
+ * The command that used to sit here was a door that opened the wrong way (ADR 0015).
+ */
 export function renderNotice() {
   var statuses = (state.opened && state.opened.statuses) || []
-  var stale = statuses.filter(function (status) {
-    return status.state === 'stale' || status.state === 'missing'
-  })
-  if (stale.length === 0) {
+  var text = noticeText(statuses)
+  if (text === '') {
     ui.notice.hidden = true
+    ui.notice.textContent = ''
     return
   }
   ui.notice.hidden = false
   ui.notice.textContent = ''
-  ui.notice.appendChild(
-    node(
-      'span',
-      null,
-      stale.length +
-        ' panel' +
-        (stale.length === 1 ? '' : 's') +
-        ' no longer ' +
-        (stale.length === 1 ? 'describes' : 'describe') +          ' this project. ' +
-        (stale[0].detail || '').replace(/\.?$/, '. ') +
-        'Re-render with ',
-      ),
-    )
-  ui.notice.appendChild(
-    node('code', null, 'bench --project "' + state.project.dir + '" view render "' + state.view.name + '" --refresh'),
-  )
+  ui.notice.appendChild(node('span', null, text))
+  var refresh = node('button', 'ghost notice-refresh', labels.refresh)
+  refresh.type = 'button'
+  refresh.addEventListener('click', function () {
+    if (actions.refreshTab) actions.refreshTab()
+  })
+  ui.notice.appendChild(refresh)
 }
 
 /** Badges and the notice, from statuses alone: no drawing is touched, so this cannot cause a repaint. */
@@ -106,9 +99,11 @@ export function renderStatuses(statuses) {
   statuses.forEach(function (status, index) {
     var badge = badges[index]
     if (!badge) return
+    var said = panelStatus(status.state)
     badge.className = 'badge ' + status.state
-    badge.textContent = status.state
-    badge.title = status.detail || ''
+    badge.textContent = said.label
+    badge.title = said.title
+    badge.hidden = said.label === ''
   })
   renderNotice()
   renderPanelLabels()
@@ -147,14 +142,16 @@ export function renderView(restore) {
   state.handles = []
 
   view.panels.forEach(function (panel, index) {
-    var status = opened.statuses[index] || { state: 'unchecked', detail: '' }
+    var status = (opened.statuses[index] || { state: 'unchecked' })
+    var said = panelStatus(status.state)
     var figure = node('figure', 'panel')
     var strip = node('div', 'panel-strip')
-    var title = node('span', 'panel-title', panel.title || panel.chart.title || 'panel ' + (index + 1))
-    var facts = node('span', 'panel-facts', factsFor(panel))
+    var title = node('span', 'panel-title', panel.title || panel.chart.title || 'Panel ' + (index + 1))
+    var facts = node('span', 'panel-facts', panelFacts(panel))
     var tools = node('div', 'panel-tools')
-    var badge = node('span', 'badge ' + status.state, status.state)
-    badge.title = status.detail || ''
+    var badge = node('span', 'badge ' + status.state, said.label)
+    badge.title = said.title
+    badge.hidden = said.label === ''
     var zoom = node('span', 'zoom', '1.0×')
     var reset = node('button', 'ghost', 'Reset')
     reset.type = 'button'
@@ -173,15 +170,12 @@ export function renderView(restore) {
     var host = node('div', 'panel-chart')
     host.tabIndex = 0
     host.setAttribute('role', 'img')
-    host.setAttribute(
-      'aria-label',
-      chartAccessibleLabel(panel, title.textContent, factsFor(panel), status.state),
-    )
+    host.setAttribute('aria-label', accessibleLabel(panel, title.textContent, facts.textContent, said.label))
     figure.appendChild(strip)
     figure.appendChild(host)
     ui.grid.appendChild(figure)
 
-    var handle = window.BenchCharts.mount(host, panel, opened.drawings[index], {
+    var handle = mount(host, panel, opened.drawings[index], {
       zoomLabel: zoom,
       tooltip: ui.tooltip,
       viewBox: restore && restore.viewBoxes ? restore.viewBoxes[index] : null,
@@ -190,6 +184,22 @@ export function renderView(restore) {
       },
     })
     state.handles[index] = handle
+    // The drawing is chrome-free for the window: no subtitle, no footer, no empty state. These are
+    // the words that describe the drawing, and they are DOM from the copy owner — never a rewrite
+    // of what the core painted.
+    if (panel.chart.empty) figure.appendChild(node('p', 'panel-empty', panelEmpty()))
+    var evidence = panelEvidence(panel)
+    if (evidence !== '' || panel.verdict) {
+      var line = node('div', 'panel-evidence')
+      if (evidence !== '') line.appendChild(node('span', 'evidence-text', evidence))
+      if (panel.verdict) {
+        var chip = node('span', 'verdict', verdictWord(panel.verdict))
+        chip.tabIndex = 0
+        explain(chip, verdictExplanation(panel.verdict))
+        line.appendChild(chip)
+      }
+      figure.appendChild(line)
+    }
     reset.addEventListener('click', function () {
       handle.reset()
     })
@@ -214,7 +224,7 @@ export function watchOpenTab() {
   state.watching = key
   call(bridge.watch(state.project ? state.project.dir : null, name)).catch(function (error) {
     // The tab still works without a watcher; it just will not follow the project, and says so.
-    actions.setStatus('error', 'This tab will not follow the project on disk: ' + ((error && error.message) || error))
+    actions.setStatus('error', copyStatus.couldNotFollow((error && error.message) || String(error)))
   })
 }
 

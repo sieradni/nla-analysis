@@ -126,6 +126,12 @@ export function chartSpecFor(result: RunResult, context: SpecContext): ChartSpec
       : ''
   const footer = [result.chart.footer ?? '', bandNote].filter((part) => part !== '').join(' · ')
   const caption = result.caption ?? result.narrative
+  // The band level and kind are the core's, not the recipe's: attach them to the numbers the window
+  // composes its evidence line from, so the sentence cannot promise a band the canvas lacks.
+  const evidence =
+    result.chart.evidence !== undefined && result.chart.band !== undefined && Number.isFinite(level)
+      ? { ...result.chart.evidence, band: { level, kind: bandKind } }
+      : result.chart.evidence
 
   return {
     ...result.chart,
@@ -139,6 +145,7 @@ export function chartSpecFor(result: RunResult, context: SpecContext): ChartSpec
       ...(context.version === undefined ? {} : { version: context.version }),
     },
     ...(footer === '' ? {} : { footer }),
+    ...(evidence === undefined ? {} : { evidence }),
     // The artifact carries its own conclusion: the terminal scrollback is not durable. Recipes may
     // supply a shorter form for the canvas; the full argument stays in the log.
     ...(caption === '' ? {} : { caption }),

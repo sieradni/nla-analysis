@@ -35,7 +35,7 @@ const APP_FILES = [
   join('renderer', 'app.js'),
   join('renderer', 'chart.js'),
   join('renderer', 'state.js'),
-  join('renderer', 'format.js'),
+  join('renderer', 'copy.js'),
   join('renderer', 'navigation.js'),
   join('renderer', 'rail.js'),
   join('renderer', 'panels.js'),

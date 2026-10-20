@@ -53,14 +53,16 @@ those passages as the plan as it was written, not as a description of today's la
 
 The desktop shell has two layers. `app/main.js` owns the Electron window, the watcher and the IPC
 surface; `app/harness/` holds the capture, measure and smoke runs that drive it. The renderer is split
-by concern in `app/renderer/`: `state.js` (shared state and the guarded core call), `format.js` (text
-and accessible names), `rail.js` (projects, tabs, folder), `panels.js` (panel mount, statuses,
-watcher), `entry.js` (typing, correction, undo), `tabs.js` (tab sheet and axes), `projects.js` (project
-sheet and shape flow), `import.js` (import sheet), `navigation.js` (the few cross-module shell
-actions), and `app.js` (wiring and the open-view lifecycle only). New window work lands in the module
+by concern in `app/renderer/`: `state.js` (shared state and the guarded core call), `copy.js` (every
+word a person reads and every number format — ADR 0015; `format.js` was folded into it),
+`rail.js` (projects, tabs, folder), `panels.js` (panel mount, statuses, watcher), `entry.js` (typing,
+correction, undo), `chart.js` (the drawing's interaction; an ES module mounted by `panels.js`),
+`tabs.js` (tab sheet and axes), `projects.js` (project sheet and shape flow), `import.js` (import
+sheet), `navigation.js` (the few cross-module shell actions), and `app.js` (wiring and the open-view
+lifecycle only). New window work lands in the module
 that owns its surface rather than in `app.js`.
 
-Verification so far: 264 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
+Verification so far: 286 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
 (`pnpm app:build`) before the suite, because the desktop shell loads that bundle rather than `src/core`,
 and a bundle that is only exercised by launching an app breaks silently — it did, once. The entry path is measured, not
 assumed: 15.7 ms keystroke→paint in process at 10k points against a 100 ms budget (ADR 0003), and

@@ -254,6 +254,12 @@ export function plotDataset(
         ...(pair.y.field.unit === undefined ? {} : { unit: pair.y.field.unit }),
       },
       points: plotted,
+      // The window's numbers; the footer below is the artifact's own line, both from the same count.
+      evidence: {
+        points: plotted.length,
+        noCurve: 'unmodelled' as const,
+        ...(skipped > 0 ? { skipped: { points: skipped, x: pair.x.field.name, y: pair.y.field.name } } : {}),
+      },
       footer: footerParts.join(' · '),
       ...(empty === undefined ? {} : { empty }),
     },

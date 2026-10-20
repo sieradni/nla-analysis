@@ -67,7 +67,7 @@ describe.skipIf(!built)('bundled core, as the desktop shell loads it', () => {
   it('hands the window a split drawing with identity and provenance intact', async () => {
     const api = await shell()
     const opened = (await api.openView!(fixture, 'drift over time')) as {
-      view: { panels: { chart: { points?: unknown } }[] }
+      view: { panels: { chart: { points?: unknown; provenance?: unknown; footer?: unknown; evidence?: unknown } }[] }
       drawings: {
         under: string
         over: string
@@ -80,7 +80,16 @@ describe.skipIf(!built)('bundled core, as the desktop shell loads it', () => {
     const drawing = opened.drawings[0]!
     const ids = drawing.ids.split('\n')
     expect(drawing.under.startsWith('<svg')).toBe(true)
-    expect(drawing.under).toContain('data-dataset="main"')
+    // The drawing is the window's, not the artifact's: no title, subtitle, footer or provenance in
+    // its markup, and no second accessible name competing with the panel host's. What the tab is
+    // drawn from travels beside it in the view, where a client pins it structurally.
+    expect(drawing.under).not.toContain('data-dataset')
+    expect(drawing.under).not.toContain('data-shape')
+    expect(drawing.under).toContain('aria-hidden="true"')
+    expect(opened.view.panels[0]!.chart.provenance).toEqual({ dataset: 'main', shape: 'xy.v1', version: 2 })
+    // The window gets the facts, not the artifact's prose line: the footer is the CLI's.
+    expect(opened.view.panels[0]!.chart.footer).toBeUndefined()
+    expect(opened.view.panels[0]!.chart.evidence).toMatchObject({ points: 14, regimes: 2, parameters: 2 })
     expect(drawing.under).toContain('</svg>')
     expect(drawing.over).toContain('</svg>')
     // The marks are not DOM nodes any more: they arrive projected in the spec's own point order, and
@@ -438,7 +447,7 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     const settled = (await api.refreshView!(dir, 'drift over time', { draw: false })) as Window
     expect(settled.drawings).toBeNull()
     expect(settled.counts[1]).toBe(15)
-    expect(settled.footers[1]).toContain('n = 15')
+    expect(settled.evidence[1]).toMatchObject({ points: 15, noCurve: 'unmodelled' })
     expect(settled.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
     // The saved file is what the window will open next time, so the count there has to be the new one.
     const saved = JSON.parse(await readFile(join(dir, 'views', 'drift-over-time.json'), 'utf8')) as Window
@@ -746,8 +755,11 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
       yField: 'altitude',
     })) as Window
     expect(opened.view.panels[0].n).toBe(0)
-    expect(opened.view.panels[0].chart.empty).toContain('No observations')
-    expect(opened.drawings[0].over).toContain('No observations')
+    // The sentence is the window's to compose; the descriptor says the panel is empty, and the
+    // drawing itself stays a wordless frame.
+    expect(opened.view.panels[0].chart.empty).toBeTruthy()
+    expect(opened.drawings[0].over).not.toContain('No observations')
+    expect(opened.drawings[0].over).not.toContain('bench add')
     expect(opened.drawings[0].marks).toHaveLength(0)
   })
 

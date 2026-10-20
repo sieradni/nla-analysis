@@ -196,6 +196,8 @@ describe.skipIf(!venvPresent)('fit recipe (requires the analysis environment)', 
     expect(outcome.result.chart.line).toBeUndefined()
     expect(outcome.result.chart.band).toBeUndefined()
     expect(outcome.result.chart.footer).toContain('no curve drawn')
+    // The window's half of the same fact: numbers, not the footer's prose.
+    expect(outcome.result.chart.evidence).toMatchObject({ points: 2, dof: 0, noCurve: 'insufficient' })
     expect(outcome.result.narrative).toContain('exact by construction')
     expect(outcome.result.chart.points).toHaveLength(2)
   })
@@ -227,6 +229,7 @@ describe.skipIf(!venvPresent)('fit recipe (requires the analysis environment)', 
     expect(outcome.result.verdict).toBe('supported')
     expect(outcome.result.chart.line).toHaveLength(120)
     expect(outcome.result.chart.band).toHaveLength(120)
+    expect(outcome.result.chart.evidence).toMatchObject({ points: 12, parameters: 2, dof: 10 })
 
     const coefficients = outcome.result.data.coefficients as { name: string; estimate: number }[]
     const slope = coefficients.find((coefficient) => coefficient.name === 'x')
@@ -283,6 +286,7 @@ describe.skipIf(!venvPresent)('fit recipe (requires the analysis environment)', 
 
     expect(outcome.result.verdict).toBe('supported')
     expect(outcome.result.chart.lines).toHaveLength(2)
+    expect(outcome.result.chart.evidence).toMatchObject({ points: 12, regimes: 2, parameters: 2, dof: 8 })
     expect(outcome.result.diagnostics.test).toBe('permutation')
 
     const segments = outcome.result.data.segments as { label: string; slope: number }[]
@@ -333,6 +337,7 @@ describe.skipIf(!venvPresent)('fit recipe (requires the analysis environment)', 
 
     expect(outcome.result.verdict).toBe('insufficient')
     expect(outcome.result.chart.lines).toBeUndefined()
+    expect(outcome.result.chart.evidence).toMatchObject({ points: 4, noCurve: 'segments', needed: 6 })
     expect(outcome.result.diagnostics.more_points_needed).toBeGreaterThan(0)
   })
 
