@@ -70,6 +70,17 @@ The CLI door is `bench shape designate <id> --time-field <name>`. Shapes may als
 - The window's entry bar and import sheet call the same `Workspace`/`planImport` functions, so they
   inherit the rule without a new UI flow.
 - `bench check` validates each point against the declaration it was recorded with, so a point
-  written before a designation is not retroactively refused. New points cannot diverge.
-- The window has no designation editor yet; this ADR covers the core, CLI, and the existing write
-  doors. A shape editor, `shape list|show|validate`, and `add --dry-run` remain open.
+  written before a designation is not retroactively refused. New points cannot diverge.- The window has no designation editor yet; this ADR covers the core, CLI, and the existing write
+doors. A shape editor, `shape list|show|validate`, and `add --dry-run` remain open.
+
+## Update 2026-10-20 — the window states the time, and a missing clock is an estimate
+
+[ADR 0015](0015-user-surface.md) changes how the rule is presented, not what counts as a time:
+
+- The import sheet preselects the column it believes and states it in one line, instead of requiring
+a picker row before it will plan. **Change** opens the full choice.
+- A file with no time column may import with the row order as an explicit **estimated** instant
+  (ADR 0012's update). It is never silent and can be corrected; a file with a clock never falls back.
+- When a designated shape's time field is present, the declaration still decides; an offset is still
+  canonicalised, and a contradiction is still refused. Confidence about the column does not weaken
+  the one-instant rule.

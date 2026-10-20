@@ -83,3 +83,13 @@ their shape.
 to browse versions in the window beyond the strip's label, and whether a *typed* point with no `--at`
 should keep defaulting to now (it does; a single typed point is an act with a time, not a file
 claiming thousands of rows share one).
+
+## Update 2026-10-20 — untimed files are labelled, not refused
+
+Item 5's refusal is narrowed by [ADR 0015](0015-user-surface.md). A file with no clock may now import
+with the row order as an explicit **estimated** instant: the plan says so before the write, the rows
+carry the estimate, and a real observation time can replace it from the window (roadmap U9/U11). The
+original reasoning stands — an invented instant is indistinguishable from a measured one, so it is
+never silent, and a re-export of an untimed file must not claim every row is new. What changed is that
+the uncertainty is recorded and correctable instead of blocking the import. A file that *has* a time
+column never falls back to the estimate.

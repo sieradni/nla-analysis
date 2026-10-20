@@ -99,6 +99,14 @@ Chart marks are now painted on a canvas between two SVG layers; zoom and pan sti
 and 5 is history: at 10k a rescale measures 35.1–47.4 ms (`pnpm app:measure`). The decision that the
 window is a viewport onto the core's drawing, not a second renderer, is unchanged.
 
+## Update 2026-10-20 — item 5 is superseded
+
+Item 5's "the tooltip shows the id" no longer holds. [ADR 0015](0015-user-surface.md) makes the
+window's vocabulary the person's, not the log's: the tooltip shows values with labels and units, the
+id is available from the point's **Copy details** action, and no ULID, dataset or shape id appears in
+a primary label. Hit-testing the drawn marks and resolving one back to its record is unchanged; only
+what is displayed changed.
+
 ## Revisit if
 
 - Installer size becomes the deciding constraint. Then build one Electron installer *and* one Tauri

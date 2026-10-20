@@ -132,3 +132,7 @@ gate.
 No code signing, no MSI or installer, no auto-update. The artifact is a folder to copy or zip; it will
 trigger Windows SmartScreen because it is unsigned, and that is the honest consequence of leaving
 signing out.
+
+**Decided 2026-10-20:** the portable build ships **unsigned**. SmartScreen's warning is documented
+here and is not a blocker for `0.1.0`; a certificate, an installer and auto-update are later decisions
+on their own ([ADR 0015](adr/0015-user-surface.md), roadmap §4).

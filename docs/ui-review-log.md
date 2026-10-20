@@ -1,101 +1,171 @@
 # UI review log
 
-Every visual change waits here for the user's verdict. The agent never self-approves.
+Every visual change is captured from the real window and recorded here. The agent never approves its
+own visuals.
 
-Format: date · step · what to look at · verdict · follow-up.
+**Status 2026-10-20:** the batch of 25 rows below was **closed by direction**, not by approving frames
+one at a time. The user reviewed the window and its frames, stated what it gets wrong for a person, and
+asked for the whole batch to be recorded as decided. Their words are quoted under "The direction that closed the
+batch"; the work it created is in [05-user-surface.md](05-user-surface.md) and
+[03-roadmap.md](03-roadmap.md) §6. This is a decision about the direction, **not** a claim that every
+pixel was inspected. New visual work still produces a frame and a row, under the protocol at the end.
 
-| date | step | what to look at | verdict | follow-up |
+## What a frame is, and what you do with it
+
+A frame is a PNG of the real Electron window, taken by `pnpm app:capture`. It is not a mockup. The
+capture boots the app on `fixtures/projects/drift-sensor`, photographs it at 100%, 125% and 150%
+scaling, then drives it with real events — typing a point, undoing, a refused entry, an import sheet, a
+version diff, an external write, the packaged build — and photographs the results. The field-pair
+frames come from a read-only QP Stats session.
+
+To look: open [ui-review/index.html](ui-review/index.html) in a browser. It is the contact sheet, with
+each frame and a caption saying what it demonstrates. Click a frame to see it full size. A single frame
+can also be opened directly, for example [app-interaction.png](ui-review/app-interaction.png).
+
+The step column names the change that produced the frame. It is history, not something a reviewer
+needs to know; the plain description is in the next column.
+
+To give a verdict: say **approved**, or say what should change. You do not need to edit this file or
+answer in any particular format; the agent records the verdict. A frame that raises a question is a
+useful verdict too — "what does this badge mean?" is a finding, and it goes into the user-surface
+register rather than being explained away.
+
+The in-app Preview tab serves only the HTML file it is handed, so the images load when the folder is
+opened in a browser, not in that preview.
+
+## How to read a row
+
+Each row has a date, the step that produced the frame, what the frame shows, the verdict, and what
+follows. Historical rows were written in the vocabulary of the code, which is exactly what made them
+hard to check. The **glossary** below is the translation; snapshots that need it are in the frames
+themselves.
+
+| term | what it means in the window |
+|---|---|
+| **frame** | a screenshot of the real window after something happened |
+| **panel** | one chart card; a tab can hold one or two |
+| **strip** | the thin line above a chart, carrying its title and facts |
+| **badge** | the small pill saying whether the panel is up to date |
+| **current / stale / missing** | drawn from the latest data / drawn from older data / the data it needs is gone |
+| **`n`** | how many points the panel drew |
+| **verdict** | how much the data supports the curve: insufficient, tentative, supported, contradicted |
+| **DOF** | degrees of freedom — spare observations left after fitting; too few makes a curve meaningless |
+| **recipe** | a saved analysis (`fit`, `drift`); a panel either plots rows or runs one |
+| **shape** | the declared fields a project's points carry |
+| **version** | a dataset snapshot made by an import; a panel is drawn from one |
+| **entry bar** | the row of number fields at the bottom |
+| **rail** | the left column listing projects and tabs |
+| **step** | the change that produced the frame; history, not something you need to know to review it |
+| **Chart renderer v1** | a step name for the first version of the code that drew charts — not a control or a label in the window |
+
+A row is supposed to let a person who has not read the code answer: *what is this a picture of, is
+anything wrong, and do I need to do something?* When it does not, the row is defective, not the reader.
+
+## The direction that closed the batch
+
+The user's review on 2026-10-20, condensed to the lines that decided the rows:
+
+> the frontend needs to be evaluated from a user perspective — they don't care about these details.
+
+> everything should be recoverable if a mistake is made, but don't overrecord. Keep the important
+> details, drop the others.
+
+> Do NOT make or expect the user to use cli tools … they should just be able to press a button, or if
+> it doesn't make sense to keep it in a bad state it should be done automatically.
+
+> do not duplicate showing the same information … unless they can differ.
+
+> The user doesn't have to know everything from the frontend or care about enforcing data integrity.
+> That's the agent's job.
+
+The full reasoning and the resulting decisions are [ADR 0015](adr/0015-user-surface.md) and
+[05-user-surface.md](05-user-surface.md). Each row below is closed against one of those `U` items.
+
+## Frames and verdicts
+
+| date | step | what the frame shows, in plain terms | verdict | follows |
 |---|---|---|---|---|
-| 2026-10-18 | Design review (no UI yet) | — | approved direction: Tauri 2, Python analysis, repo-agent control, versioned shapes | build slice 1 before any pixels |
-| 2026-10-18 | Chart renderer v1 (`bench chart` → SVG) | (1) Title, subtitle, and the evidence line read as one stack and no longer overlap. (2) Two visible bands of points — week 1 below, week 2 above — with no line drawn, because nothing has been fitted yet. | **pending** | awaiting user verdict; the two clusters are not yet labelled by time |
-| 2026-10-19 | Supported fit (`bench run fit`, fixture) | (1) The band widens toward both ends, which is what a confidence band should do. (2) The footer and the two-line caption carry the whole argument: n, parameters, DOF, verdict, slope with its interval. | **pending** | the pooled slope hides the two weeks — a windowed or changepoint recipe is what answers the real question |
-| 2026-10-19 | Refusal (`bench run fit`, two points) | (1) Two points, no curve, no band — and the footer says `no curve drawn`. (2) The caption names the fix: add a third point, or lower the degree. | **pending** | none; this is the behaviour the product exists for |
-| 2026-10-19 | Import in the fixture (`bench import`) | (1) The imported rows join the two existing clusters rather than forming a third — two points at x = 7, 8 land on the recalibration line. (2) The file carries a comment preamble, and the import output reports the skipped lines instead of losing them. | **pending** | no new visual surface; this row exists because the fixture's charts were regenerated, so the committed evidence changed |
-| 2026-10-19 | Two regimes (`bench run drift`, fixture) | (1) One accent hue doing two jobs: solid before the recalibration, dashed after, named in a legend on its own plate. (2) The caption states both slopes with intervals and the p-value, so the file is readable without the terminal. | **pending** | the verdict is `tentative`, not `supported` — the permutation penalty for a data-chosen split. Worth confirming that reads as honest rather than weak |
-| 2026-10-19 | Desktop window, first slice (ADR 0005) | (1) Projects in the rail, tabs under them, and the chart filling the stage — the window opens on `drift-sensor` / “drift over time” with two panels side by side. (2) Each panel's strip carries the facts that survive zooming: dataset, recipe and params, verdict, `n`, and a `current` badge from the fingerprint check. | **pending** | no data entry in this slice; the empty state and error states were only seen by forcing them. Panels keep the chart's own aspect ratio, so a two-panel view leaves the lower stage empty |
-| 2026-10-19 | Window interaction (hover, zoom, pan) | (1) The ring sits on the hovered mark and the tooltip names the record — `01M58Y41VF83K6TQ8XWWK9VN0S`, `x 3  y 8.09`, `main · xy.v1` — so a mark can be traced to the log. (2) The zoom badge reads `2.1×` after two wheel steps and the crop has moved: zoom is a crop of the same drawing, so labels and marks cannot drift from each other. | **pending** | the tooltip shows the raw ULID; shortened ids would be easier to read but harder to match in the log. Zoom crops the axis labels with the plot — pinning them needs a redraw, not a `viewBox` move |
-| 2026-10-19 | Point entry (ADR 0006) | (1) Type `6.5`, `Tab`, `16.4`, Enter: the mark appears, the plot's own `n = 15` and the footer agree, and the bar reports what it recorded plus `13 ms` for the whole path. (2) The fitted panel turns `stale` with the exact command that fixes it, while the plot beside it is `current` — the window refreshed what it can and says what it cannot. | **pending** | captured on a scratch copy of the fixture, so the committed log was not written by a review run. The stale fitted panel is the intended behaviour, not a failure — say if it reads that way |
-| 2026-10-19 | Undo (Ctrl+Z in an empty bar) | (1) The point disappears and **both** panels return to `current`: the retraction put the input fingerprint back to what the file was drawn from. (2) The status line names the record and says it stays in the log — nothing was deleted. | **pending** | keyboard-only path: only fires when the bar is empty, so it never steals away an edit-in-progress undo |
-| 2026-10-19 | Entry refused | (1) `seven` is still in the `x` field after the refusal — a rejection that ate the number would be a worse bug than the rejection. (2) Both fields are marked and the two problems are named the way the shape names them, so the fix is obvious from the frame. Nothing was written: the count is still 14. | **pending** | the capture asserts the text survived (`typed.x === 'seven'`), so this frame cannot silently rot |
-| 2026-10-19 | Packaged build, launched (ADR 0009) | (1) [app-packaged.png](ui-review/app-packaged.png) comes from `bench.exe` in `artifacts/`, not from the dev shell: the same two panels and 28 marks, `n = 14`, entry fields `x, y`. (2) The build is proven with Python removed from `PATH` — the tab dialog offers a plot only and says which runtime is missing, while every other door still works. | **pending** | unsigned, so Windows SmartScreen will warn on first launch; the receipt beside the frame records what the check asserted |
-| 2026-10-19 | New tab (ADR 0008) | (1) `New tab…` opens one dialog: a name, a dataset, and a panel — a plain plot or a recipe. The frame is the tab it built: `regimes` in the rail, `drift · tentative · n = 14`, badge `current`. (2) The replace tick appears only when the typed name is already taken, so overwriting a tab is an explicit act. | **pending** | one panel per tab from the window; a second panel is still `bench view add`. Say if that is the wrong cut |
-| 2026-10-19 | Creating a project with its own shape | (1) The dialog offers the shipped shape or custom fields; the frame is a project whose shape is `load.v1 (mass, extension)`, declared at init, with the entry bar offering exactly those two fields. (2) The first tab is created before any point: [app-empty-tab-100.png](ui-review/app-empty-tab-100.png) (and its 125/150 siblings) draws axes labelled `mass`/`extension`, `n = 0`, and the shape's own `add --values '{…}'` sentence. One point typed afterwards reads `1 active in main` in [app-new-project.png](ui-review/app-new-project.png). | **pending** | shape changes are CLI-only in this slice (no editor); fields are validated before the folder is created, and a later field can be appended with `bench shape extend`. The empty tab is the first-run proof; approve the sentence and axis choice at 150% |
-| 2026-10-19 | Correcting a point by selecting it | (1) Clicking a mark puts a dashed ring on it and opens a `Correcting …` row above the fields, prefilled from the log — the values are the log's, not the tooltip's rounded readout. (2) After `24.5` replaces `2.55` and Enter: the mark moves, the count stays 16, and the status says a `point_corrected` event supersedes the original — while the fitted panel turns `stale` rather than pretending the curve still holds. | **pending** | no separate button for it: the row's discoverability rests on the idle hint in the status area (`Click a point to correct it, or Shift+Arrow in a chart`). Say if that reads or needs a real control |
-| 2026-10-19 | Live refresh while idle (ADR 0010) | (1) [app-live.png](ui-review/app-live.png): `4` was typed into the `x` field and left unfinished, then the real `bench` binary appended a point. The count and the plot moved to `n = 15` without a keystroke, while `4` is still in the field and the cursor is still in it. (2) [app-tab-replaced.png](ui-review/app-tab-replaced.png) is the same tab after `bench view new --force`: one panel, reread and redrawn, because the file is a different tab with the same name. [app-tab-gone.png](ui-review/app-tab-gone.png) is the file deleted: a named empty state, no rail entry, and the bar still says where a point lands. | **pending** | the watcher redraws a whole tab, so at 10k points one external write costs ~225 ms of main-process work (17 ms at the fixture). Say if a slower, calmer refresh would read better than an immediate one |
-| 2026-10-19 | A second writer (ADR 0007) | (1) [app-second-writer.png](ui-review/app-second-writer.png): the bar says `16 active in main · the log had changed on disk, so it was reread before this point was added`, and `n = 16` — the capture asserts the same numbers, so the frame cannot rot. (2) The distance from stale to right is the caption's whole point: before the typed point the bar read `n = 14` while the log held 15, and the plot panel under the strip had 14 marks. | **pending** | captured by spawning the real `bench` binary in the middle of the capture run, so this is a genuine two-process frame; the fitted panel beside it still reads `stale`, which is correct and not the defect |
-| 2026-10-19 | A tab drawn from more than one version | [app-mixed-versions.png](ui-review/app-mixed-versions.png): a tab built deliberately with one panel pinned at v2 and one at v3, then a dataset at v4. The strip reads `main · v2, v3 (now v4)` and both panels carry `stale`; before this change the strip named only the first panel's version and dropped the other silently. A tab whose panels all come from one version keeps the old wording exactly — `main · v2 · xy.v1 …` — which the packaged check still asserts. | **pending** | versions are listed in order and deduplicated, but a tab spanning two datasets still shows the first dataset's name; say if that needs its own label. The `now` suffix appears only when no panel is pinned to the current version |
-| 2026-10-19 | Canvas mark layer (roadmap step 1) | (1) [app-100.png](ui-review/app-100.png) with its 125/150 siblings: the same 28 marks in the same places, now painted on a canvas between the grid/fits below and the axes/labels above — text is still SVG, so it stays crisp, and grid lines sit under the points rather than over them. (2) [app-interaction.png](ui-review/app-interaction.png): zoom `2.1×`, pan, tooltip and hover ring still work; the capture asserts the canvas covers the drawing to the pixel and paints 3,589 pixels, so a blank or offset canvas fails the run. | **pending** | a 10k rescale is 35.1–47.4 ms (was 147.0–173.6) and `pnpm app:measure` now fails over 50 ms, when the rescale sample is missing or was patched, and when an entry had to be submitted programmatically; the rescale figure is one sample per run, so an occluded window can measure the compositor rather than the app. Say whether the marks read correctly at all three scalings |
-| 2026-10-19 | A row's time is chosen, not invented (ADR 0012) | (1) [app-import-untimed.png](ui-review/app-import-untimed.png): the sheet plans nothing until the time column is chosen — the line under the mapping reads `choose the column that holds the observation time` in the refusal colour, and the picker offers `x, y` with nothing selected. Pressing Import anyway is refused by the core in the same words (`no column holds the observation time … the file has x, y`) and the log does not grow. (2) [app-import-time.png](ui-review/app-import-time.png): a file whose clock is called `taken_at` is offered that column; choosing it plans `version 5 replaces version 4 · +1 −0 ~0`, the import lands as v5, and `bench dataset diff main 4 5` prints the same count plus the added instant. | **pending** | the picker stays visible even when a header already looks like a time (preselected), which costs one row in a dialog that is already a form — say if that should collapse to a sentence in the guessed case. A file with genuinely no time column now cannot be imported at all; that is the intended refusal, not a missing fallback |
-| 2026-10-19 | Dataset versions in both doors (ADR 0012) | (1) [app-version-diff.png](ui-review/app-version-diff.png): the sheet said `version 4 replaces version 3 · +1 −2 ~1` before the button was pressed — a count about rows, not a row count — and the status afterwards adds that the two rows the file dropped were withdrawn from version 4, with version 3 still holding them. (2) The strip reads `main · v2, v4`: the import refreshed the plot panel to v4 while the recipe panel stayed at v2 (the window will not rerun it on the entry path), so the tab names both versions rather than picking one and hiding the other. `bench dataset diff main 3 4` prints the same `+1 −2 ~1` from the log, and the capture asserts both. | **pending** | the diff is keyed on observation time, so a file with no time column takes one synthetic instant per row and a re-export of it reads as all-new — say if that should refuse instead. The strip's `v2, v4` says which versions exist but not which panel is which; a per-panel version marker may read better than one tab-level list |
-| 2026-10-19 | Import door in the window (ADR 0011) | (1) [app-import.png](ui-review/app-import.png): `Import…` opens a sheet on the file the OS picker returned — the name, `5 row(s) · 5 column(s) · into main (xy.v1) · 2 comment line(s) skipped`, a sample of the real cells, and one row per shape field with a column choice. The frame is taken with `x ← temp_c, y ← volts` chosen and nothing written yet. (2) The same sheet refuses twice in the capture: with no mapping it names the field to map, and for `lab-export-bad-row.csv` it says `1 row(s) would not import, so none were` and points at `row 3: field “x” expects a finite number, got “twenty-one”` — the frame stays open with the mapping intact, and the log does not grow by one event. | **pending** | the sheet offers columns, never types: coercion is the shape's business the same way it is for `bench import`. A blank cell is a gap, not a zero. Only one file at a time, and the file must be a path on disk — drag-and-drop from elsewhere needs a decision about where the bytes live |
-| 2026-10-19 | Custom-axis tab through the real window | (1) In a scratch project with shape `load.v1`, the first tab is built on `mass`/`extension`; typing `2.5` / `12` redraws it, the canvas paints one mark, and the saved view keeps both axes and `n = 1`. (2) `2.6` / `12.2` patches a second mark, then `1000` / `5000` forces a redraw to `n = 3`; the saved file agrees after each frame. The capture reads the accessibility tree: the panel is exposed as `first tab. x mass, y extension. n = 1 …`, and a recipe panel's exposed name includes its caption. | **pending** | the empty chart has no scale, so the first point must redraw; the later points are the patch and redraw proofs. The accessible name now carries axes, footer and caption because the canvas hides both SVG halves. Say whether the added caption makes the image name too long for a screen reader. |
-| 2026-10-19 | Field-pair plotting on a custom shape | (1) [app-field-pair-altitude-100.png](ui-review/app-field-pair-altitude-100.png): QP Stats' `altitude over time` tab draws its one observation against a clock axis — ticks read `2026-10-19 06:00` … `2026-10-20 00:00`, the labels are `date` and `altitude`, and the footer says `n = 1 · no fit — unmodelled`. [app-field-pair-altitude-125.png](ui-review/app-field-pair-altitude-125.png) and [app-field-pair-altitude-150.png](ui-review/app-field-pair-altitude-150.png) are the same tab at the other scalings. (2) [app-field-pair-100.png](ui-review/app-field-pair-100.png) (and its 125/150 siblings) is `app against pps` on numeric axes; [app-field-pair-dialog-100.png](ui-review/app-field-pair-dialog-100.png) (and its 125/150 siblings) shows the New tab dialog offering the shape's own six fields, with `date` and `altitude` selected. | **pending** | the two tabs are read-only; the capture asserts one mark and the axis labels at each size. Say whether the time tick labels are readable at 150% and whether the axis fields should be shown before the panel choice (currently they disappear when a recipe is selected) |
-| 2026-10-20 | One column below 980 px of viewport | (1) [app-150.png](ui-review/app-150.png): one panel per row, 519 px wide with its title intact, where two columns would leave it ~170 px and ellipsized; the chart is 517×299 instead of 254×147. (2) [app-125.png](ui-review/app-125.png) is unchanged — two panels at 341 px each — so the comparison only goes away where it stopped being legible. The capture computes `grid-template-columns` per scaling and throws if it disagrees with the viewport. | **pending** | the 150% frame scrolls vertically now (459 px of overflow at that window size), which is the cost of the wider panel; say whether 980 px is the right breakpoint or whether the rail should shrink first. The window at 150% on a 1920 px screen still gets two columns, because the rule is on the viewport, not the scaling |
+| 2026-10-18 | Design review (no UI yet) | No frame; the direction for the first window was agreed | **approved direction** | build the first slice |
+| 2026-10-18 | Chart renderer v1 (`bench chart` → SVG) | The first chart artifact: a title, a subtitle, two visible clusters of points and no line, because nothing was fitted yet | **closed by direction 2026-10-20** | U9, U14: number formatting and one title |
+| 2026-10-19 | Supported fit (`bench run fit`) | A fitted line with an uncertainty band that widens at both ends; the footer and caption carry n, the parameters, DOF, the verdict and the slope interval | **closed by direction 2026-10-20** | U12, U13, U14: the interval is `1.23 to 2.35`, and DOF is spelled out on hover |
+| 2026-10-19 | Refusal (two points) | Two points and no curve; the footer says no curve was drawn and the caption says to add a third point | **closed by direction 2026-10-20** | U12: the refusal is explained in consequences, not just as an `insufficient` badge |
+| 2026-10-19 | Import in the fixture | Imported rows join the existing clusters rather than forming a third; the comment preamble is reported, not silently skipped | **closed by direction 2026-10-20** | U10: the import summary becomes plain language |
+| 2026-10-19 | Two regimes (`bench run drift`) | Two slopes before and after a split: one accent hue, solid then dashed, with the split named in a legend; the caption gives both slopes, intervals and p | **closed by direction 2026-10-20** | U12, U13, U14 |
+| 2026-10-19 | Desktop window, first slice | The window opens on a project with two panels side by side; each strip names the dataset, recipe, verdict and n, and carries a badge | **closed by direction 2026-10-20** | U12, U17, U18: drop the `current` badge, deduplicate the facts |
+| 2026-10-19 | Window interaction (hover, zoom, pan) | A ring on the hovered mark, a tooltip with the record id, and the zoom badge at `2.1×` after two wheel steps | **closed by direction 2026-10-20** | U1, U2: values only; id available through **Copy details** |
+| 2026-10-19 | Point entry | Type `6.5`, Tab, `16.4`, Enter: the mark appears, the count and footer agree, the bar reports what it recorded and how long it took | **closed by direction 2026-10-20** | U4, U18: undo/redo, and the count shown once |
+| 2026-10-19 | Undo (`Ctrl+Z` in an empty bar) | The point disappears and both panels return to up to date; the status says the record stays in the log | **closed by direction 2026-10-20** | U4, U6: undo is one action, redo exists, no event narration |
+| 2026-10-19 | Entry refused | `seven` is still in the field after the refusal, both fields are marked, and nothing was written | **closed by direction 2026-10-20** | U14, U20: the message stays, the layout at 150% changes |
+| 2026-10-19 | Packaged build, launched | The same two panels from `bench.exe`, with Python removed: the tab dialog offers a plot only and names the missing runtime | **closed by direction 2026-10-20** | unsigned by decision ([packaging.md](packaging.md)) |
+| 2026-10-19 | New tab | One dialog creates a tab from a name, a dataset and a panel; the frame shows the tab it built | **closed by direction 2026-10-20** | U17, U18: the rail and the duplicated facts |
+| 2026-10-19 | Creating a project with its own shape | A project created with `load.v1 (mass, extension)`; the entry bar offers exactly those fields; the empty first tab shows `n = 0` and a CLI command | **closed by direction 2026-10-20** | U20, U22: no command in the empty state |
+| 2026-10-19 | Correcting a point by selecting it | A dashed ring on the selected mark, a correction row prefilled from the log, the mark moves after the edit, and the recipe panel goes out of date | **closed by direction 2026-10-20** | U2, U3: edit from the point menu, in plain words |
+| 2026-10-19 | Live refresh while idle | A point appended by the CLI while text sat half-typed: the count and plot move without a keystroke, and the text and cursor stay put | **closed by direction 2026-10-20** | U21: a stale plot refreshes itself; a recipe panel offers **Refresh** |
+| 2026-10-19 | A second writer | A point typed while the CLI also appended one: the bar says the log had changed and was reread, and the counts agree | **closed by direction 2026-10-20** | U3, U21: same facts, without the event vocabulary |
+| 2026-10-19 | A tab drawn from more than one version | A tab with one panel pinned to v2 and one to v3 while the data is at v4; the strip lists both versions | **closed by direction 2026-10-20** | U18: a per-panel marker only where panels differ |
+| 2026-10-19 | Canvas mark layer | The same 28 marks in the same places, now painted on a canvas between the grid/fits and the axes; zoom, pan and hover still work | **closed by direction 2026-10-20** | no wording change; the 10k budget stands |
+| 2026-10-19 | A row's time is chosen, not invented | The import sheet will not plan until a time column is picked; a file whose clock is called `taken_at` is offered it and plans a version diff | **closed by direction 2026-10-20** | U8, U9: a stated guess, and a labelled estimate when there is no clock |
+| 2026-10-19 | Dataset versions in both doors | The sheet states the row diff before the click; the window names both versions when panels disagree | **closed by direction 2026-10-20** | U10, U18 |
+| 2026-10-19 | Import door in the window | A sheet on the chosen file: name, row/column counts, a sample of real cells, one row per field, and two refusals that keep the mapping | **closed by direction 2026-10-20** | U10, U20: plain counts, compact at 150% |
+| 2026-10-19 | Custom-axis tab through the real window | A `load.v1` project's first tab on `mass`/`extension`; three points typed, one redraw and two patches; the saved file agrees | **closed by direction 2026-10-20** | U15, U27: plain keyboard help, shorter accessible name |
+| 2026-10-19 | Field-pair plotting on a custom shape | QP Stats' `altitude over time` on a clock axis and `app against pps` on numeric axes; the dialog offers the shape's own six fields | **closed by direction 2026-10-20** | U12, U20: verdict hover and the 150% layout |
+| 2026-10-20 | One column below 980 px of viewport | At 150% the grid drops to one 519 px panel per row instead of two ~170 px ones; 125% keeps two; the capture checks the computed column count | **closed by direction 2026-10-20** | implemented in `a3888b4`; no follow-up |
 
-**2026-10-20 — the tree was landed with no verdict.** The user asked for the working tree to be
-committed; it was (`cb681b2`), with 24 rows above still `pending`. That is a recorded exception, not
-an approval: no frame has been reviewed, the visual gate stays open, and the next UI slice still
-waits for verdicts on the frames already captured.
+**Note on the 2026-10-20 review.** The user did not approve these frames individually; they reviewed
+the window and its frames, found the problems the stills had not made legible (ids in tooltips, duplicated
+facts, commands in empty states, unreadable numbers, `New…`/`Open…` spacing), and directed the next
+pass. The findings live in [05-user-surface.md](05-user-surface.md), because they are work, not frame
+verdicts. The batch is closed; the direction is not a pixel-level approval, and later visual changes
+still need their own frames.
 
-## Desktop window — what to look at
+## The protocol for new rows
 
-The frames are [app-100.png](ui-review/app-100.png), [app-125.png](ui-review/app-125.png),
-[app-150.png](ui-review/app-150.png), [app-interaction.png](ui-review/app-interaction.png),
-[app-entry.png](ui-review/app-entry.png), [app-undo.png](ui-review/app-undo.png),
-[app-refused.png](ui-review/app-refused.png), [app-second-writer.png](ui-review/app-second-writer.png),
-[app-corrected.png](ui-review/app-corrected.png), [app-new-tab.png](ui-review/app-new-tab.png),
-[app-new-project.png](ui-review/app-new-project.png), [app-custom-axis.png](ui-review/app-custom-axis.png),
-[app-live.png](ui-review/app-live.png),
-[app-tab-replaced.png](ui-review/app-tab-replaced.png), [app-tab-gone.png](ui-review/app-tab-gone.png),
-[app-import.png](ui-review/app-import.png), [app-import-untimed.png](ui-review/app-import-untimed.png),
-[app-import-time.png](ui-review/app-import-time.png), [app-version-diff.png](ui-review/app-version-diff.png),
-[app-empty-tab-100.png](ui-review/app-empty-tab-100.png) (with its 125/150 siblings) and
-[app-mixed-versions.png](ui-review/app-mixed-versions.png),
-captured from the real window by `pnpm app:capture`. Everything after the three scalings is driven through the window itself — real
-keystrokes into the entry bar, clicks dispatched into the drawing, and the app's own dialog buttons —
-on scratch copies of the project, so no committed log is ever written by a review run. One frame
-(`app-second-writer`) runs the real `bench` binary mid-capture, so it is evidence about two writers.
-`docs/ui-review/index.html` collects the default capture's frames and the field-pair evidence on one
-page when opened in a browser; the in-app Preview tab serves only the HTML file it is handed, so the
-images there come from opening the folder instead.
+A new row answers four things, in this order, in plain language:
 
-The field-pair frames (`app-field-pair-*.png`) came from a read-only QP Stats session of the same
-window. The regular capture now also builds a scratch `load.v1` project and types into its
-`mass`/`extension` tab, so the field-pair path has a repeatable real-window frame as well as the
-bundled-core tests through `writeView`.
+1. **Screen** — what this is a picture of, in one clause. *"The window after typing a point."*
+2. **Check** — one question a non-author can answer by looking. *"Does the new mark appear where you
+   typed it, and does the count go up by one?"*
+3. **Wrong looks like** — the failure the check catches. *"The count changes but no mark appears."*
+4. **Your call** — the decision, with the recommendation and the alternative. *"Keep this; or should
+   the status be quieter?"*
 
-- **Rail**: projects most-recent-first, the open one marked; tabs under it with panel counts. Projects
-  whose folder is gone are hidden behind a count — say if that should be visible by default instead.
-- **Stage**: one card per panel, each drawing the core's own SVG. The chart's heading, footer and
-  caption are inside the drawing; the strip above repeats the facts that matter so zooming into the
-  plot cannot hide them.
-- **Scaling**: at 100% and 125% the grid keeps two columns (468 px and 341 px per panel); below
-  980 px of viewport it drops to one, so at 150% the panel is 519 px wide instead of the ~170 px two
-  columns could give it, and the title no longer ellipsizes. The breakpoint is a media query on the
-  viewport, so a 150% user with a wide screen still gets two columns. Say whether 980 px is the right
-  place for it and whether the single column at 150% reads better than the comparison did.
-- **Entry bar**: one field per shape field, the button, and undo. It is focused when a tab opens,
-  because typing a number is the thing this window is for; `Tab` still reaches the panel for
-  keyboard zoom and pan.
-- **Refusals**: a corrupt view file, a missing project and an empty registry each have their own
-  state — reachable with `BENCH_APP_PROJECT=<dir> pnpm app`. Typing nonsense into a field is the fourth,
-  and the frame below shows it: both fields marked, the text still there.
+No internal names, no pixel counts, no file names in the check. One check per row; a second finding
+gets its own row. Terms that cannot be avoided are in the glossary above. If the frame cannot be
+understood without the code, the frame is missing something — an annotation, a cursor, a before/after
+pair — and that is the finding.
+
+## Desktop window — the current surface in plain terms
+
+- **Rail (left):** projects most-recent-first, the open one marked, tabs under them with a panel
+  count. A missing project folder is hidden behind a count rather than shown as a broken entry.
+- **Stage:** one card per panel, each drawing the core's chart. The chart's heading, footer and caption
+  are inside the drawing; the strip repeats only the facts that zooming could hide.
+- **Scaling:** 100% and 125% keep two panels side by side; below 980 px of viewport the grid uses one
+  column, so 150% gets a readable 519 px panel instead of two ~170 px ones. A 150% user on a wide
+  screen still gets two, because the rule is the viewport, not the scaling.
+- **Entry bar:** one field per shape field, the button, undo/redo, and the import door. It is focused
+  when a tab opens, because typing a number is what the window is for. `Tab` reaches the panel for
+  keyboard pan and zoom.
+- **Empty and refused states:** a corrupt view file, a missing project and an empty registry each have
+  their own state; typing nonsense marks the field and keeps the text. The CLI commands currently in
+  those states are scheduled for removal (U21/U22).
 
 ## How to reproduce a review
 
 `pnpm review [project-dir]` writes `artifacts/review.html` inside the project: every chart artifact on
-one page at 100%, 125%, and 150% of natural size, with the file's own comment header. It defaults to
+one page at 100%, 125% and 150% of natural size, with the file's own comment header. It defaults to
 `fixtures/projects/drift-sensor`. The page and the SVGs it shows are regenerable and git-ignored; the
 images are deliberately not committed.
 
-`pnpm app:capture` builds the shell's core bundle, launches the real Electron window, captures it at
+`pnpm app:capture` builds the shell's core bundle, launches the real window, captures it at
 100/125/150%, then drives hover, wheel zoom and a keyboard pan and captures that frame last. Its PNGs
 are git-ignored too; `docs/ui-review/index.html` is the tracked contact sheet that shows them.
 
 ## Standing questions for every review
 
 - Is the fit's uncertainty visible, or does the curve look more certain than it is?
-- Does the verdict badge match what the chart implies?
+- Does the panel say "out of date" only when it is, and does it say what to do?
 - Is the primary action reachable by keyboard alone?
-- At 125% and 150% scaling, does anything clip or blur?
-- Does the update flicker or shift layout when a point lands?
+- At 125% and 150%, does anything clip, blur or stack badly?
+- Does the update flicker or shift the layout when a point lands?
+- Does a person who has not read the log understand every word on screen?

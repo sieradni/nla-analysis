@@ -16,6 +16,12 @@ Exit codes, `--json`, `--project`, and non-interactive behavior are in place. `-
 but not yet implemented. The tables below mark what is **not built**; a row with no such note is
 implemented.
 
+**Human output (decided 2026-10-20, roadmap U24).** A mutating command's first line says what changed
+in plain words (`1 row added, none removed, none changed → version 5`); the event id and version follow
+on a second line for the agent. `--json` and exit codes are unchanged. **Specified, not built:**
+`point_restored`, the inverse of a retraction, so undo of a removal restores the same record instead of
+re-recording it ([ADR 0015](adr/0015-user-surface.md), roadmap U5).
+
 `bench recipes` deliberately does **not** require a project: recipes belong to the application, not
 to a data set. `bench run` writes the rendered artifact, appends an `analysis_run` event carrying the
 recipe hash, the input hash, the verdict and the narrative, and refreshes `STATE.md`.

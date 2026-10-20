@@ -62,8 +62,8 @@ points with numeric x and y`, and a plain panel used to be created as `n = 0` wi
 **Evidence:** QP Stats has `altitude over time` (date/altitude) and `app against pps` (pps/app);
 both render with one mark, and `bench view render` writes the same spec. The window capture is
 [app-field-pair-altitude-100.png](ui-review/app-field-pair-altitude-100.png) with the three scalings beside it, plus
-[app-field-pair-dialog-100.png](ui-review/app-field-pair-dialog-100.png). The review row is
-pending, as every visual change is.
+[app-field-pair-dialog-100.png](ui-review/app-field-pair-dialog-100.png). The review row was closed by
+direction on 2026-10-20; the 150% layout issue it exposed is U20 in the roadmap.
 
 ### 3. `date` is a second copy of `t_observed`, and the two can disagree
 
@@ -106,9 +106,11 @@ lowercase names; there is no display-label field, so `APP` reads `app` everywher
 Units exist on a field (`unit`), but were not supplied for this project, so all four numbers are
 deliberately unitless rather than guessed.
 
-**Fix:** an optional `label` on `ShapeField`, and use it wherever a person reads a field name.
-This changes an existing declaration rather than appending a field, so `shape extend` deliberately
-refuses it; it needs a new shape version or a future, explicit migration, not a silent edit.
+**Decided 2026-10-20** ([ADR 0015](adr/0015-user-surface.md), [05-user-surface.md](05-user-surface.md) U28):
+an optional `label` on `ShapeField`, set by an explicit, recorded **declaration-only** shape version.
+Fields, types and order do not change, and points keep the shape they were recorded with. A unit
+change stays refused, because it would reinterpret measurements. Use the label wherever a person
+reads a field name; the lowercase identifier remains in the log and in copied details. Not built yet.
 
 ### 5. A shape is final after init
 
@@ -175,14 +177,15 @@ through; an unparseable string is refused before the event is appended. An impor
 matching `Date` column produces an identical `t` and canonical `date`.
 
 One caveat remains: the window's entry bar is a text input, not a date/time picker. It accepts the
-string but does not help compose an exact timestamp.
+string but does not help compose an exact timestamp. Decided 2026-10-20: the correction row gets a
+date/time input, and an imported estimate can be replaced from the window (roadmap U11).
 
 ## Suggested order
 
 The first-run hints (§1), empty first tabs (§6), and the observation-time model (§3) are fixed.
-What remains:
+What remains, now scheduled in [03-roadmap.md](03-roadmap.md) §6:
 
-1. Field display labels (M, a shape change) and a window flow for `shape extend` / `shape designate`
-   (S–M, after the core paths).
-2. `shape list|show|validate` and `add --dry-run` (S each), so a person can inspect and probe a
+1. Field display labels through a declaration-only shape version (U28), a window flow for
+   `shape extend` / `shape designate`, and a date/time input in the correction row (U11).
+2. `shape list|show|validate` and `add --dry-run` (roadmap §3), so a person can inspect and probe a
    declaration without appending.

@@ -41,6 +41,14 @@ Therefore the hard problems, in order of importance:
 6. **No Python in the entry path.** Typing a number never waits on an interpreter or a model.
 7. **Never destroy a dataset version.** Replacing data is a new version with a diff.
 8. **Guidelines over gates.** AGENTS.md + STATE.md shape each new session; they don't police it.
+9. **The window speaks to the person; the log speaks to the agent.** Record ids, event names, dataset
+   and shape ids, versions and hashes are agent vocabulary. The window shows values, units, what
+   changed and what to do; an id is available by copying it, never as the primary label
+   ([ADR 0015](adr/0015-user-surface.md)).
+10. **Everything is recoverable; not everything is recorded.** Undo and redo cover every reversible
+    action. The log keeps corrections and retractions, but the window does not ask for a reason for a
+    routine mistake or narrate the event it wrote. Integrity is the agent's job; recoverability is the
+    window's.
 
 ---
 
@@ -72,15 +80,24 @@ Types as built: `project_created`, `shape_defined`, `shape_extended`, `shape_tim
 0004](adr/0004-views-and-projects.md)), and a note or tag travels on the point event rather than in
 separate `note_added`/`tag_added` events.
 
+**Specified, not built:** `point_restored`, the inverse of a retraction, so undoing a removal brings
+the same record back instead of re-recording its values under a new id ([ADR
+0015](adr/0015-user-surface.md), roadmap U5). It is the only event the user surface adds.
+
 A point carries: `dataset`, `shape`, `values{}`, `t_observed`, `version`, `note`, `tags`; a
 correction names the point it `supersedes`. `sources` and `confidence` are not in the model. They
 were specified and never decided; adding either is a new decision, not an existing promise.
 
 **`t_observed` is first-class and distinct from `at` (recording time).** Conflating them makes
-"does this drift over time" unanswerable. An import must name a time column in both doors — `bench
-import` refuses a file without one, and the window's sheet asks for it — never filled from `at` or
-the moment of import. A single `bench add` may omit `--at`; it is stamped once, at the moment it is
-recorded.
+"does this drift over time" unanswerable. An import never fills the time from `at` or the moment of
+import; it either uses a column in the file or says out loud that it is using the row order as an
+estimate. **Changed 2026-10-20** ([ADR 0015](adr/0015-user-surface.md)): the previous rule refused a
+file with no time column. The rule is now *state the assumption, make it correctable* — an untimed
+import is allowed with an explicit `estimated` marker, and a real observation time can replace it
+from the window. The window's sheet preselects the column it believes, says so in one line, and offers
+**Change**; it does not make the person choose before it will plan. An agent importing on the user's
+behalf states the column (or the estimate) and asks before writing (U23). A single `bench add` may
+omit `--at`; it is stamped once, at the moment it is recorded.
 
 A shape may instead designate one of its own fields as the observation time ([ADR
 0014](adr/0014-observation-time.md)). Once it does, that field is the only source: `bench add`,
@@ -191,6 +208,11 @@ Every analysis artifact therefore carries a machine-checkable verdict:
 | `supported` | beats a null model on held-out / information-criterion grounds |
 | `contradicted` | a competing model or the null wins |
 
+In the window, the verdict word carries a hover sentence in consequences — why it is uncertain, what
+would strengthen it, and what the reader can do — because the four words above are log vocabulary
+([ADR 0015](adr/0015-user-surface.md), U12). A panel that is up to date shows no badge; a badge exists
+to ask for an action, not to say "everything is fine".
+
 **Implemented** in `recipes/fit.py`: `insufficient` when DOF ≤ 0 (no curve drawn at all), otherwise an
 F test against a mean-only model decides `contradicted` / `tentative` / `supported`, with a higher-degree
 term whose interval spans zero downgrading a fit to `tentative`. Charts carry the verdict, n, DOF and
@@ -225,6 +247,19 @@ window has since landed, and part of this list with it: the always-focused bar, 
 correction by selecting a mark are in use. Auto-advance, paste-TSV preview and stream mode are **not
 built**; the plan's progress table records them as not done. `Ctrl+Z` undoes the last point when the
 bar is empty, and `Esc` cancels a correction ([plan](02-implementation-plan.md)).
+
+**Undo and redo (decided 2026-10-20, [ADR 0015](adr/0015-user-surface.md)):** one history covers add,
+remove, correct, tab create/delete and import; `Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`; visible buttons
+naming the action. A removed point is restored by `point_restored` — the same record, not a lookalike.
+Undoing an import appends a **restore version**; it never deletes one (principle 7). Text fields
+keep their own undo while focused. This is not built yet (roadmap U4/U5).
+
+**Buttons, not commands (decided 2026-10-20):** every action a person needs is reachable from the
+window. A CLI command may appear only inside a collapsed "for agents" detail, never as the only way
+forward. A state the window can fix cheaply and safely is fixed automatically — a stale plot panel
+refreshes after a write; a stale recipe panel offers **Refresh** and says why it will not rerun by
+itself. The empty first tab and the empty project offer **Add a point**, **Create a tab…** and
+**Import…**, not `bench init` or `bench add` (roadmap U21/U22).
 
 - Always-focused entry bar: `1.2  3.4` + Enter commits, focus stays.
 - Auto-advance, `Tab`/`Shift+Tab`, `Ctrl+Z`, `Esc` to amend the last point, timestamp editable inline.
@@ -357,8 +392,12 @@ association that opens a project on double-click (deferred with the installer, p
 
 - **Definition of done** per step: works + tests + screenshot at 100/125/150% + keyboard-only pass +
   error/empty state + perf check + no silent new dependency.
-- **UI approval is a gate.** Every visual step ends with a screenshot and a two-line "what to look
-  at" note. The user approves; the agent never self-approves visuals. Log in `docs/ui-review-log.md`.
+- **UI approval is a gate.** Every visual step ends with a screenshot and a readable row — screen,
+  check, wrong looks like, your call — under the protocol in `docs/ui-review-log.md`. The user approves;
+  the agent never self-approves visuals. **Changed 2026-10-20:** the user may close a batch of frames
+  by stating a direction instead of approving each one; that is recorded with their words and is a
+  decision about the direction, not a claim that every pixel was inspected. New frames still follow
+  the readable protocol.
 - **Small steps**: one user-visible capability, aim ≤ ~400 line diff, reviewable in 10 minutes.
 - **ADRs** for irreversible choices (shell, storage, chart contract, stats runtime) in `docs/adr/`.
 - **Design tokens** in one file (color, spacing, type scale, radii, motion). Prevents visual drift.
@@ -413,6 +452,11 @@ Resolved: Svelte 5, Python analysis, repo-agent-only operation, Tauri deferred, 
 process, and `bench` is a thin wrapper over the same `Workspace` seam. Decided on measurement rather
 than preference: a keystroke costs 15.7 ms in process at 10k points, while simply starting a command
 costs 160 ms against a 100 ms budget.
+
+**Resolved 2026-10-20** by [ADR 0015](adr/0015-user-surface.md): the window's vocabulary, undo/redo
+coverage, removal without a reason prompt, the import-time confirmation model, the review gate, tab
+deletion, UI preferences, and shape display labels. The itemised list is
+[05-user-surface.md](05-user-surface.md) §8; the work is [03-roadmap.md](03-roadmap.md) §6.
 
 Still open:
 

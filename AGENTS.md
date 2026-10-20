@@ -27,6 +27,10 @@ without re-litigating it.
 5. **Never mix observed and derived values.** Fitted values never enter a dataset.
 6. **Never draw a curve without n, DOF, an interval band, and a verdict.**
 7. **Never change a point's shape silently.** Extending a shape is a recorded migration.
+8. **Never make the log's vocabulary the window's vocabulary.** Record ids, event names, dataset and
+   shape ids, versions and hashes are for the agent and for copied details. The window shows values,
+   units, what changed and what to do; every term that is not obvious is explained on hover
+   ([ADR 0015](docs/adr/0015-user-surface.md)).
 
 ## Running it
 
@@ -52,9 +56,17 @@ without re-litigating it.
   in 10 minutes. If a step needs to be bigger, split it.
 - **Plan, then build, then verify.** State the intended behavior before writing code. Test the
   behavior you claimed, not just the exit code.
-- **UI work is gated on the user.** Produce a screenshot plus a two-line "what to look at" note at
-  100/125/150% scaling, and wait for approval. Never self-approve a visual change. Log the outcome
-  in `docs/ui-review-log.md`.
+- **UI work is gated on the user.** Produce a screenshot and a row that answers four things — what
+  this is, the one check, what wrong looks like, the decision wanted — at 100/125/150% scaling, and
+  wait for approval. Never self-approve a visual change. Log it in `docs/ui-review-log.md` under the
+  protocol there. The user may close a batch of frames by stating a direction instead of approving
+  each one; record their words, and treat that as a decision about the direction, not as a claim that
+  every pixel was inspected.
+- **Say what was assumed before a write, and what changed after it.** When a mutation rests on a guess
+  — which column holds the time, a missing field, an estimated instant, a dropped column — state it in
+  one sentence and ask if the answer would change the data. Afterwards, summarise the change in plain
+  words. Routine, reversible actions the user already asked for need no second confirmation
+  ([ADR 0015](docs/adr/0015-user-surface.md)).
 - **Record irreversible choices** as a short ADR in `docs/adr/` before acting on them. The load-bearing
   ones: [0001](docs/adr/0001-stack-choices.md) stack, [0002](docs/adr/0002-agent-only-v1.md) agent-only
   v1, [0003](docs/adr/0003-in-process-core.md) the write path is in process.
@@ -85,7 +97,11 @@ A step is done when all of these hold:
 
 - [ ] The claimed behavior works through the interface the user actually uses.
 - [ ] Tests cover it; stats code is checked against a closed-form or reference result.
-- [ ] Empty, loading, error, and single-point states all render sensibly.
+- [ ] Empty, loading, error, and single-point states all render sensibly, and each actionable state
+      has a button (a CLI command may appear only inside a collapsed "for agents" detail).
+- [ ] No id, event name, version list or internal identifier appears in a primary label, tooltip or
+      status; anything non-obvious is explained on hover; no fact is shown twice.
+- [ ] Every reversible action it adds is covered by undo, and redo works.
 - [ ] Keyboard-only path works; focus is never lost or trapped.
 - [ ] Renders correctly at 100/125/150% scaling.
 - [ ] No layout shift or flicker when data updates.
@@ -103,6 +119,17 @@ no icon without a label in primary flows. Design tokens live in one file; never 
 spacing value in a component.
 
 The app should look like an instrument, not a dashboard template.
+
+**Explain in place, at the level of the consequence.** A status word that is not self-evident says what
+it means for the reader: why this is uncertain, what would strengthen it, what they can do. A badge
+that asks nothing ("current") is not shown. Duplicate facts are removed, not restyled: a fact appears
+at the level where it applies — the tab name in the header, a panel's `n` in the panel, the dataset
+size once when panels disagree. A single dataset named `main` is not information.
+
+**The window is for a person; the log is for the agent.** Values, units, plain sentences and actions
+on screen; ids and event names only in what a person explicitly copies. The user does not need to
+understand the log, and must not be asked to enforce its integrity; that is the agent's job
+([ADR 0015](docs/adr/0015-user-surface.md)).
 
 ## Where things live
 
@@ -133,9 +160,11 @@ app/renderer/       the viewport, split by concern. app.js is wiring and the ope
                     entry.js owns typing, correction and undo; tabs.js owns the tab sheet;
                     projects.js owns the project sheet; import.js owns the import sheet;
                     navigation.js holds the few shell actions that cross a module.
-                    Remaining window work lands here: resizable rail in rail.js, point actions in
-                    entry.js, tab management in tabs.js, project management and shape flow in
-                    projects.js, entry extras in entry.js, versions panel beside panels.js.
+                    Remaining window work lands here: resizable/collapsible rail in rail.js, the
+                    point menu and readable tooltip in chart.js with its actions in entry.js, undo/redo
+                    in entry.js, tab and project management in tabs.js/projects.js, entry extras in
+                    entry.js, versions panel beside panels.js, and preferences in state.js + the main
+                    process ($BENCH_HOME/ui.json).
 src/core/registry.ts
                     which projects exist on this machine ($BENCH_HOME/projects.json, outside every
                     project). App state, disposable: losing it loses recency, not data.
@@ -152,7 +181,7 @@ recipes/            the Python analysis library, pinned by requirements.lock.txt
 recipes/.venv/      the analysis environment, recreated by `pnpm setup:recipes` (ignored)
 tests/              unit tests, plus CLI tests that run the real binary
 fixtures/projects/  committed demo projects, rebuilt by `pnpm fixture`
-docs/               requirements, plan, roadmap, ADRs, UI review log
+docs/               requirements, plan, roadmap, ADRs, the user-surface register, UI review log
 ```
 
 A user's project:
