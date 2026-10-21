@@ -32,6 +32,14 @@ export interface ChartPoint {
   y: number
   id?: string
   label?: string
+  /**
+   * The point's own observation time, carried so a hover can say when the reading was taken rather
+   * than only what it measured. The window cannot look it up: the drawing is the one thing a reader
+   * is pointing at, and it already knows which record each mark is.
+   */
+  tObserved?: string
+  /** That time is an import's estimate (`t_estimated` in the log), not a measurement. */
+  timeEstimated?: true
 }
 
 /**
@@ -627,6 +635,15 @@ export interface ChartLayers {
   ys: Float64Array
   /** Record ids in point order, newline-joined; an empty entry where a point had none. */
   ids: string
+  /**
+   * The points' observation times in point order, newline-joined; an empty entry where a row had
+   * none. ISO strings rather than epoch numbers because the window formats them through the one
+   * formatter it already owns, which reads a string; ten thousand of them is one string to clone,
+   * the same way the ids travel.
+   */
+  times: string
+  /** One character per point: `1` where the log says the time is an estimate, `0` where it does not. */
+  estimates: string
   style: ChartMarkStyle
 }
 
@@ -654,6 +671,8 @@ export function renderChartLayers(spec: ChartSpec, options: ChartLayerOptions = 
   const xs = new Float64Array(points.length)
   const ys = new Float64Array(points.length)
   const ids: string[] = []
+  const times: string[] = []
+  const estimates: string[] = []
   marks.forEach((mark, index) => {
     packed[index * 2] = mark.cx
     packed[index * 2 + 1] = mark.cy
@@ -662,6 +681,8 @@ export function renderChartLayers(spec: ChartSpec, options: ChartLayerOptions = 
     xs[index] = point.x
     ys[index] = point.y
     ids.push(point.id ?? '')
+    times.push(point.tObserved ?? '')
+    estimates.push(point.timeEstimated === true ? '1' : '0')
   })
   return {
     under: svgDocument(accessibleName, desc, under, drawn, options.plain),
@@ -670,6 +691,8 @@ export function renderChartLayers(spec: ChartSpec, options: ChartLayerOptions = 
     xs,
     ys,
     ids: ids.join('\n'),
+    times: times.join('\n'),
+    estimates: estimates.join(''),
     style: MARK_STYLE,
   }
 }

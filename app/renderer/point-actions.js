@@ -144,7 +144,12 @@ export function applyMarks(marks, active) {
     var handle = state.handles[mark.index]
     if (handle && handle.addMark) {
       // mark.x/y are already on this panel's axes; the raw typed values need not contain x or y.
-      handle.addMark(mark.id, mark.cx, mark.cy, { id: mark.id, x: mark.x, y: mark.y })
+      // The time comes with the mark from the fold, so a patched point's hover reads exactly like
+      // one that was drawn with its panel.
+      var point = { id: mark.id, x: mark.x, y: mark.y }
+      if (mark.tObserved) point.tObserved = mark.tObserved
+      if (mark.timeEstimated === true) point.timeEstimated = true
+      handle.addMark(mark.id, mark.cx, mark.cy, point)
     }
     var panel = state.view && state.view.panels[mark.index]
     if (panel && typeof panel.n === 'number') panel.n += 1

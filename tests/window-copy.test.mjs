@@ -106,6 +106,31 @@ describe('the hover readout', () => {
     const onAxis = copy.tooltipLines({ x: 1, y: 2, tObserved: OBSERVED }, timeAxis)
     expect(onAxis.join(' ')).not.toContain('Observed')
   })
+
+  it('tells a measured time from an estimate, in the words the strip and the list use', () => {
+    const measured = copy.tooltipLines({ x: 1, y: 2, tObserved: OBSERVED }, panel)
+    const guessed = copy.tooltipLines({ x: 1, y: 2, tObserved: OBSERVED, timeEstimated: true }, panel)
+    expect(measured).toEqual(['x 1 · y 2 °C', 'Observed ' + OBSERVED_TEXT])
+    expect(guessed).toEqual(['x 1 · y 2 °C', 'Observed ' + OBSERVED_TEXT + ' (estimated)'])
+    expect(guessed.join(' ')).not.toBe(measured.join(' '))
+    expectPlain(guessed.join(' '), 'estimated tooltip')
+
+    // On a time axis the clock *is* the value, so the label rides on it rather than saying the same
+    // thing twice in one tiny popup.
+    const timeAxis = {
+      ...panel,
+      chart: { ...panel.chart, x: { label: 'date', format: 'time' } },
+    }
+    const at = Date.parse(OBSERVED)
+    expect(
+      copy.tooltipLines({ x: at, y: 2, tObserved: OBSERVED, timeEstimated: true }, timeAxis),
+    ).toEqual(['date ' + OBSERVED_TEXT + ' (estimated) · y 2 °C'])
+    expect(copy.tooltipLines({ x: at, y: 2, tObserved: OBSERVED }, timeAxis)).toEqual([
+      'date ' + OBSERVED_TEXT + ' · y 2 °C',
+    ])
+    // Nothing to say about a point that carries no time at all.
+    expect(copy.tooltipLines({ x: 1, y: 2 }, panel)).toEqual(['x 1 · y 2 °C'])
+  })
 })
 
 describe('a panel', () => {

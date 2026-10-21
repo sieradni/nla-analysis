@@ -78,6 +78,18 @@ a version. Values use the shared number formatting (U13), not raw floats.
 over a fitted panel reads like `x 3.0 · y 8.09 °C`, and a hover over a time-axis panel includes the
 instant under the value.
 
+**Built 2026-10-20, and completed 2026-10-21.** The values were right, but the time line the decision
+promises never appeared: `tooltipLines` had the sentence, and no caller could give it a time, because
+the drawing's points were `{ id, x, y }`. The time now travels with the drawing — the core puts
+`tObserved` and the estimate flag on every `ChartPoint`, packs them beside the ids for the window,
+and hands them to a patched mark from the fold — so a hover over a fitted panel reads
+`x 3 · y 8.09 °C` and then `Observed 19 Oct 2026, 06:00` on the reader's clock. When the log says the
+time is an import's estimate, both the hover and **Copy details** say `(estimated)` in the same words
+the strip and `bench list` use, and a measured point says nothing extra — the two read differently at
+a glance. On a time axis the label rides on the value the axis already shows rather than repeating the
+instant. The popup is clamped inside the window: its new second line made it taller than the room
+above a mark at 150%, which is measured on every capture at 100/125/150%.
+
 ### U2. A point has a menu: Copy details, Correct, Remove
 
 **Seen:** the only way to identify a point for a conversation was to read the ULID out of the
@@ -299,8 +311,9 @@ falls back to the estimate.
 plan repeats it before the click, and the status says what to do about it. The marker is the log's,
 not the sheet's: every row the write brings carries `t_estimated`, `bench list` prints the time with
 `(estimated)` after it, its JSON carries `t_estimated`, `bench dataset diff` marks a row whose time is
-an estimate in both the text and the JSON, and `STATE.md` counts the rows that have one — so the fact
-survives the sheet closing and reaches an agent that never opened the window. A re-read
+an estimate in both the text and the JSON, and `STATE.md` counts the rows that have one— so the fact survives the sheet closing and reaches an agent that never opened the window. In the
+window itself, a hover over that point and **Copy details** both say `(estimated)` after the time
+(U1), so a guessed row never reads as a measured one at the moment someone inspects it. A re-read
 of an untimed file is matched by the order rows were recorded in, not by instants that an estimate
 invented: a value that moved is one changed row, the parent keeps its own instant, and a re-sorted
 file honestly reports every disturbed position as changed. `--estimate-time` is the CLI's door and is

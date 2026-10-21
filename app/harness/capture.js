@@ -2573,6 +2573,104 @@ let cspViolations = 0
       throw new Error('the text list does not mark exactly the estimated row:\n' + estimatedList)
     }
 
+    /**
+     * Hover one record's mark with a real pointer event, and read the readout back with its box.
+     * The marks know their own screen position, so this is the pointer a person actually moves.
+     */
+    const hoverPoint = async (id) => {
+      const at = await window.webContents.executeJavaScript(`(() => {
+        for (const host of document.querySelectorAll('.panel-chart')) {
+          const mark = ((host.__benchChart && host.__benchChart.marks()) || []).find((candidate) => candidate.id === ${JSON.stringify(id)})
+          if (!mark) continue
+          host.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: mark.x, clientY: mark.y }))
+          return true
+        }
+        return false
+      })()`)
+      if (!at) throw new Error('that record is not drawn in any panel: ' + id)
+      await sleep(200)
+      return JSON.parse(await window.webContents.executeJavaScript(`(() => {
+        const tooltip = document.getElementById('tooltip')
+        const box = tooltip.getBoundingClientRect()
+        return JSON.stringify({
+          text: tooltip.hidden ? '' : tooltip.textContent,
+          hidden: tooltip.hidden,
+          lines: tooltip.children.length,
+          inside:
+            box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth && box.bottom <= window.innerHeight,
+          overflow: tooltip.scrollWidth - tooltip.clientWidth,
+        })
+      })()`))
+    }
+
+    /** Put one record's details on the clipboard through the menu a person uses. */
+    const copyViaMenu = async (id) => {
+      const opened = await window.webContents.executeJavaScript(`(() => {
+        for (const host of document.querySelectorAll('.panel-chart')) {
+          const mark = ((host.__benchChart && host.__benchChart.marks()) || []).find((candidate) => candidate.id === ${JSON.stringify(id)})
+          if (!mark) continue
+          host.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: mark.x, clientY: mark.y, button: 2 }))
+          return true
+        }
+        return false
+      })()`)
+      if (!opened) throw new Error('that record has no mark to copy: ' + id)
+      await sleep(200)
+      // Wait for the clipboard to change, not for a status: the previous copy's status is still on
+      // screen, so a status wait would read the line the last copy wrote.
+      const before = String(await clipboard.readText())
+      await window.webContents.executeJavaScript(
+        "document.querySelector('.menu-item[data-action=\"copy\"]').click()",
+      )
+      for (let waited = 0; waited < 60; waited += 1) {
+        const now = String(await clipboard.readText())
+        if (now !== before) return now
+        await sleep(100)
+      }
+      throw new Error('Copy details wrote nothing to the clipboard for ' + id)
+    }
+
+    // Hover is where a person inspects one point: the estimated row and a measured one have to read
+    // differently there, and the readout has to carry the time at all.
+    const measuredPoint = estimatedRows[0]
+    const measuredHover = await hoverPoint(measuredPoint.id)
+    const estimatedHover = await hoverPoint(estimatedPoints[0].id)
+    console.log('[bench] estimated-hover ' + JSON.stringify({ measured: measuredHover, estimated: estimatedHover }))
+    if (estimatedHover.hidden || estimatedHover.text === '') {
+      throw new Error('hovering the estimated point showed no readout')
+    }
+    if (!/Observed /.test(estimatedHover.text)) {
+      throw new Error('the hover does not say when the reading was taken: ' + estimatedHover.text)
+    }
+    if (!/\(estimated\)/.test(estimatedHover.text)) {
+      throw new Error('the hover does not say the time is an estimate: ' + estimatedHover.text)
+    }
+    if (/\(estimated\)/.test(measuredHover.text)) {
+      throw new Error('the hover calls a measured time an estimate: ' + measuredHover.text)
+    }
+    if (measuredHover.text === estimatedHover.text) {
+      throw new Error('an estimated point and a measured one read the same on hover')
+    }
+    for (const [where, seen] of [['estimated', estimatedHover], ['measured', measuredHover]]) {
+      if (!seen.inside) throw new Error(`the ${where} readout was not fully inside the window`)
+      if (seen.overflow > 1) throw new Error(`the ${where} readout overflows by ${seen.overflow}px`)
+    }
+
+    // The clipboard line is the other place a point's own time is read back, and it has to agree.
+    const estimatedCopy = await copyViaMenu(estimatedPoints[0].id)
+    const measuredCopy = await copyViaMenu(measuredPoint.id)
+    console.log('[bench] estimated-copy ' + JSON.stringify({ estimated: estimatedCopy, measured: measuredCopy }))
+    if (!/\(estimated\)/.test(estimatedCopy)) {
+      throw new Error('the copied line does not say the time is an estimate: ' + estimatedCopy)
+    }
+    if (!/record [0-9A-HJKMNP-TV-Z]{26}$/.test(estimatedCopy)) {
+      throw new Error('the copied line does not put the record last: ' + estimatedCopy)
+    }
+    if (/\(estimated\)/.test(measuredCopy)) {
+      throw new Error('a measured point copies as an estimate: ' + measuredCopy)
+    }
+    if (estimatedCopy === measuredCopy) throw new Error('two different points copied the same line')
+
     // The strip is where an estimate is replaced, and it says which time is the guess.
     const estimatedPoint = estimatedPoints[0]
     const clickedEstimated = await selectMarkById(estimatedPoint.id)
@@ -2596,6 +2694,7 @@ let cspViolations = 0
 
     // The strip gained a control, so it has to fit its row at every scaling the window is checked at.
     const stripFit = {}
+    const readoutFit = {}
     for (const scaling of [1, 1.25, 1.5]) {
       await window.webContents.setZoomFactor(scaling)
       await sleep(250)
@@ -2603,10 +2702,31 @@ let cspViolations = 0
         const row = document.getElementById('entry-correct')
         return row.scrollWidth - Math.round(row.getBoundingClientRect().width)
       })()`)
+      // The readout gained a line, so it is measured at each scaling too: it must stay inside the
+      // window and wrap nothing it clips.
+      readoutFit[scaling] = await hoverPoint(estimatedPoints[0].id)
     }
     await window.webContents.setZoomFactor(1)
     await sleep(250)
     console.log('[bench] estimated-strip-overflow ' + JSON.stringify(stripFit))
+    console.log(
+      '[bench] estimated-readout-fit ' +
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(readoutFit).map(([scale, seen]) => [
+              scale,
+              { inside: seen.inside, overflow: seen.overflow, lines: seen.lines },
+            ]),
+          ),
+        ),
+    )
+    for (const [scale, seen] of Object.entries(readoutFit)) {
+      if (!seen.inside) throw new Error(`the readout was not inside the window at ${scale}x`)
+      if (seen.overflow > 1) throw new Error(`the readout overflows by ${seen.overflow}px at ${scale}x`)
+      if (!/\(estimated\)/.test(seen.text)) {
+        throw new Error(`the readout lost the estimate label at ${scale}x: ${seen.text}`)
+      }
+    }
     for (const [scaling, overflow] of Object.entries(stripFit)) {
       if (overflow > 1) {
         throw new Error(`the correction row overflows by ${overflow}px at ${scaling}× scaling`)

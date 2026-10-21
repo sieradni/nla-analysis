@@ -23,7 +23,9 @@ import {
   validateView,
   type ViewFile,
 } from '../src/core/views.ts'
-import { materializePanel, panelStatus, selectInput } from '../src/core/panels.ts'
+import { materializePanel, panelStatus, plotDataset, projectPoint, selectInput } from '../src/core/panels.ts'
+import { commitImport, planImport } from '../src/core/import.ts'
+import { buildRunInput } from '../src/core/analysis.ts'
 
 let root: string
 let workspace: Workspace
@@ -177,6 +179,60 @@ describe('materializing a panel', () => {
     expect(panel.chart.evidence).toMatchObject({ points: 6, noCurve: 'unmodelled' })
   })
 
+  it("carries the log's time on every mark, and says when the log calls it an estimate", async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bench-panel-time-'))
+    try {
+      await initProject(dir, 'panel-time')
+      const local = await Workspace.open(dir)
+      await writeFile(join(dir, 'rows.csv'), 'x,y\n1,2\n', 'utf8')
+      await commitImport(
+        local,
+        await planImport(local, join(dir, 'rows.csv'), {
+          mapping: { x: 'x', y: 'y' },
+          estimate: true,
+          estimateFrom: '2026-05-01T00:00:00Z',
+        }),
+      )
+
+      // The spec is what the window draws from, so the time and the marker have to be on the point
+      // itself: a hover cannot ask the core again, and the tab file is derived state.
+      const plotted = plotDataset(local, 'main')
+      expect(plotted.spec.points).toEqual([
+        {
+          id: expect.any(String),
+          tObserved: '2026-05-01T00:00:00.000Z',
+          timeEstimated: true,
+          x: 1,
+          y: 2,
+        },
+      ])
+
+      // A recipe panel draws from the run input, so the marker has to be there too: a hover on a
+      // fitted panel is the same question about the same row.
+      expect(buildRunInput(local.state, 'main')!.points[0]).toMatchObject({
+        t: '2026-05-01T00:00:00.000Z',
+        tEstimated: true,
+      })
+
+      // A mark patched onto a drawing that is already up reads the same fold, so it cannot disagree
+      // with a mark that was drawn with its panel.
+      const { panel } = await materializePanel(local, { dataset: 'main' })
+      const projection = projectPoint(
+        local,
+        { v: 1, name: 'one panel', layout: { columns: 1 }, panels: [panel] },
+        plotted.spec.points![0]!.id!,
+        { x: 1, y: 2 },
+      )
+      expect(projection.marks).toHaveLength(1)
+      expect(projection.marks[0]).toMatchObject({
+        tObserved: '2026-05-01T00:00:00.000Z',
+        timeEstimated: true,
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('plots a custom shape on named axes, including an instant horizontal axis', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'bench-axes-'))
     try {
@@ -203,9 +259,15 @@ describe('materializing a panel', () => {
       expect(panel.y_field).toBe('altitude')
       expect(panel.chart.x).toEqual({ label: 'date', format: 'time' })
       expect(panel.chart.y).toEqual({ label: 'altitude' })
-      // One row is still one honest mark, not an empty frame with a count in the footer.
+      // One row is still one honest mark, not an empty frame with a count in the footer. It carries
+      // the record's own time, because a hover has to be able to say when the reading was taken.
       expect(panel.chart.points).toEqual([
-        { id: panel.chart.points![0]!.id, x: Date.parse('2026-10-19T12:41:32.498Z'), y: 992.4 },
+        {
+          id: panel.chart.points![0]!.id,
+          tObserved: '2026-10-19T12:41:32.498Z',
+          x: Date.parse('2026-10-19T12:41:32.498Z'),
+          y: 992.4,
+        },
       ])
       const svg = renderChart(panel.chart)
       expect(svg.match(/<circle[^>]*data-point-id=/g)).toHaveLength(1)

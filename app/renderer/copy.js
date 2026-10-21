@@ -234,12 +234,25 @@ function axisValue(spec, fallback, value) {
 
 export function tooltipLines(point, panel) {
   var chart = (panel && panel.chart) || {}
+  var estimated = Boolean(point && point.timeEstimated === true)
   var values = []
+  var timeOnX = Boolean(chart.x && chart.x.format === 'time')
+  var timeOnY = Boolean(chart.y && chart.y.format === 'time')
   if (point && typeof point.x === 'number') values.push(axisValue(chart.x, 'x', point.x))
   if (point && typeof point.y === 'number') values.push(axisValue(chart.y, 'y', point.y))
+  // On a time axis the clock on screen *is* this point's time, so the estimate labels that value
+  // rather than adding a second line that says the same thing twice.
+  if (estimated) {
+    if (timeOnX && typeof point.x === 'number') values[0] += ' (estimated)'
+    else if (timeOnY && typeof point.y === 'number') values[values.length - 1] += ' (estimated)'
+  }
   var lines = values.length > 0 ? [values.join(' · ')] : []
-  var timeAxis = (chart.x && chart.x.format === 'time') || (chart.y && chart.y.format === 'time')
-  if (!timeAxis && point && point.tObserved) lines.push('Observed ' + formatInstant(point.tObserved))
+  if (!timeOnX && !timeOnY && point && point.tObserved) {
+    // The same words the strip and the copied line use; a hover is a sentence, so it opens with a
+    // capital, and nothing else about the phrase changes.
+    var said = observedWord(point.tObserved, estimated)
+    lines.push(said.charAt(0).toUpperCase() + said.slice(1))
+  }
   return lines
 }
 

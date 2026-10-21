@@ -43,6 +43,25 @@ describe('incrementalMark', () => {
     })
   })
 
+  it("packs each point's own time and whether the log calls it an estimate", () => {
+    // The hover says when a reading was taken, so the drawing has to carry that with the mark rather
+    // than making the window look the record up again.
+    const layers = renderChartLayers({
+      ...spec,
+      points: [
+        { x: 1, y: 2, id: 'p1', tObserved: '2026-01-05T09:00:00.000Z' },
+        { x: 2, y: 4, id: 'p2', tObserved: '2026-01-05T09:06:00.000Z', timeEstimated: true },
+        { x: 3, y: 6, id: 'p3' },
+      ],
+    })
+    expect(layers.times.split('\n')).toEqual([
+      '2026-01-05T09:00:00.000Z',
+      '2026-01-05T09:06:00.000Z',
+      '',
+    ])
+    expect(layers.estimates).toBe('010')
+  })
+
   it('refuses a mark that would move the axes, so the caller has to redraw', () => {
     // Outside the domain a redraw rescales, and a mark drawn against the old scale would be wrong.
     expect(incrementalMark(spec, { x: 1000, y: 5, id: 'far' })).toBeNull()

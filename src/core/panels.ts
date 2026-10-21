@@ -121,6 +121,9 @@ export interface IncrementalMark {
   /** The two axis values behind that position, for the tooltip on a custom-axis panel. */
   x: number
   y: number
+  /** The record's own time, from the fold, so a patched mark's hover says it exactly as a drawn one. */
+  tObserved: string
+  timeEstimated?: true
 }
 
 export interface PointProjection {
@@ -146,6 +149,9 @@ export function projectPoint(
   const marks: IncrementalMark[] = []
   const untouched: number[] = []
   let redraw = false
+  // Read from the fold rather than taken from the caller's draft: a time the file only implied is
+  // the log's fact, and this is the one door the window writes through.
+  const written = workspace.findPoint(id)?.point
 
   for (const [index, panel] of view.panels.entries()) {
     // A fitted panel is not patched: its curve and interval would have to move with the point, and
@@ -183,7 +189,16 @@ export function projectPoint(
       redraw = true
       continue
     }
-    marks.push({ index, id, cx: placed.cx, cy: placed.cy, x: projected.x, y: projected.y })
+    marks.push({
+      index,
+      id,
+      cx: placed.cx,
+      cy: placed.cy,
+      x: projected.x,
+      y: projected.y,
+      tObserved: written?.tObserved ?? '',
+      ...(written?.tEstimated === true ? { timeEstimated: true as const } : {}),
+    })
   }
 
   return { marks, untouched, redraw }
@@ -211,13 +226,26 @@ export function plotDataset(
   }
   const pair = resolveAxes(dataset.definition, axes)
   const rows = input === undefined ? dataset.points : input.points
+  // The time rides along with the position: a hover is the place a person inspects one point, and
+  // it can only say when that point happened if the drawing carries what the log holds.
   const plotted = rows
-    .map((point) => ({
-      id: point.id,
-      x: axisValue(pair.x.field, point.values[pair.x.field.name]),
-      y: axisValue(pair.y.field, point.values[pair.y.field.name]),
-    }))
-    .filter((pair): pair is { id: string; x: number; y: number } => pair.x !== undefined && pair.y !== undefined)
+    .map((point) => {
+      // The fold spells the record's time `tObserved`; a recipe's `RunPoint` spells it `t`. Both are
+      // the same fact, so the drawing takes either rather than leaving a hover without a time.
+      const tObserved = 'tObserved' in point ? point.tObserved : point.t
+      const estimated = 'tEstimated' in point && point.tEstimated === true
+      return {
+        id: point.id,
+        tObserved,
+        ...(estimated ? { timeEstimated: true as const } : {}),
+        x: axisValue(pair.x.field, point.values[pair.x.field.name]),
+        y: axisValue(pair.y.field, point.values[pair.y.field.name]),
+      }
+    })
+    .filter(
+      (row): row is { id: string; tObserved: string; timeEstimated?: true; x: number; y: number } =>
+        row.x !== undefined && row.y !== undefined,
+    )
 
   const skipped = rows.length - plotted.length
   const footerParts = [`n = ${plotted.length}`]

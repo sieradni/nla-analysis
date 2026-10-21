@@ -72,6 +72,9 @@ export function buildRunInput(state: ProjectState, datasetId: string): RunInput 
     points: activePoints(state, datasetId).map((point) => ({
       id: point.id,
       t: point.tObserved,
+      // A recipe panel's marks are hovered too, so the estimate travels with them: a time the file
+      // only implied must not read as a measurement just because the row landed in a fitted panel.
+      ...(point.tEstimated === true ? { tEstimated: true as const } : {}),
       values: point.values,
     })),
   }

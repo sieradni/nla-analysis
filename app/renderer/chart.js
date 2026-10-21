@@ -86,12 +86,23 @@ import { closeMenu, menuHasFocus, menuOwnedBy, openMenu } from './menu.js'
     var ys = drawing.ys || []
     var ids =
       typeof drawing.ids === 'string' && drawing.ids !== '' ? drawing.ids.split('\n') : []
+    // The time travels in the same three parallel forms as the position, id and values: an ISO string
+    // per point so the one formatter owns how a moment reads, and one character saying whether the
+    // log calls it an estimate.
+    var times =
+      typeof drawing.times === 'string' && drawing.times !== '' ? drawing.times.split('\n') : []
+    var estimates = typeof drawing.estimates === 'string' ? drawing.estimates : ''
     var values = {}
     var marks = []
     for (var slot = 0; slot * 2 + 1 < packed.length; slot += 1) {
       var id = ids[slot] || undefined
       marks.push({ id: id, cx: packed[slot * 2], cy: packed[slot * 2 + 1] })
-      if (id) values[id] = { id: id, x: xs[slot], y: ys[slot] }
+      if (id) {
+        var point = { id: id, x: xs[slot], y: ys[slot] }
+        if (times[slot]) point.tObserved = times[slot]
+        if (estimates.charAt(slot) === '1') point.timeEstimated = true
+        values[id] = point
+      }
     }
     var style = drawing.style || { radius: 3.4, fill: '#1f6feb', stroke: '#ffffff', strokeWidth: 1.5 }
 
@@ -303,12 +314,18 @@ import { closeMenu, menuHasFocus, menuOwnedBy, openMenu } from './menu.js'
       tooltip.hidden = false
       var width = tooltip.offsetWidth
       var height = tooltip.offsetHeight
+      var edge = 8
       var left = clientX + 14
       var top = clientY - height - 12
-      if (left + width > window.innerWidth - 8) left = clientX - width - 14
-      if (top < 8) top = clientY + 16
-      tooltip.style.left = Math.max(8, left) + 'px'
-      tooltip.style.top = Math.max(8, top) + 'px'
+      // Prefer the side of the pointer with room; then clamp, because on a small window at 150% a
+      // two-line readout is taller than the space above a mark, and a readout that runs off the
+      // window is one nobody can read.
+      if (left + width > window.innerWidth - edge) left = clientX - width - 14
+      if (top < edge) top = clientY + 16
+      left = Math.min(Math.max(left, edge), Math.max(edge, window.innerWidth - width - edge))
+      top = Math.min(Math.max(top, edge), Math.max(edge, window.innerHeight - height - edge))
+      tooltip.style.left = left + 'px'
+      tooltip.style.top = top + 'px'
     }
 
     function hover(clientX, clientY) {

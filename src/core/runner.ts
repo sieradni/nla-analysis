@@ -37,6 +37,8 @@ export interface RecipeSchema {
 export interface RunPoint {
   id: string
   t: string
+  /** The time is an import's estimate, not a measurement (the fold's `tEstimated`). */
+  tEstimated?: true
   values: Record<string, unknown>
 }
 
