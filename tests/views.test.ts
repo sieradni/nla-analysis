@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -9,9 +9,12 @@ import { BenchError } from '../src/core/errors.ts'
 import { renderChart } from '../src/core/chart.ts'
 import { Workspace } from '../src/core/workspace.ts'
 import {
+  closeView,
+  listClosedViews,
   listViews,
   loadView,
   renderView,
+  restoreClosedView,
   saveView,
   slugFor,
   validateQuery,
@@ -332,6 +335,110 @@ describe('view files', () => {
     await writeFile(join(root, 'views', 'broken.json'), '{"v":1,"name":"broken","panels":[]}')
     await expect(loadView(root, 'broken')).rejects.toThrow(/not a valid view/)
     await rm(join(root, 'views', 'broken.json'))
+  })
+})
+
+describe('closing a tab', () => {
+  it('takes the file away, keeps it whole in the trash, and lists it for a later window', async () => {
+    const { panel } = await materializePanel(workspace, { dataset: 'main', title: 'closing' })
+    const view: ViewFile = { v: 1, name: 'closing', layout: { columns: 1 }, panels: [panel] }
+    const file = await saveView(root, view)
+    const before = await readFile(file, 'utf8')
+
+    const closed = await closeView(root, 'closing')
+    // The archive is the tab: its name, its panels, and the whole spec including the materialized
+    // points the window never sees in a drawing.
+    expect(closed.name).toBe('closing')
+    expect(closed.panels).toBe(1)
+    expect(closed.closedAt).not.toBe('')
+    expect(existsSync(file)).toBe(false)
+    expect((await listViews(root)).views.map((summary) => summary.name)).not.toContain('closing')
+    await expect(loadView(root, 'closing')).rejects.toThrow(/no view named/)
+    // The file itself waits in the trash, byte for byte: a window that forgets its stack — a
+    // restart — must not be the thing that loses a tab's title, axes, recipe or layout.
+    const archive = join(root, 'views', '.trash', closed.file)
+    expect(await readFile(archive, 'utf8')).toBe(before)
+    // And the trash is not a second list of tabs: it is invisible to the project itself.
+    expect((await listViews(root)).problems).toEqual([])
+
+    // A fresh reader — the next window — finds the closed tab without anything held in memory.
+    const listed = await listClosedViews(root)
+    expect(listed.problems).toEqual([])
+    expect(listed.closed[0]).toMatchObject({ file: closed.file, name: 'closing', panels: 1 })
+
+    // Putting it back moves the same bytes home: the tab that closed, not a copy drawn now.
+    const restored = await restoreClosedView(root, closed.file)
+    expect(restored.name).toBe('closing')
+    expect(await readFile(file, 'utf8')).toBe(before)
+    expect(existsSync(archive)).toBe(false)
+    expect((await listClosedViews(root)).closed).toEqual([])
+  })
+
+  it('lists the newest closed tab first, so the next window reopens the last one closed', async () => {
+    const { panel } = await materializePanel(workspace, { dataset: 'main' })
+    for (const name of ['first closed', 'second closed']) {
+      await saveView(root, { v: 1, name, layout: { columns: 1 }, panels: [panel] })
+      await closeView(root, name)
+      // The archive name carries a millisecond stamp; keep the order unambiguous on a fast machine.
+      await new Promise((done) => setTimeout(done, 5))
+    }
+    const { closed } = await listClosedViews(root)
+    expect(closed.map((entry) => entry.name)).toEqual(['second closed', 'first closed'])
+  })
+
+  it('keeps the last twenty closed tabs, and drops the oldest', async () => {
+    const { panel } = await materializePanel(workspace, { dataset: 'main' })
+    for (let index = 0; index < 22; index += 1) {
+      const name = `trash ${index}`
+      await saveView(root, { v: 1, name, layout: { columns: 1 }, panels: [panel] })
+      await closeView(root, name)
+    }
+    const archived = (await readdir(join(root, 'views', '.trash'))).filter((name) => name.endsWith('.json'))
+    // Bounded, and the survivors are the newest closes: the oldest two names are gone.
+    expect(archived).toHaveLength(20)
+    expect(archived.some((name) => name.startsWith('trash-0-'))).toBe(false)
+    expect(archived.some((name) => name.startsWith('trash-1-'))).toBe(false)
+    expect(archived.some((name) => name.startsWith('trash-21-'))).toBe(true)
+    // The list is bounded the same way, so the window never offers an archive the project dropped.
+    expect((await listClosedViews(root)).closed).toHaveLength(20)
+  })
+
+  it('refuses to put a tab back over a name that came back while it was away', async () => {
+    const { panel } = await materializePanel(workspace, { dataset: 'main' })
+    const view: ViewFile = { v: 1, name: 'taken', layout: { columns: 1 }, panels: [panel] }
+    await saveView(root, view)
+    const closed = await closeView(root, 'taken')
+
+    // Another writer created a tab with that name while the closed one was away.
+    await saveView(root, { ...view, panels: [{ ...panel, title: 'newer' }] })
+    const failure = await restoreClosedView(root, closed.file)
+      .then(() => null)
+      .catch((error: unknown) => error)
+    expect((failure as BenchError).kind).toBe('invalid')
+    expect((failure as BenchError).message).toContain('is in the project again')
+    // The tab that is there is untouched, and the archive is still waiting: a reopen is not a quiet
+    // replacement, and a refusal must not spend the closed tab.
+    expect((await loadView(root, 'taken')).panels[0]!.title).toBe('newer')
+    expect((await listClosedViews(root)).closed.map((entry) => entry.name)).toContain('taken')
+  })
+
+  it('refuses an archive that would not load or does not belong to the trash, and writes nothing', async () => {
+    const broken = join(root, 'views', '.trash', 'handmade-2026-10-21T00-00-00-000Z.json')
+    await mkdir(join(root, 'views', '.trash'), { recursive: true })
+    await writeFile(broken, JSON.stringify({ v: 1, name: 'handmade', panels: [] }))
+    await expect(restoreClosedView(root, 'handmade-2026-10-21T00-00-00-000Z.json')).rejects.toBeInstanceOf(
+      BenchError,
+    )
+    expect(existsSync(join(root, 'views', 'handmade.json'))).toBe(false)
+    // A name is not a path: the window hands back what the list gave it, and nothing else is reachable.
+    for (const escape of ['../taken.json', '../../data/events.jsonl', 'sub/handmade.json']) {
+      await expect(restoreClosedView(root, escape)).rejects.toBeInstanceOf(BenchError)
+    }
+    // An archive that was pruned or reopened elsewhere is a plain refusal, not a crash.
+    const missing = await restoreClosedView(root, 'gone-2026-10-21T00-00-00-000Z.json')
+      .then(() => null)
+      .catch((error: unknown) => error)
+    expect((missing as BenchError).kind).toBe('missing')
   })
 })
 

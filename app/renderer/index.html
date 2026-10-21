@@ -46,7 +46,12 @@
             <div id="crumb" class="crumb">bench</div>
             <h1 id="view-title">No tab open</h1>
           </div>
-          <div id="view-meta" class="meta" aria-label="View facts"></div>
+          <!-- The one action that acts on the tab itself rather than on its data. A closed tab goes to
+               the window's own stack, so Ctrl+Shift+T brings it back. -->
+          <div class="stage-side">
+            <div id="view-meta" class="meta" aria-label="View facts"></div>
+            <button id="close-tab" class="ghost" type="button" hidden>Close tab</button>
+          </div>
         </header>
         <div id="notice" class="notice" hidden></div>
         <!-- The column count is set from the view (app.js) and defaults in app.css; an inline style

@@ -406,6 +406,11 @@ export var labels = {
   actRemovalRedo: 'the point removed here',
   actCorrectionRedo: 'the correction made here',
   actImportRedo: 'the import that was undone',
+  closeTab: 'Close tab',
+  // The inverse of closing is the window's own, not the tab history's: the label says the act it
+  // reverses, like every other control in this window.
+  undoTabClose: 'Undo tab close',
+  undoTabCloseTitle: 'Reopen the tab that was just closed (Ctrl+Shift+T)',
   importFile: 'Import file',
   refresh: 'Refresh',
   saveCorrection: 'Save correction',
@@ -418,6 +423,7 @@ export function applyStatic(ui) {
   if (ui.newProject) ui.newProject.textContent = labels.newProject
   if (ui.openProject) ui.openProject.textContent = labels.openProject
   if (ui.newTab) ui.newTab.textContent = labels.newTab
+  if (ui.closeTab) ui.closeTab.textContent = labels.closeTab
   if (ui.entryUndo) ui.entryUndo.textContent = labels.undo
   if (ui.importOpen) ui.importOpen.textContent = labels.importFile
   if (ui.entryCancel) ui.entryCancel.textContent = labels.cancel
@@ -507,6 +513,12 @@ export var status = {
   },
   rereadTab: function () {
     return 'The project had changed on disk, so it was reread before this tab was drawn.'
+  },
+  closedTab: function (change) {
+    return 'Closed “' + change.name + '”. Its data is still in the project; the tab can be reopened.'
+  },
+  reopenedTab: function (change) {
+    return 'Reopened “' + change.name + '”.'
   },
   rereadAfterWrite: function () {
     return 'The project changed on disk while this tab was open, so it was reread and redrawn.'

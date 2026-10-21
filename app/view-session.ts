@@ -32,8 +32,17 @@ import {
 } from '../src/core/panels.ts'
 import type { IncrementalMark } from '../src/core/panels.ts'
 import { RecipeRunner } from '../src/core/runner.ts'
-import { listViews, loadView, requireFreeName, saveView, viewPath } from '../src/core/views.ts'
-import type { PanelStatus, ViewFile, ViewSummary } from '../src/core/views.ts'
+import {
+  closeView as closeViewFile,
+  listClosedViews,
+  listViews,
+  loadView,
+  requireFreeName,
+  restoreClosedView as restoreClosedViewFile,
+  saveView,
+  viewPath,
+} from '../src/core/views.ts'
+import type { ClosedView, PanelStatus, ViewFile, ViewSummary } from '../src/core/views.ts'
 import type { PointDraft, Workspace } from '../src/core/workspace.ts'
 import { workspaceFor } from './workspace-session.ts'
 
@@ -256,6 +265,43 @@ export async function writeView(dir: string, draft: ViewDraft): Promise<OpenedVi
   }
 
   await saveView(workspace.dir, view)
+  await cacheView(workspace.dir, view)
+  return describe(workspace, view, reread)
+}
+
+/**
+ * Close a tab: its file leaves the tab list and waits in the project's trash, and the window gets
+ * back the archive that holds it, so the same bytes can be moved home later.
+ *
+ * Nothing about this reaches the log. A view is derived state; the points in it are the log's, and
+ * they are not touched. The session forgets the tab too: a rebuilt drawing waiting for its
+ * post-paint save must not write the file back after the person closed it.
+ */
+export async function closeView(dir: string, name: string): Promise<ClosedView> {
+  const workspace = await workspaceFor(dir)
+  const closed = await closeViewFile(workspace.dir, name)
+  // The core read the file before moving it, so the tab's own name is the one to clear: a caller's
+  // spelling of it may not be the name the archive holds.
+  discardStagedView(workspace.dir, closed.name)
+  if (isCachedView(workspace.dir, closed.name)) clearCachedView()
+  return closed
+}
+
+/** The tabs waiting in the project's trash, newest first: what a fresh window fills its stack from. */
+export async function closedViews(dir: string): Promise<{ closed: ClosedView[]; problems: string[] }> {
+  const workspace = await workspaceFor(dir)
+  return listClosedViews(workspace.dir)
+}
+
+/**
+ * Put a closed tab back by moving its archive home, so the tab that comes back is the file that
+ * left. It is described like any opened tab, so the window draws it by the same path and no second
+ * renderer exists for "the tab that came back".
+ */
+export async function restoreClosedView(dir: string, file: string): Promise<OpenedView> {
+  const workspace = await workspaceFor(dir)
+  const reread = await workspace.freshen()
+  const view = await restoreClosedViewFile(workspace.dir, file)
   await cacheView(workspace.dir, view)
   return describe(workspace, view, reread)
 }

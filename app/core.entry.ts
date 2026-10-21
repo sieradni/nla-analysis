@@ -86,6 +86,8 @@ export function refusalOf(error: unknown): Refusal {
 }
 
 export {
+  closeView,
+  closedViews,
   correctPoint,
   openView,
   persistView,
@@ -93,6 +95,7 @@ export {
   recordPoint,
   refreshView,
   reloadTab,
+  restoreClosedView,
   restoreVersion,
   writeView,
 } from './view-session.ts'

@@ -21,6 +21,8 @@ import {
   redoFailed,
   redoFinished,
   resetTabHistory,
+  restoreTabHistory,
+  snapshotTabHistory,
   takeRedo,
   takeUndo,
   undoFailed,
@@ -292,6 +294,45 @@ describe('the tab history', () => {
     expect(appendedId()).toBe('kept')
     reconcileImport(written(['kept'], 2))
     expect(appendedId()).toBe(null)
+  })
+
+  it('hands a closed tab its own acts back after the drawing changed', () => {
+    noteAppend('p1')
+    noteCorrection('p2', { x: 1 }, { x: 2 })
+    // One act already undone, so the snapshot has to carry a redo as well as undos.
+    undoFinished(takeUndo())
+    const kept = snapshotTabHistory()
+
+    // A tab switch, or the tab leaving the screen, clears the drawing's history...
+    resetTabHistory()
+    expect(nextUndo()).toBe(null)
+    expect(nextRedo()).toBe(null)
+
+    // ...and reopening the tab puts back exactly what it had, in both directions.
+    restoreTabHistory(kept)
+    expect(nextUndo()).toMatchObject({ kind: 'point', id: 'p1' })
+    expect(nextRedo()).toMatchObject({ kind: 'correction', id: 'p2' })
+    expect(appendedId()).toBe(null)
+  })
+
+  it('leaves an empty bar for a tab closed before this window opened', () => {
+    // The acts were the earlier window's memory; the log cannot reconstruct them, so a reopen after
+    // a relaunch has nothing to restore and must not invent an act.
+    noteAppend('p1')
+    resetTabHistory()
+    restoreTabHistory(null)
+    expect(nextUndo()).toBe(null)
+    expect(nextRedo()).toBe(null)
+  })
+
+  it('snapshots the stacks by value, so the tab that is open cannot rewrite the closed one', () => {
+    noteAppend('p1')
+    const kept = snapshotTabHistory()
+    noteAppend('p2')
+    takeUndo()
+    expect(kept.undos).toHaveLength(1)
+    restoreTabHistory(kept)
+    expect(nextUndo()).toMatchObject({ kind: 'point', id: 'p1' })
   })
 
   it('forgets everything on a view change', () => {

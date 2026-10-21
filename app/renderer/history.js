@@ -37,6 +37,30 @@ export function resetTabHistory() {
   appended = null
 }
 
+/**
+ * The stacks as they are, for a tab that is leaving the screen but may come back. Closing a tab is a
+ * window act, and the acts made in it are part of what the tab was: the caller takes this before
+ * `showView` clears the drawing, and gives it back when the tab is reopened.
+ *
+ * The entries are copied by the array, not by the act: an entry is never edited in place — a redo or
+ * an undo pushes a new one — so the snapshot cannot be rewritten under the tab that owns it.
+ */
+export function snapshotTabHistory() {
+  return { undos: undos.slice(), redos: redos.slice(), appended: appended }
+}
+
+/**
+ * A reopened tab's own acts, both directions, and the timing figure they named. A tab from before
+ * this window opened has no snapshot — the acts were the earlier window's memory — and the cleared
+ * stacks `showView` left are the honest answer for it.
+ */
+export function restoreTabHistory(snapshot) {
+  if (!snapshot) return
+  undos = snapshot.undos.slice()
+  redos = snapshot.redos.slice()
+  appended = snapshot.appended
+}
+
 /** The id of the point this window last added, for the bar's own timing figure. */
 export function appendedId() {
   return appended

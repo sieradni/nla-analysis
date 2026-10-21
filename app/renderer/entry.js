@@ -202,6 +202,16 @@ export function renderStatus() {
       ui.entryStatus.appendChild(list)
     }
   }
+  // The act the status itself offers, when what just happened has an inverse the tab history does
+  // not hold — closing a tab is the one. It is a button with words, like every other action here.
+  if (status && status.action) {
+    var offered = node('button', 'ghost status-action', status.action.label)
+    offered.type = 'button'
+    offered.title = status.action.title
+    offered.disabled = state.busy
+    offered.addEventListener('click', status.action.run)
+    ui.entryStatus.appendChild(offered)
+  }
   // Redo sits beside whatever the status says, not only beside the sentence an undo just wrote: a
   // selection or a copied detail replaces the words, and must not take the other direction away.
   // The button names the act it would repeat, so it never asks a person to press and find out.
@@ -221,7 +231,7 @@ export function renderStatus() {
   }
 }
 
-export function setStatus(kind, text, problems) {
+export function setStatus(kind, text, problems, action) {
   // Problems are the core's sentences too, and they name the shape a field was checked against.
   // Run them through the same filter as the status line, at the one place every caller passes.
   state.status = {
@@ -230,6 +240,9 @@ export function setStatus(kind, text, problems) {
     problems: (problems || []).map(function (problem) {
       return refusal(problem)
     }),
+    // An act that is the inverse of something just done, or that the status is the only place to
+    // offer: the same shape the redo button has, named the same way.
+    action: action || null,
   }
   renderStatus()
 }

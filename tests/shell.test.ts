@@ -705,6 +705,47 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     await expect(api.writeView!(dir, { name: 'other', dataset: 'nope' })).rejects.toThrow(/no dataset/)
   })
 
+  it('closes a tab, lists it for the next window, and moves the same one back', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const opened = (await api.openView!(dir, 'drift over time')) as Window
+    const file = join(dir, 'views', 'drift-over-time.json')
+    const before = await readFile(file, 'utf8')
+    const log = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+
+    const closed = (await api.closeView!(dir, 'drift over time')) as Window
+    // The archive, not a copy: a reopen moves this file home rather than rebuilding a drawing from
+    // today's rows.
+    expect(closed.name).toBe('drift over time')
+    expect(closed.panels).toBe(opened.view.panels.length)
+    expect(closed.file).toMatch(/^drift-over-time-\d{4}-\d{2}-\d{2}T[\d-]+Z\.json$/)
+    await expect(readFile(file, 'utf8')).rejects.toThrow()
+    const listed = (await api.openProject!(dir)) as Window
+    expect(listed.views.map((view: Window) => view.name)).not.toContain('drift over time')
+
+    // A window that starts now has nothing in memory and still finds the tab: the list is the
+    // project's, read from the trash.
+    const closedNow = (await api.closedViews!(dir)) as Window
+    expect(closedNow.closed).toHaveLength(1)
+    expect(closedNow.closed[0]).toMatchObject({ file: closed.file, name: 'drift over time' })
+    expect(closedNow.problems).toEqual([])
+
+    const restored = (await api.restoreClosedView!(dir, closed.file)) as Window
+    expect(restored.view.name).toBe('drift over time')
+    // The same drawing, drawn by the same path as any opened tab: same counts, same entry target.
+    expect(restored.view.panels[0].n).toBe(opened.view.panels[0].n)
+    expect(restored.entry.dataset).toBe(opened.entry.dataset)
+    expect(restored.entry.active).toBe(14)
+    expect(await readFile(file, 'utf8')).toBe(before)
+    expect(((await api.openProject!(dir)) as Window).views.map((view: Window) => view.name)).toContain(
+      'drift over time',
+    )
+    // The archive went home, so nothing is left to reopen twice: the list is empty again.
+    expect(((await api.closedViews!(dir)) as Window).closed).toEqual([])
+    // A close is a window act, not a dataset event: the log is byte-identical either way.
+    expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(log)
+  })
+
   it('writes a field-pair tab for a custom shape through the same core the window calls', async () => {
     const api = await shell()
     const parent = await mkdtemp(join(tmpdir(), 'bench-shell-axes-'))

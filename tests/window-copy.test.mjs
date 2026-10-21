@@ -245,6 +245,8 @@ describe('the entry bar', () => {
       copy.status.tabChanged({ name: 'drift over time', active: 14 }),
       copy.status.tabRemoved({ name: 'drift over time', remaining: 1 }),
       copy.status.tabSaved({ name: 'regimes', replaced: false, panel }),
+      copy.status.closedTab({ name: 'drift over time' }),
+      copy.status.reopenedTab({ name: 'drift over time' }),
       copy.status.refreshed([{ state: 'current' }]),
       copy.status.refreshed([{ state: 'stale' }]),
       copy.empty.noTabs(),

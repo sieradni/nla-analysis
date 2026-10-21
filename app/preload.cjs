@@ -27,6 +27,11 @@ contextBridge.exposeInMainWorld('bench', {
   pickFolder: () => ipcRenderer.invoke('bench:pickFolder'),
   // writing
   writeView: (dir, draft) => ipcRenderer.invoke('bench:writeView', dir, draft),
+  // Closing a tab moves its file to the project's trash and hands back the archive; reopening moves
+  // that same file home. The window never composes a tab spec itself, and the bytes are never copied.
+  closeView: (dir, name) => ipcRenderer.invoke('bench:closeView', dir, name),
+  closedViews: (dir) => ipcRenderer.invoke('bench:closedViews', dir),
+  restoreClosedView: (dir, file) => ipcRenderer.invoke('bench:restoreClosedView', dir, file),
   createProject: (parent, name, shape) =>
     ipcRenderer.invoke('bench:createProject', parent, name, shape),
   // Writing: append one point, correct one point, remove one, bring a removed one back, restore a

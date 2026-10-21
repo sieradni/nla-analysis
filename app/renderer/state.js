@@ -87,6 +87,7 @@ export const ui = {
   notice: document.getElementById('notice'),
   tooltip: document.getElementById('tooltip'),
   toggleMissing: document.getElementById('toggle-missing'),
+  closeTab: document.getElementById('close-tab'),
   entry: document.getElementById('entry'),
   entryFields: document.getElementById('entry-fields'),
   entryAdd: document.getElementById('entry-add'),
@@ -179,6 +180,8 @@ export function showFailure(title, error) {
   ui.empty.hidden = false
   ui.grid.hidden = true
   ui.entry.hidden = true
+  // Nothing is open, so there is no tab to close.
+  ui.closeTab.hidden = true
   ui.empty.textContent = ''
   ui.empty.appendChild(node('h2', null, title))
   // The core writes for an agent; a screen a person is stranded on is the worst place to show its
@@ -193,9 +196,15 @@ export function showFailure(title, error) {
 }
 
 export function showEmpty(title, message, command, action) {
+  // Nothing is drawn, so the header names the project rather than the tab that just left: with the
+  // stage empty, a title and a count from the closed tab would describe something that is not there.
+  ui.title.textContent = state.project ? state.project.name : 'No tab open'
+  ui.crumb.textContent = state.project ? state.project.name : 'bench'
+  ui.meta.textContent = ''
   ui.empty.hidden = false
   ui.grid.hidden = true
   ui.entry.hidden = true
+  ui.closeTab.hidden = true
   ui.notice.hidden = true
   ui.empty.textContent = ''
   ui.empty.appendChild(node('h2', null, title))

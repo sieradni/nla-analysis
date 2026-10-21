@@ -477,6 +477,14 @@ button {
   min-width: 0;
 }
 
+/* The tab's own actions sit beside its facts: both belong to the open drawing, not to the data. */
+.stage-side {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+}
+
 .crumb {
   color: var(--muted);
   font-size: var(--text-xs);

@@ -169,14 +169,37 @@ ipcMain.handle('bench:startup', () => ({
 
 ipcMain.handle('bench:openProject', (_event, dir) => guarded(() => bench.openProject(dir)))
 
+// The rail's list and the project's own entry target come from the same read. A window with no tab
+// left still takes points, and its count has to be the log's current one, not the one from when the
+// project was opened.
 ipcMain.handle('bench:views', (_event, dir) =>
   guarded(async () => {
     const opened = await bench.openProject(dir)
-    return { views: opened.views, problems: opened.viewProblems }
+    return { views: opened.views, problems: opened.viewProblems, entry: opened.entry }
   }),
 )
 
 ipcMain.handle('bench:view', (_event, dir, name) => guarded(() => bench.openView(dir, name)))
+
+// Closing takes the tab's file away, and the watcher would report that deletion back as "another
+// writer removed this tab" while the window is already opening the next one. Stop watching first:
+// the tab being closed is not the tab to watch any more.
+ipcMain.handle('bench:closeView', (_event, dir, name) =>
+  guarded(async () => {
+    if (watchedTab && watchedTab.dir === dir && watchedTab.name === name) stopWatching()
+    return bench.closeView(dir, name)
+  }),
+)
+
+// What the project's trash holds, newest first. A window fills its closed-tab stack from this on
+// launch, so a close outlives the process that made it.
+ipcMain.handle('bench:closedViews', (_event, dir) => guarded(() => bench.closedViews(dir)))
+
+// The inverse: the archive moves home, so a reopened tab is the tab that was closed rather than a
+// copy of it drawn from today's data.
+ipcMain.handle('bench:restoreClosedView', (_event, dir, file) =>
+  guarded(() => bench.restoreClosedView(dir, file)),
+)
 
 // One tab at a time, because one tab is on screen. The window calls this whenever the tab it is
 // drawing changes; `name: null` means nothing is open, and no watcher should be left running.

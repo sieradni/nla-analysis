@@ -5,12 +5,15 @@
  * each assertion is what the window should have said afterwards.
  */
 import { app, clipboard, ipcMain } from 'electron'
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
   window,
   here,
   captureDir,
+  capturePhase,
   writableDir,
   startupDir,
   startedAt,
@@ -76,6 +79,119 @@ async function accessibilityImages() {
     }))
 }
 
+/** Wait for the bar to report a status matching `pattern`, and hand back the whole bar reading. */
+async function waitStatus(pattern, what) {
+  for (let waited = 0; waited < 120; waited += 1) {
+    const state = JSON.parse(await entryState())
+    if (pattern.test(state.status || '')) return state
+    await sleep(100)
+  }
+  throw new Error(what + ' never reported: ' + (await entryState()))
+}
+
+/** What the bar's own undo button says, without pressing it. */
+async function barUndo() {
+  return JSON.parse(
+    await window.webContents.executeJavaScript(`(() => {
+      const button = document.getElementById('entry-undo')
+      return JSON.stringify({ label: button.textContent, disabled: button.disabled })
+    })()`),
+  )
+}
+
+/** How many events a project's log holds, counting the lines: a write is visible here or nowhere. */
+async function logCount(project) {
+  return (await readFile(join(project, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n').length
+}
+
+/**
+ * A fresh process on the same project, for the turn that must survive a relaunch.
+ *
+ * Everything that could remember the closed tab — the renderer's module state, the main process, the
+ * window — is gone in the child: only the project's own files are left. So this is the relaunch a
+ * person actually performs, not a reload dressed as one.
+ */
+export async function captureRelaunch() {
+  // The project is opened by the renderer after its first paint: wait for the tab it draws, not for
+  // a timer that hopes the read finished.
+  let started = JSON.parse(await entryState())
+  for (let waited = 0; waited < 100 && started.tabs !== 1; waited += 1) {
+    await sleep(100)
+    started = JSON.parse(await entryState())
+  }
+  console.log(
+    '[bench] relaunch-start ' +
+      JSON.stringify({ tabs: started.tabs, status: started.status, readout: started.readout }),
+  )
+  if (started.tabs !== 1) {
+    throw new Error('the relaunched window does not show the one tab that was left open: ' + started.tabs)
+  }
+  if (!(await focusWindowForInput())) throw new Error('the relaunched window never took focus')
+
+  const project = startupDir
+  const eventsBefore = await logCount(project)
+  await focusField(0)
+  pressKey('T', ['control', 'shift'])
+  const reopened = await waitStatus(/^Reopened /, 'reopening a tab closed before the relaunch')
+  // The status is written after the drawing, so wait for the drawing itself: the frame below is the
+  // argument, and a frame caught mid-repaint would argue the opposite of the claim.
+  let title = ''
+  for (let waited = 0; waited < 100; waited += 1) {
+    title = await window.webContents.executeJavaScript("document.getElementById('view-title').textContent")
+    const now = JSON.parse(await entryState())
+    if (title === 'drift over time' && now.tabs === 2 && now.meta === '2 panels · 16 points') break
+    await sleep(100)
+  }
+  await sleep(400)
+  const undoAfterRelaunch = await barUndo()
+  console.log(
+    '[bench] relaunch-reopened ' +
+      JSON.stringify({
+        status: reopened.status,
+        title,
+        readout: reopened.readout,
+        tabs: reopened.tabs,
+        undo: undoAfterRelaunch,
+        eventsWritten: (await logCount(project)) - eventsBefore,
+      }),
+  )
+  if (title !== 'drift over time') {
+    throw new Error('the relaunched window reopened something else: ' + title)
+  }
+  if (!/n = 16/.test(reopened.readout || '')) {
+    throw new Error('the tab came back without its data: ' + reopened.readout)
+  }
+  if (reopened.tabs !== 2) throw new Error('the reopened tab is not in the rail: ' + reopened.tabs)
+  // The acts were the earlier window's memory. An empty bar is the truth, not a gap to paper over.
+  if (undoAfterRelaunch.disabled !== true || undoAfterRelaunch.label !== 'Undo') {
+    throw new Error('the relaunched tab claims acts it cannot have: ' + JSON.stringify(undoAfterRelaunch))
+  }
+  if ((await logCount(project)) !== eventsBefore) throw new Error('reopening after a relaunch wrote an event')
+  // The renderer's own paint, not the last surface the compositor happened to hold: a hidden review
+  // window can hand back the frame from before the repaint.
+  await writeFile(join(captureDir, 'app-tab-reopened-relaunch.png'), await rendererScreenshot())
+
+  // And with the list empty, the chord stays quiet: no sentence, no write, no repaint.
+  const statusBefore = JSON.parse(await entryState()).status
+  await focusField(0)
+  pressKey('T', ['control', 'shift'])
+  await sleep(600)
+  const empty = JSON.parse(await entryState())
+  console.log(
+    '[bench] relaunch-empty ' +
+      JSON.stringify({
+        status: empty.status,
+        unchanged: empty.status === statusBefore,
+        eventsWritten: (await logCount(project)) - eventsBefore,
+        tabs: empty.tabs,
+      }),
+  )
+  if (empty.status !== statusBefore) throw new Error('an empty closed list said something: ' + empty.status)
+  if ((await logCount(project)) !== eventsBefore) throw new Error('an empty closed list wrote an event')
+  if (empty.tabs !== 2) throw new Error('an empty closed list changed the rail')
+  app.exit(0)
+}
+
 /**
  * Click a mark by record id with real pointer events, in whichever panel draws it, and wait for the
  * strip it opens. Returns the id it clicked, or null: a mark that is not drawn is not selectable, and
@@ -105,6 +221,8 @@ async function selectMarkById(id) {
 }
 
 export async function capture() {
+  // The second process of the relaunch proof: a window with nothing but the project on disk.
+  if (capturePhase === 'relaunch') return captureRelaunch()
   // The renderer's own errors, so a script that throws says why instead of just "failed to execute".
   // Content-Security-Policy violations are counted rather than printed: the core's chart markup sets
   // `font-variant-numeric` as an inline style, which the shell's `style-src 'self'` blocks, so every
@@ -241,6 +359,72 @@ let cspViolations = 0
     ['125', 1.25],
     ['150', 1.5],
   ]
+
+  /**
+   * One frame at one scaling, plus what the layout did there. The zoom is a real zoom of the real
+   * window; the facts come from the renderer's own boxes, so a control that wrapped or left the
+   * window is caught at the scaling it broke at rather than in a frame nobody measured.
+   */
+  async function frameAt(factor, file) {
+    window.webContents.setZoomFactor(factor)
+    await sleep(600)
+    await writeFile(join(captureDir, file), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+    const facts = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const box = (element) => {
+          if (!element) return null
+          const rect = element.getBoundingClientRect()
+          const style = getComputedStyle(element)
+          return {
+            top: Math.round(rect.top),
+            bottom: Math.round(rect.bottom),
+            right: Math.round(rect.right),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height),
+            visible: style.display !== 'none' && !element.hidden && rect.width > 0 && rect.height > 0,
+            clipped: element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1,
+          }
+        }
+        const inside = (box) => !!box && box.visible && box.right <= window.innerWidth && box.bottom <= window.innerHeight && box.top >= 0
+        // How many lines a label really took: a button that wrapped is a control that asks to be
+        // read twice, and a box measurement alone would not say so.
+        const lines = (element) => {
+          if (!element || !element.firstChild) return 0
+          const range = document.createRange()
+          range.selectNodeContents(element)
+          return range.getClientRects().length
+        }
+        const meta = box(document.getElementById('view-meta'))
+        const close = box(document.getElementById('close-tab'))
+        return JSON.stringify({
+          viewport: { w: window.innerWidth, h: window.innerHeight },
+          overflowX: document.documentElement.scrollWidth - window.innerWidth,
+          action: box(document.querySelector('#entry-status .status-action')),
+          actionInView: inside(box(document.querySelector('#entry-status .status-action'))),
+          actionLines: lines(document.querySelector('#entry-status .status-action')),
+          undoInView: inside(box(document.getElementById('entry-undo'))),
+          close: close,
+          closeInView: inside(close),
+          // A close control that wrapped under the tab's facts is still inside the window, and still
+          // wrong: the header is one row.
+          closeBelowHeader: !!(close && meta && meta.h > 0 && close.top >= meta.bottom - 1),
+        })
+      })()`),
+    )
+    window.webContents.setZoomFactor(1)
+    await sleep(200)
+    return {
+      viewport: facts.viewport,
+      overflowX: facts.overflowX,
+      action: facts.action && facts.action.visible,
+      actionInView: facts.actionInView,
+      actionLines: facts.actionLines,
+      closeInView: facts.closeInView,
+      closeBelowHeader: facts.closeBelowHeader,
+      undoInView: facts.undoInView,
+    }
+  }
 
   for (const [label, factor] of factors) {
     window.webContents.setZoomFactor(factor)
@@ -2609,26 +2793,9 @@ let cspViolations = 0
     }
     await sleep(700)
 
-    const logCount = async (project) =>
-      (await readFile(join(project, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n').length
     const lastLoggedEvent = async (project) => {
       const lines = (await readFile(join(project, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n')
       return JSON.parse(lines[lines.length - 1])
-    }
-    const barUndo = async () =>
-      JSON.parse(
-        await window.webContents.executeJavaScript(`(() => {
-          const button = document.getElementById('entry-undo')
-          return JSON.stringify({ label: button.textContent, disabled: button.disabled })
-        })()`),
-      )
-    const waitStatus = async (pattern, what) => {
-      for (let waited = 0; waited < 120; waited += 1) {
-        const state = JSON.parse(await entryState())
-        if (pattern.test(state.status || '')) return state
-        await sleep(100)
-      }
-      throw new Error(what + ' never reported: ' + (await entryState()))
     }
     const importThroughSheet = async (file, expected, what) => {
       setNextPickedFile(file)
@@ -2860,6 +3027,339 @@ let cspViolations = 0
     if (eventsAfterEnter !== eventsBeforeEnter) {
       throw new Error('a Save after the undo withdrew the row wrote an event')
     }
+
+    // Closing a tab is the one act with an inverse that lives outside the log: the window keeps the
+    // tab's own file and its acts, and Ctrl+Shift+T puts the same drawing back. Driven here through
+    // the real button and the real keys, in a copy of the fixture so the counts are known.
+    const closedProject = join(dirname(writableDir), 'closed-tab')
+    await cp(startupDir, closedProject, { recursive: true })
+    setNextStartup(closedProject)
+    window.webContents.reload()
+    await new Promise((done) => ipcMain.once('bench:ready', done))
+    if (!(await focusWindowForInput())) {
+      throw new Error('the window never took focus for the closed-tab frames')
+    }
+    await sleep(700)
+
+    const closedFile = join(closedProject, 'views', 'drift-over-time.json')
+    if (!existsSync(closedFile)) throw new Error('the tab about to be closed has no file')
+    await enterPoint(5.6, 11.3)
+    // The tab file catches up after the paint; closing reads that file, so let it land first.
+    await sleep(600)
+    const specBeforeClose = JSON.parse(await readFile(closedFile, 'utf8'))
+    if (!specBeforeClose.panels.some((panel) => panel.n === 15)) {
+      throw new Error('the typed point never reached the tab file: ' + JSON.stringify(specBeforeClose.panels.map((panel) => panel.n)))
+    }
+    const undoBeforeClose = await barUndo()
+
+    await window.webContents.executeJavaScript("document.getElementById('close-tab').click()")
+    const closedState = await waitStatus(/^Closed /, 'closing the tab')
+    const afterClose = JSON.parse(await entryState())
+    const closeAction = await window.webContents.executeJavaScript(`(() => {
+      const button = document.querySelector('#entry-status .status-action')
+      return button ? { label: button.textContent, title: button.title } : null
+    })()`)
+    console.log(
+      '[bench] tab-closed ' +
+        JSON.stringify({
+          status: closedState.status,
+          tabs: afterClose.tabs,
+          readout: closedState.readout,
+          fileGone: !existsSync(closedFile),
+          action: closeAction,
+        }),
+    )
+    if (existsSync(closedFile)) throw new Error('closing the tab left its file in the project')
+    // The bar types into the project now, and its count is the data's: the point typed just before
+    // the close is in it, not a figure from when the project was opened.
+    if (!/n = 15/.test(closedState.readout || '')) {
+      throw new Error('the closed stage counts the wrong rows: ' + closedState.readout)
+    }
+    // An empty stage names the project: a title and a count from the tab that just left would
+    // describe a drawing that is not there.
+    const closedHeader = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => JSON.stringify({
+        title: document.getElementById('view-title').textContent,
+        crumb: document.getElementById('crumb').textContent,
+        meta: document.getElementById('view-meta').textContent,
+      }))()`),
+    )
+    console.log('[bench] tab-closed-header ' + JSON.stringify(closedHeader))
+    if (closedHeader.title === 'drift over time' || closedHeader.meta !== '') {
+      throw new Error('the closed stage still describes the closed tab: ' + JSON.stringify(closedHeader))
+    }
+    if (afterClose.tabs !== 0) {
+      throw new Error('the closed tab is still in the rail: ' + JSON.stringify({ tabs: afterClose.tabs }))
+    }
+    if (!closeAction || closeAction.label !== 'Undo tab close') {
+      throw new Error('the status offered no way back to the closed tab: ' + JSON.stringify(closeAction))
+    }
+    await assertPlainSurface('the tab just closed')
+
+    // The frame a person would review: the stage with nothing on it, and the status offering the way
+    // back. Each scaling is measured rather than eyeballed, so a wrapped status or a button pushed
+    // off the header is a failure, not a photograph nobody reads.
+    for (const [label, factor] of [['100', 1], ['125', 1.25], ['150', 1.5]]) {
+      const atClosed = await frameAt(factor, `app-tab-closed-${label}.png`)
+      console.log(`[bench] tab-closed-${label} ` + JSON.stringify(atClosed))
+      if (atClosed.overflowX > 0) throw new Error(`the closed stage scrolls sideways at ${label}%`)
+      if (!atClosed.actionInView) throw new Error(`the way back is outside the window at ${label}%`)
+      if (atClosed.actionLines !== 1) throw new Error(`the way back wrapped at ${label}%`)
+      // Nothing is open, so there is nothing to close: the control leaves with the tab.
+      if (atClosed.closeInView) throw new Error(`the close control outlived its tab at ${label}%`)
+    }
+
+    // Ctrl+Shift+T with the cursor in a field: the chord has no meaning to a text input, so unlike
+    // Ctrl+Z it is not deferred to the field it is pressed in.
+    await focusField(0)
+    pressKey('T', ['control', 'shift'])
+    const reopenedState = await waitStatus(/^Reopened /, 'reopening the closed tab')
+    const reopenedUndo = await barUndo()
+    const reopenedTitle = await window.webContents.executeJavaScript(
+      "document.getElementById('view-title').textContent",
+    )
+    console.log(
+      '[bench] tab-reopened ' +
+        JSON.stringify({
+          status: reopenedState.status,
+          title: reopenedTitle,
+          readout: reopenedState.readout,
+          undoBefore: undoBeforeClose,
+          undo: reopenedUndo,
+          tabs: reopenedState.tabs,
+        }),
+    )
+    if (reopenedTitle !== 'drift over time') {
+      throw new Error('the reopened tab is not the tab that closed: ' + reopenedTitle)
+    }
+    if (!/n = 15/.test(reopenedState.readout || '')) {
+      throw new Error('the reopened tab lost its data: ' + reopenedState.readout)
+    }
+    if (reopenedUndo.disabled || reopenedUndo.label !== 'Undo added point') {
+      throw new Error('the reopened tab lost the acts made in it: ' + JSON.stringify(reopenedUndo))
+    }
+    if (reopenedState.tabs !== 1) throw new Error('the reopened tab is not in the rail again')
+    if (!existsSync(closedFile)) throw new Error('the reopened tab wrote no file')
+    await assertPlainSurface('the tab that came back')
+
+    // The tab that came back, at each scaling: the close control sits beside the tab's facts, and the
+    // bar still holds the act the tab had. A header that wraps the button out of reach fails here.
+    for (const [label, factor] of [['100', 1], ['125', 1.25], ['150', 1.5]]) {
+      const atReopened = await frameAt(factor, `app-tab-reopened-${label}.png`)
+      console.log(`[bench] tab-reopened-${label} ` + JSON.stringify(atReopened))
+      if (atReopened.overflowX > 0) throw new Error(`the reopened tab scrolls sideways at ${label}%`)
+      if (!atReopened.closeInView) throw new Error(`the close control is outside the window at ${label}%`)
+      if (atReopened.closeBelowHeader) {
+        throw new Error(`the close control wrapped under the tab's facts at ${label}%`)
+      }
+      if (!atReopened.undoInView) throw new Error(`the bar's undo is outside the window at ${label}%`)
+    }
+
+    // And on an empty stack the chord does nothing at all: no sentence, no write, no repaint.
+    const eventsBeforeEmpty = await logCount(closedProject)
+    const statusBeforeEmpty = reopenedState.status
+    await focusField(0)
+    pressKey('T', ['control', 'shift'])
+    await sleep(600)
+    const emptyStackState = JSON.parse(await entryState())
+    console.log(
+      '[bench] tab-reopen-empty ' +
+        JSON.stringify({
+          status: emptyStackState.status,
+          unchanged: emptyStackState.status === statusBeforeEmpty,
+          eventsWritten: (await logCount(closedProject)) - eventsBeforeEmpty,
+          tabs: emptyStackState.tabs,
+        }),
+    )
+    if (emptyStackState.status !== statusBeforeEmpty) {
+      throw new Error('an empty closed stack said something: ' + emptyStackState.status)
+    }
+    if ((await logCount(closedProject)) !== eventsBeforeEmpty) {
+      throw new Error('an empty closed stack wrote an event')
+    }
+    if (emptyStackState.tabs !== 1) throw new Error('an empty closed stack changed the rail')
+
+    // The same close from the keyboard alone: the control is a button with the window's own words, so
+    // focus reaches it and the activation key presses it. Closing also has to leave the cursor
+    // somewhere useful rather than on a control that just disappeared.
+    const closeFocus = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const button = document.getElementById('close-tab')
+        button.focus()
+        return JSON.stringify({
+          focused: document.activeElement === button,
+          name: button.textContent,
+          tabbable: button.tabIndex >= 0,
+        })
+      })()`),
+    )
+    if (!closeFocus.focused || !closeFocus.tabbable || closeFocus.name !== 'Close tab') {
+      throw new Error('the close control cannot be reached from the keyboard: ' + JSON.stringify(closeFocus))
+    }
+    // A button acts on the *char* event, not on keyDown alone: `pressEnter` is the one that moves.
+    pressEnter()
+    const closedByKey = await waitStatus(/^Closed /, 'closing the tab with the keyboard')
+    const focusAfterKey = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => JSON.stringify({
+        field: (document.activeElement && document.activeElement.dataset.field) || null,
+        tab: document.activeElement && document.activeElement.id,
+      }))()`),
+    )
+    console.log(
+      '[bench] tab-closed-by-key ' +
+        JSON.stringify({ status: closedByKey.status, tabs: closedByKey.tabs, focus: focusAfterKey }),
+    )
+    if (closedByKey.tabs !== 0) throw new Error('the keyboard close left the tab in the rail')
+    if (focusAfterKey.field !== 'x') {
+      throw new Error('closing moved focus off the bar: ' + JSON.stringify(focusAfterKey))
+    }
+
+    // And the chord brings it back a second time, because the stack takes what it reopens and the
+    // next close is a new record rather than a rewind.
+    pressKey('T', ['control', 'shift'])
+    const twice = await waitStatus(/^Reopened /, 'reopening after the keyboard close')
+    console.log('[bench] tab-reopened-again ' + JSON.stringify({ status: twice.status, tabs: twice.tabs, readout: twice.readout }))
+    if (twice.tabs !== 1 || !/n = 15/.test(twice.readout || '')) {
+      throw new Error('the second reopen is not the same tab: ' + JSON.stringify(twice))
+    }
+    if ((await logCount(closedProject)) !== eventsBeforeEmpty) {
+      throw new Error('closing and reopening a tab wrote an event')
+    }
+
+    // One more close, from a window that has a tab to fall back to. Closing changes the drawing, and
+    // that change clears the tab's history — the closed stack is outside it, so the tab's own act has
+    // to come back with it. This is the case a stack kept inside `showView` would fail.
+    await window.webContents.executeJavaScript("document.getElementById('new-tab').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      if (await window.webContents.executeJavaScript("document.getElementById('tab-dialog').open")) break
+      await sleep(100)
+    }
+    await window.webContents.executeJavaScript(`(() => {
+      const name = document.getElementById('tab-name')
+      name.value = 'second look'
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(200)
+    await window.webContents.executeJavaScript("document.getElementById('tab-create').click()")
+    const secondTab = await waitStatus(/^Created the tab/, 'building a second tab')
+    // Back to the first tab for one more point: the act the reopen has to bring back.
+    await window.webContents.executeJavaScript(`(() => {
+      const item = Array.prototype.find.call(document.querySelectorAll('#tabs .item'), (button) =>
+        button.textContent.indexOf('drift over time') !== -1,
+      )
+      item.click()
+      return true
+    })()`)
+    for (let waited = 0; waited < 100; waited += 1) {
+      if ((await window.webContents.executeJavaScript("document.getElementById('view-title').textContent")) === 'drift over time') break
+      await sleep(100)
+    }
+    await enterPoint(6.2, 12.1)
+    await waitStatus(/^Saved/, 'typing into the tab that will be closed')
+    await sleep(600)
+    const eventsBeforeSwitchClose = await logCount(closedProject)
+    await window.webContents.executeJavaScript("document.getElementById('close-tab').click()")
+    const afterSwitchClose = await waitStatus(/^Closed /, 'closing a tab that has a neighbour')
+    const landedOn = await window.webContents.executeJavaScript(
+      "document.getElementById('view-title').textContent",
+    )
+    console.log(
+      '[bench] tab-closed-with-neighbour ' +
+        JSON.stringify({ status: afterSwitchClose.status, tabs: secondTab.tabs, landedOn: landedOn }),
+    )
+    if (landedOn !== 'second look') {
+      throw new Error('closing a tab did not move to the tab beside it: ' + landedOn)
+    }
+    if (secondTab.tabs !== 2) throw new Error('the second tab was not added to the rail: ' + secondTab.tabs)
+    if (afterSwitchClose.tabs !== 1) throw new Error('the rail did not lose exactly one tab')
+
+    pressKey('T', ['control', 'shift'])
+    const backAcross = await waitStatus(/^Reopened /, 'reopening after the drawing changed')
+    const backUndo = await barUndo()
+    const backTitle = await window.webContents.executeJavaScript(
+      "document.getElementById('view-title').textContent",
+    )
+    console.log(
+      '[bench] tab-reopened-across-switch ' +
+        JSON.stringify({
+          status: backAcross.status,
+          title: backTitle,
+          readout: backAcross.readout,
+          undo: backUndo,
+          tabs: backAcross.tabs,
+        }),
+    )
+    if (backTitle !== 'drift over time') throw new Error('the wrong tab came back: ' + backTitle)
+    if (!/n = 16/.test(backAcross.readout || '')) {
+      throw new Error('the tab came back without the point typed in it: ' + backAcross.readout)
+    }
+    if (backUndo.disabled || backUndo.label !== 'Undo added point') {
+      throw new Error('the tab came back without its act: ' + JSON.stringify(backUndo))
+    }
+    if (backAcross.tabs !== 2) throw new Error('the rail does not hold both tabs again')
+    if ((await logCount(closedProject)) !== eventsBeforeSwitchClose) {
+      throw new Error('closing a tab with a neighbour, or reopening it, wrote an event')
+    }
+
+    // Quit, and start again. The tab is closed first, so the relaunch has something the earlier
+    // window knew about and the new one can only find in the project's own files.
+    await window.webContents.executeJavaScript("document.getElementById('close-tab').click()")
+    const beforeQuit = await waitStatus(/^Closed /, 'closing the tab before the relaunch')
+    if (beforeQuit.tabs !== 1) {
+      throw new Error('the relaunch would start with ' + beforeQuit.tabs + ' tabs on screen')
+    }
+    const archives = (await readdir(join(closedProject, 'views', '.trash'))).filter((name) =>
+      name.endsWith('.json'),
+    )
+    if (archives.length === 0) throw new Error('the closed tab left no archive to reopen')
+    // The parent stops being the window that knows: its own stack is irrelevant to the child.
+    console.log(
+      '[bench] relaunch-prepared ' +
+        JSON.stringify({ tabs: beforeQuit.tabs, archives: archives.length, status: beforeQuit.status }),
+    )
+
+    const relaunchProfile = join(dirname(writableDir), 'relaunch-profile')
+    await mkdir(relaunchProfile, { recursive: true })
+    const childEnv = { ...process.env }
+    // Electron's own "run as node" switch would make the child a script runner, not a window.
+    delete childEnv.ELECTRON_RUN_AS_NODE
+    const relaunched = spawn(process.execPath, [join(here, 'main.js')], {
+      cwd: join(here, '..'),
+      env: {
+        ...childEnv,
+        BENCH_CAPTURE: captureDir,
+        BENCH_CAPTURE_PHASE: 'relaunch',
+        BENCH_APP_PROJECT: closedProject,
+        BENCH_USER_DATA: relaunchProfile,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let childOutput = ''
+    relaunched.stdout.on('data', (chunk) => {
+      childOutput += chunk
+    })
+    relaunched.stderr.on('data', (chunk) => {
+      childOutput += chunk
+    })
+    const relaunchCode = await new Promise((done) => {
+      relaunched.on('exit', (status) => done(status ?? 1))
+      relaunched.on('error', (error) => {
+        childOutput += '\n' + error.message
+        done(1)
+      })
+    })
+    process.stdout.write(childOutput)
+    if (relaunchCode !== 0) {
+      throw new Error('the relaunched window exited ' + relaunchCode + '\n' + childOutput)
+    }
+    for (const evidence of ['relaunch-start', 'relaunch-reopened', 'relaunch-empty']) {
+      if (!childOutput.includes('[bench] ' + evidence)) {
+        throw new Error('the relaunched window never reached ' + evidence)
+      }
+    }
+    // The child photographed its own frame, so the review has a picture of the tab that came back.
+    frames += 1
 
   }
 

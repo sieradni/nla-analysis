@@ -11,8 +11,9 @@
  * showing stale data" answerable offline — the same argument as a recorded run's `input_hash`, and
  * the same refusal to call something current without checking.
  */
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { CHART_HEIGHT, CHART_WIDTH, renderChartGroup, type ChartSpec } from './chart.ts'
 import { BenchError } from './errors.ts'
 
@@ -387,9 +388,157 @@ export async function listViews(dir: string): Promise<{ views: ViewSummary[]; pr
   return { views: views.sort((left, right) => left.name.localeCompare(right.name)), problems }
 }
 
+/** How many closed tabs the project keeps before the oldest leaves. Derived state, and disposable. */
+const TRASH_KEEP = 20
+
+/** Where a closed tab waits: inside `views/`, so the project carries it and a restart does not lose it. */
+function trashDir(dir: string): string {
+  return join(dir, 'views', '.trash')
+}
+
 /**
- * Never delete a view: a tab the user built is history. Replacing one is an explicit act, and the
- * caller says so with `overwrite`.
+ * When a closed tab was archived, read from its own name. Fixed-width, so comparing the strings is
+ * comparing the instants; a file whose name does not carry one sorts first and leaves first.
+ */
+function archivedAt(file: string): string {
+  const match = /-(\d{4}-\d{2}-\d{2}T[\d-]+Z)(?:-\d+)?\.json$/.exec(file)
+  return match ? match[1]! : ''
+}
+
+/** Keep the last `TRASH_KEEP` closed tabs, oldest first out. A failure here never fails a close. */
+async function trimTrash(dir: string): Promise<void> {
+  let files: string[]
+  try {
+    files = (await readdir(trashDir(dir), { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith(VIEW_SUFFIX))
+      .map((entry) => entry.name)
+  } catch {
+    return
+  }
+  if (files.length <= TRASH_KEEP) return
+  files.sort((left, right) => archivedAt(left).localeCompare(archivedAt(right)) || left.localeCompare(right))
+  for (const file of files.slice(0, files.length - TRASH_KEEP)) {
+    await rm(join(trashDir(dir), file))
+  }
+}
+
+/**
+ * A tab waiting in `views/.trash/`, as the window lists it. The file is the tab's whole spec: the
+ * archive is the tab, so nothing about it needs a second copy to survive a relaunch.
+ */
+export interface ClosedView {
+  /** The file inside `views/.trash/`. */
+  file: string
+  name: string
+  panels: number
+  /** When it was closed, read from its own name; empty if the name does not carry one. */
+  closedAt: string
+}
+
+/** Newest first, which is the order a closed tab comes back in. */
+function newestClosedFirst(left: string, right: string): number {
+  return archivedAt(right).localeCompare(archivedAt(left)) || right.localeCompare(left)
+}
+
+/**
+ * Read one archived tab. The file is written by `saveView`, but it is still the project's file: a
+ * hand-edited or half-written archive is a refusal, not a drawing.
+ */
+async function readClosedView(dir: string, file: string): Promise<ViewFile> {
+  let text: string
+  try {
+    text = await readFile(join(trashDir(dir), file), 'utf8')
+  } catch {
+    throw new BenchError('missing', 'that closed tab is no longer in the project', {
+      hint: 'a later close pruned it, or another window reopened it',
+    })
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new BenchError('invalid', `views/.trash/${file} is not valid JSON`, { problems: [file] })
+  }
+  return validateView(parsed)
+}
+
+/**
+ * Take a tab's file away, and say where it went.
+ *
+ * Closing a tab is a window act, not a dataset event: a view is derived state, so nothing about it
+ * belongs in the log and no data is touched. The file itself moves to `views/.trash/` rather than
+ * being deleted, because a tab carries choices nothing can derive again — its title, its axes, its
+ * recipe and its layout — and a window that forgot its stack must not be the thing that loses them.
+ * The archive is the tab: `listClosedViews` reads it back after a relaunch, and `restoreClosedView`
+ * moves it home, so the same bytes are never written twice.
+ */
+export async function closeView(dir: string, name: string): Promise<ClosedView> {
+  const view = await loadView(dir, name)
+  await mkdir(trashDir(dir), { recursive: true })
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  // Two closes in the same millisecond must not overwrite the earlier archive.
+  let file = `${slugFor(view.name)}-${stamp}${VIEW_SUFFIX}`
+  for (let bump = 1; existsSync(join(trashDir(dir), file)); bump += 1) {
+    file = `${slugFor(view.name)}-${stamp}-${bump}${VIEW_SUFFIX}`
+  }
+  await rename(viewPath(dir, view.name), join(trashDir(dir), file))
+  await trimTrash(dir)
+  return { file, name: view.name, panels: view.panels.length, closedAt: archivedAt(file) }
+}
+
+/**
+ * The tabs waiting in the trash, newest first — the list a window fills itself from on launch, so a
+ * close outlives the process that made it. Bounded and disposable in the same way the trash is: the
+ * newest `TRASH_KEEP` only, and an unreadable archive is a problem to report, never a tab to offer.
+ */
+export async function listClosedViews(
+  dir: string,
+): Promise<{ closed: ClosedView[]; problems: string[] }> {
+  let files: string[]
+  try {
+    files = (await readdir(trashDir(dir), { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith(VIEW_SUFFIX))
+      .map((entry) => entry.name)
+  } catch {
+    return { closed: [], problems: [] }
+  }
+  const closed: ClosedView[] = []
+  const problems: string[] = []
+  for (const file of files.sort(newestClosedFirst)) {
+    try {
+      const view = await readClosedView(dir, file)
+      closed.push({ file, name: view.name, panels: view.panels.length, closedAt: archivedAt(file) })
+    } catch (error) {
+      problems.push(`views/.trash/${file}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  return { closed: closed.slice(0, TRASH_KEEP), problems }
+}
+
+/**
+ * Put a closed tab back by taking its archive home: the file that waited is the tab, moved rather
+ * than copied, so the trash never grows a duplicate of what is live again. A name that came back
+ * while the tab was away is a refusal, not a silent replacement.
+ */
+export async function restoreClosedView(dir: string, file: string): Promise<ViewFile> {
+  if (basename(file) !== file || !file.endsWith(VIEW_SUFFIX) || file.includes('..')) {
+    throw new BenchError('invalid', `"${file}" is not a closed tab`)
+  }
+  const view = await readClosedView(dir, file)
+  const { views } = await listViews(dir)
+  if (views.some((existing) => existing.name.toLowerCase() === view.name.trim().toLowerCase())) {
+    throw new BenchError('invalid', `a tab named "${view.name}" is in the project again`, {
+      hint: 'close that one first, or keep the newer tab',
+    })
+  }
+  await mkdir(join(dir, 'views'), { recursive: true })
+  await rename(join(trashDir(dir), file), viewPath(dir, view.name))
+  return view
+}
+
+/**
+ * Never overwrite a view in passing: a tab the user built is theirs until they close it or ask to
+ * replace it. Replacing one is an explicit act, and the caller says so with `overwrite`.
  */
 export async function requireFreeName(dir: string, name: string, overwrite: boolean): Promise<void> {
   const { views } = await listViews(dir)

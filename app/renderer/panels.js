@@ -68,6 +68,9 @@ export function renderMeta() {
   }, 0)
   var active = entry ? entry.active : total
   ui.meta.textContent = tabFacts(view.panels.length, active)
+  // The tab's own action lives beside its facts, and a tab is open whenever this runs: the empty
+  // states — a project with no tabs, a tab removed elsewhere — hide it for themselves.
+  ui.closeTab.hidden = false
 }
 
 /**
