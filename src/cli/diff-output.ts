@@ -15,6 +15,14 @@ function formatValues(values: Record<string, PointValue>): string {
     .join('  ')
 }
 
+/**
+ * A row's instant with the one word that qualifies it. A time an import estimated is not a
+ * measurement, and a diff is where a person compares two readings of the same row.
+ */
+function rowTime(t: string, estimated: true | undefined): string {
+  return t + (estimated === true ? ' (estimated)' : '')
+}
+
 /** The rows behind a diff, so a bare `+1 −1 ~1` is never the whole story. */
 export function printDiffDetails(diff: RowDiff, limit: number): void {
   const show = (label: string, lines: string[]): void => {
@@ -23,10 +31,19 @@ export function printDiffDetails(diff: RowDiff, limit: number): void {
     for (const line of lines.slice(0, limit)) process.stdout.write(`    ${line}\n`)
     if (lines.length > limit) process.stdout.write(`    … and ${lines.length - limit} more\n`)
   }
-  show(`added ${diff.added}`, diff.addedRows.map((row) => `${row.t}  ${formatValues(row.values)}`))
+  show(
+    `added ${diff.added}`,
+    diff.addedRows.map((row) => `${rowTime(row.t, row.estimated)}  ${formatValues(row.values)}`),
+  )
   show(
     `changed ${diff.changed}`,
-    diff.changedRows.map((row) => `${row.t}  ${formatValues(row.before)}  →  ${formatValues(row.after)}`),
+    diff.changedRows.map(
+      (row) =>
+        `${rowTime(row.t, row.estimated)}  ${formatValues(row.before)}  →  ${formatValues(row.after)}`,
+    ),
   )
-  show(`removed ${diff.removed}`, diff.removedRows.map((row) => `${row.t}  ${formatValues(row.values)}`))
+  show(
+    `removed ${diff.removed}`,
+    diff.removedRows.map((row) => `${rowTime(row.t, row.estimated)}  ${formatValues(row.values)}`),
+  )
 }

@@ -201,6 +201,8 @@ describe('importing a table', () => {
       '2026-05-01T00:00:00.000Z',
       '2026-05-01T00:00:00.001Z',
     ])
+    // The plan's own rows carry the label, so the detailed lines a person reads say it too.
+    expect(plan.diff.addedRows.map((row) => row.estimated)).toEqual([true, true])
     await commitImport(workspace, plan)
 
     const reopened = await Workspace.open(dir)
@@ -235,7 +237,13 @@ describe('importing a table', () => {
       removed: 0,
       changed: 1,
     })
-    expect(again.diff.changedRows[0]!).toMatchObject({ estimated: true })
+    expect(again.diff.changedRows[0]!).toMatchObject({
+      estimated: true,
+      // The instant the row keeps, not the plan's fresh anchor: the diff has to name the one the
+      // correction will leave in the log.
+      t: '2026-05-01T00:00:00.000Z',
+    })
+    expect(again.diff.changedRows[0]!.t).not.toBe(again.sample[0]!.t)
     await commitImport(reopened, again)
 
     const after = await Workspace.open(dir)

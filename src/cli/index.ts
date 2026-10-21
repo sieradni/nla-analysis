@@ -748,14 +748,19 @@ async function main(): Promise<void> {
         // counts are what a writer claimed, and a diff command that only repeats them cannot catch a
         // writer that claimed wrong. Any disagreement is reported instead of hidden.
         const shape = workspace.shapeOf(datasetId)
+        // A time an import estimated reads as one here too: this is the command a person runs to
+        // see what a re-export did, and an estimate printed as a measurement is the defect.
         const parentRows = workspace.rowsOfVersion(datasetId, left).map((point) => ({
           id: point.id,
           t: point.tObserved,
           values: point.values,
+          ...(point.tEstimated === true ? { estimated: true as const } : {}),
         }))
-        const childRows = workspace
-          .rowsOfVersion(datasetId, right)
-          .map((point) => ({ t: point.tObserved, values: point.values }))
+        const childRows = workspace.rowsOfVersion(datasetId, right).map((point) => ({
+          t: point.tObserved,
+          values: point.values,
+          ...(point.tEstimated === true ? { estimated: true as const } : {}),
+        }))
         const diff = diffRows(parentRows, childRows, shape.fields.map((field) => field.name))
         const record = records.find((candidate) => candidate.version === right)
         const claimed = record?.diff
@@ -771,9 +776,24 @@ async function main(): Promise<void> {
                   to: right,
                   counts: { added: diff.added, removed: diff.removed, changed: diff.changed },
                   recorded: claimed ?? null,
-                  added: diff.addedRows,
-                  changed: diff.changedRows,
-                  removed: diff.removedRows.map((row) => ({ id: row.id, t: row.t, values: row.values })),
+                  added: diff.addedRows.map((row) => ({
+                    t: row.t,
+                    values: row.values,
+                    ...(row.estimated === true ? { t_estimated: true } : {}),
+                  })),
+                  changed: diff.changedRows.map((row) => ({
+                    id: row.id,
+                    t: row.t,
+                    before: row.before,
+                    after: row.after,
+                    ...(row.estimated === true ? { t_estimated: true } : {}),
+                  })),
+                  removed: diff.removedRows.map((row) => ({
+                    id: row.id,
+                    t: row.t,
+                    values: row.values,
+                    ...(row.estimated === true ? { t_estimated: true } : {}),
+                  })),
                 },
               },
               null,

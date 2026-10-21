@@ -24,6 +24,8 @@ export interface DiffRow {
   /** The observation time, canonicalised: the row's identity. */
   t: string
   values: Record<string, PointValue>
+  /** This row's own time is an import's estimate, not a measurement. */
+  estimated?: true
 }
 
 /** A row plus the point it came from, when it came from the parent's log. */
@@ -117,7 +119,13 @@ export function diffRows(parent: ParentRow[], child: DiffRow[], fields: string[]
     }
     for (const row of unmatchedChildren) {
       result.added += 1
-      result.addedRows.push({ t, values: row.values })
+      // An added row keeps the incoming instant, so its own label travels with it: a diff that
+      // printed an estimate as a measurement would undo the point of labelling it at all.
+      result.addedRows.push({
+        t,
+        values: row.values,
+        ...(row.estimated === true ? { estimated: true as const } : {}),
+      })
     }
     for (const row of unmatchedParents) {
       result.removed += 1
@@ -139,8 +147,9 @@ export function diffRows(parent: ParentRow[], child: DiffRow[], fields: string[]
  * re-sorted, the values no longer line up and every row it disturbed reads as changed — which is
  * the honest answer to "these are the same positions with different readings".
  *
- * `changedRows[].t` is the incoming row's instant. A caller re-reading an untimed file keeps the
- * parent's instant for the row (the plan's own are fresh estimates), so it writes no `t_observed`.
+ * `changedRows[].t` is the parent's instant, which is the one the row keeps: a caller re-reading an
+ * untimed file writes no `t_observed`, so the plan's fresh anchor is an argument about the file's
+ * order and never an instant the row is given.
  */
 export function diffRowsByOrder(parent: ParentRow[], child: DiffRow[], fields: string[]): RowDiff {
   const result: RowDiff = { added: 0, removed: 0, changed: 0, addedRows: [], changedRows: [], removedRows: [] }
@@ -150,9 +159,11 @@ export function diffRowsByOrder(parent: ParentRow[], child: DiffRow[], fields: s
     const after = child[index]!
     if (valueKey(before.values, fields) === valueKey(after.values, fields)) continue
     result.changed += 1
+    // The row keeps the parent's own instant — the order identifies it, not a fresh anchor — so the
+    // diff names that instant, which is the one the correction will leave in the log.
     result.changedRows.push({
       id: before.id,
-      t: after.t,
+      t: before.t,
       before: before.values,
       after: after.values,
       ...(before.estimated === true ? { estimated: true as const } : {}),
@@ -160,7 +171,11 @@ export function diffRowsByOrder(parent: ParentRow[], child: DiffRow[], fields: s
   }
   for (const row of child.slice(shared)) {
     result.added += 1
-    result.addedRows.push({ t: row.t, values: row.values })
+    result.addedRows.push({
+      t: row.t,
+      values: row.values,
+      ...(row.estimated === true ? { estimated: true as const } : {}),
+    })
   }
   for (const row of parent.slice(shared)) {
     result.removed += 1

@@ -298,8 +298,9 @@ falls back to the estimate.
 **Built 2026-10-21.** The sheet's line reads `Time: the row order — every row is marked estimated`, the
 plan repeats it before the click, and the status says what to do about it. The marker is the log's,
 not the sheet's: every row the write brings carries `t_estimated`, `bench list` prints the time with
-`(estimated)` after it, its JSON carries `t_estimated`, and `STATE.md` counts the rows that have one
-— so the fact survives the sheet closing and reaches an agent that never opened the window. A re-read
+`(estimated)` after it, its JSON carries `t_estimated`, `bench dataset diff` marks a row whose time is
+an estimate in both the text and the JSON, and `STATE.md` counts the rows that have one — so the fact
+survives the sheet closing and reaches an agent that never opened the window. A re-read
 of an untimed file is matched by the order rows were recorded in, not by instants that an estimate
 invented: a value that moved is one changed row, the parent keeps its own instant, and a re-sorted
 file honestly reports every disturbed position as changed. `--estimate-time` is the CLI's door and is

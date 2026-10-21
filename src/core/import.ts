@@ -367,7 +367,11 @@ export async function planImport(
       values: point.values,
       ...(point.tEstimated === true ? { estimated: true as const } : {}),
     }))
-  const incoming = prepared.map((row) => ({ t: row.t, values: row.values }))
+  const incoming = prepared.map((row) => ({
+    t: row.t,
+    values: row.values,
+    ...(estimated ? { estimated: true as const } : {}),
+  }))
   // A file with no clock identifies its rows by position, not by an instant it does not have.
   const diff = estimated
     ? diffRowsByOrder(parentByOrder, incoming, fields)

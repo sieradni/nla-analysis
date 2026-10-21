@@ -1177,6 +1177,30 @@ describe('bench import, as executed', () => {
       expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain(
         '1 of 2 active point(s) have an estimated time',
       )
+
+      // A re-export that changes both rows: one was measured above and one is still an estimate, and
+      // the diff has to say which is which — a version diff is where a person compares two times.
+      await writeFile(
+        join(dir, 'readings-v2.csv'),
+        'temp_c,volts\n21.4,4.4\n21.9,5.5\n',
+        'utf8',
+      )
+      const second = await bench([
+        '--project', dir, 'import', 'readings-v2.csv', ...map, '--estimate-time', '--json',
+      ])
+      expect(second.code).toBe(0)
+      const diffText = await bench(['--project', dir, 'dataset', 'diff', 'main', '1', '2'])
+      expect(diffText.code).toBe(0)
+      const marked = diffText.stdout.split('\n').filter((line) => /\(estimated\)/.test(line))
+      expect(marked).toHaveLength(1)
+      expect(marked[0]).toContain('x 21.9')
+      expect(diffText.stdout).toContain('2026-02-01T09:00:00.000Z  x 21.4')
+      const diffJson = JSON.parse(
+        (await bench(['--project', dir, 'dataset', 'diff', 'main', '1', '2', '--json'])).stdout,
+      ) as { data: { changed: { t: string; t_estimated?: true }[] } }
+      expect(diffJson.data.changed).toHaveLength(2)
+      expect(diffJson.data.changed.find((row) => row.t === '2026-02-01T09:00:00.000Z')!.t_estimated).toBeUndefined()
+      expect(diffJson.data.changed.find((row) => row.t !== '2026-02-01T09:00:00.000Z')!.t_estimated).toBe(true)
     })
   })
 
