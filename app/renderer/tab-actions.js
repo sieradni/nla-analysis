@@ -10,13 +10,21 @@
  * The archive and the tab's own acts wait in `closed-tabs.js`, outside `state.showView` — a close
  * must survive a tab switch, and switching is what clears the tab's history.
  */
-import { state, node, bridge, call, showView, showEmpty, showFailure } from './state.js'
+import { state, bridge, call, showView, showEmpty, showFailure } from './state.js'
 import { empty as emptyCopy, labels as copyLabels, refusal, status as copyStatus, tabMenu } from './copy.js'
 import { renderTabs } from './rail.js'
 import { renderView, watchOpenTab } from './panels.js'
 import { renderEntry, setStatus, focusFirstField } from './entry.js'
 import { noteClosed, putBackClosed, setClosedTabs, takeClosed, takeClosedFile } from './closed-tabs.js'
-import { keepTabRedo, keepTabUndo, noteTabCreated, restoreTabHistory, snapshotTabHistory } from './history.js'
+import {
+  keepTabRedo,
+  keepTabUndo,
+  noteTabCreated,
+  permanentRefusal,
+  restoreTabHistory,
+  snapshotTabHistory,
+} from './history.js'
+import { openMenu } from './menu.js'
 import { actions } from './navigation.js'
 
 /** Open a tab by name, and put the drawing, the rail and the cursor where that leaves them. */
@@ -66,7 +74,9 @@ export function showNoTabs() {
  * put two controls on one restoration.
  */
 export async function closeTab(name, options) {
-  if (!state.project || state.busy) return null
+  // The header's button closes the tab on screen; a menu row closes the tab it names. Neither can
+  // name a tab when nothing is open, which is the empty stage's own state.
+  if (!state.project || state.busy || !name) return null
   var open = state.view !== null && state.view.name === name
   var index = state.views.findIndex(function (view) {
     return view.name === name
@@ -132,12 +142,6 @@ export async function closeTab(name, options) {
   }
 }
 
-/** The header's close control: the tab on screen, by the name the drawing says it has. */
-export function closeOpenTab() {
-  if (!state.view) return
-  return closeTab(state.view.name)
-}
-
 /**
  * Put the last closed tab back.
  *
@@ -186,19 +190,13 @@ async function openArchive(taken) {
   } catch (error) {
     // A tab that can never come back leaves the list: a control that can only refuse is worse than
     // none. A temporary failure — a locked file — keeps it, with its acts, for the next press.
-    if (!permanent(error)) putBackClosed(taken)
+    if (!permanentRefusal(error)) putBackClosed(taken)
     setStatus('error', refusal((error && error.message) || 'the tab could not be reopened'))
     return null
   } finally {
     state.busy = false
     renderEntry()
   }
-}
-
-/** Whether a refusal says the act can never happen: the same test `history.js` makes of a redo. */
-function permanent(error) {
-  var kind = error && error.kind
-  return kind === 'invalid' || kind === 'missing' || kind === 'invariant'
 }
 
 /**
@@ -322,109 +320,27 @@ export async function redoTabCreated(entry) {
 
 // --- the menu on a tab's row ---------------------------------------------------------------
 
-var openMenu = null
-
-/** Close the tab menu, and put the keyboard back on the row it came from unless the pointer left. */
-export function closeTabMenu(returnFocus) {
-  if (!openMenu) return
-  var closed = openMenu
-  openMenu = null
-  closed.element.remove()
-  document.removeEventListener('pointerdown', closed.outside, true)
-  window.removeEventListener('resize', closed.dismiss)
-  closed.trigger.setAttribute('aria-expanded', 'false')
-  if (returnFocus && closed.trigger.isConnected) closed.trigger.focus()
-}
-
 /**
- * Open the menu for one tab, under the button that asked for it.
- *
- * The acts are the same three however they are reached: the point menu's rules apply here too — one
- * menu at a time, focus on its first item, Escape and Tab give the keyboard back, and every item is
- * a button that closes the menu before it acts. Rename and Duplicate ask for a name first, which is
- * the tab sheet's job; this module only knows which act was chosen.
+ * The menu for one tab, under the button that asked for it. The popover — placement, keys,
+ * dismissal, `aria-expanded` on the trigger — is `menu.js`'s; this says which three acts there are
+ * and which tab they are about. Rename and Duplicate ask for a name first, which is the tab sheet's
+ * job; this module only knows which act was chosen.
  */
-export function openTabMenu(trigger, name) {
+function openTabMenu(trigger, name) {
   if (!state.project) return
-  closeTabMenu(false)
-  var element = node('div', 'tab-menu')
-  element.setAttribute('role', 'menu')
-  element.setAttribute('aria-label', tabMenu.label)
-  element.dataset.tab = name
-
-  var items = [
-    ['rename', tabMenu.rename],
-    ['duplicate', tabMenu.duplicate],
-    ['close', tabMenu.close],
-  ]
-  var buttons = items.map(function (item) {
-    var button = node('button', 'tab-menu-item', item[1])
-    button.type = 'button'
-    button.setAttribute('role', 'menuitem')
-    button.dataset.action = item[0]
-    button.addEventListener('click', function () {
-      closeTabMenu(true)
-      choose(item[0], name)
-    })
-    element.appendChild(button)
-    return button
+  openMenu({
+    label: tabMenu.label,
+    under: trigger,
+    items: [
+      ['rename', tabMenu.rename],
+      ['duplicate', tabMenu.duplicate],
+      ['close', tabMenu.close],
+    ],
+    onChoose: function (action) {
+      if (action === 'close') closeTab(name)
+      else actions.openNameSheet(action, name)
+    },
   })
-
-  element.addEventListener('keydown', function (event) {
-    var at = buttons.indexOf(document.activeElement)
-    if (event.key === 'Escape' || event.key === 'Tab') {
-      event.preventDefault()
-      closeTabMenu(true)
-      return
-    }
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') {
-      return
-    }
-    event.preventDefault()
-    var next =
-      event.key === 'Home'
-        ? 0
-        : event.key === 'End'
-          ? buttons.length - 1
-          : at === -1
-            ? 0
-            : (at + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
-    buttons[next].focus()
-  })
-
-  document.body.appendChild(element)
-  var box = trigger.getBoundingClientRect()
-  element.style.left = Math.round(box.left) + 'px'
-  element.style.top = Math.round(box.bottom + 4) + 'px'
-  var placed = element.getBoundingClientRect()
-  if (placed.right > window.innerWidth - 8) {
-    element.style.left = Math.max(8, Math.round(box.right - placed.width)) + 'px'
-  }
-  if (placed.bottom > window.innerHeight - 8) {
-    element.style.top = Math.max(8, Math.round(box.top - placed.height - 4)) + 'px'
-  }
-
-  var outside = function (event) {
-    if (!element.contains(event.target)) closeTabMenu(false)
-  }
-  var dismiss = function () {
-    closeTabMenu(false)
-  }
-  document.addEventListener('pointerdown', outside, true)
-  window.addEventListener('resize', dismiss)
-
-  trigger.setAttribute('aria-expanded', 'true')
-  buttons[0].focus()
-  openMenu = { element: element, trigger: trigger, outside: outside, dismiss: dismiss }
-}
-
-/** One item was chosen. The sheet is the tab sheet's; the acts are this module's. */
-function choose(action, name) {
-  if (action === 'close') {
-    closeTab(name)
-    return
-  }
-  if (actions.openNameSheet) actions.openNameSheet(action, name)
 }
 
 actions.tabMenu = openTabMenu

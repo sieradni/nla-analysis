@@ -19,7 +19,6 @@ import {
   nextUndo,
   noteAppend,
   noteCorrection,
-  noteImport,
   noteRemoval,
   permanentRefusal,
   redoFailed,
@@ -76,16 +75,12 @@ var ACTS = {
     undo: {
       label: labels.undoTab,
       title: actTitle('undo', labels.actTab),
-      run: function (entry) {
-        return actions.undoTabCreated(entry)
-      },
+      run: function (entry) { return actions.undoTabCreated(entry) },
     },
     redo: {
       label: labels.redoTab,
       title: actTitle('redo', labels.actTabRedo),
-      run: function (entry) {
-        return actions.redoTabCreated(entry)
-      },
+      run: function (entry) { return actions.redoTabCreated(entry) },
     },
   },
 }

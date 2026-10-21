@@ -162,8 +162,12 @@ app/                the desktop shell (ADR 0005): Electron main + preload + rend
                     construction through its cached, staged and saved states; core.entry.ts is the
                     IPC facade over them. main.js is the window, the IPC surface and the boot
                     switch; harness/ holds capture, measure and smoke, which drive that window.
-app/renderer/       the viewport, split by concern. app.js is wiring and the open-view lifecycle
-                    only; state.js owns shared state, the core call and `showView`, the one seam
+app/renderer/       the viewport, split by concern. app.js is the project and the boot; the open
+                    tab's lifecycle — open, close, reopen, the trash load, rename, duplicate, undo of
+                    a creation, and the menu on a tab's row — is tab-actions.js;
+                    menu.js is the one popover every menu uses (placement, keys, dismissal, where
+                    the keyboard goes back);
+                    state.js owns shared state, the core call and `showView`, the one seam
                     by which the open view changes and the one caller of `resetTabHistory`;
                     copy.js owns every word a person reads (ADR 0015) and no other module
                     composes a sentence, including the phrases an act's label and tooltip are
@@ -177,7 +181,8 @@ app/renderer/       the viewport, split by concern. app.js is wiring and the ope
                     from the core on launch, plus the history each tab had when it closed here — which
                     `Ctrl+Shift+T` takes from, deliberately outside `showView`, because closing is not
                     a change of drawing; tabs.js owns the tab
-                    sheet; projects.js owns the project sheet; import.js owns the import sheet;
+                    sheet and the name sheet Rename and Duplicate share; projects.js owns the project
+                    sheet; import.js owns the import sheet;
                     navigation.js holds the few shell actions that cross a module.
                     Remaining window work lands here: resizable/collapsible rail in rail.js, the
                     point menu and readable tooltip in chart.js with its actions in entry.js, the

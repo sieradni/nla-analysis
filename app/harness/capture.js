@@ -270,13 +270,13 @@ async function assertPlainSurface(where) {
       evidence: Array.prototype.map.call(document.querySelectorAll('.panel-evidence'), (n) => n.textContent).join(' | '),
       empty: Array.prototype.map.call(document.querySelectorAll('.panel-empty'), (n) => n.textContent).join(' | '),
       menu: (() => {
-        const menu = document.querySelector('.point-menu')
+        const menu = document.querySelector('.menu')
         return menu ? menu.textContent : ''
       })(),
       // The tab's menu and the sheet it opens say what the acts mean, so they are held to the same
       // rule as every other surface a person reads.
       tabMenu: (() => {
-        const menu = document.querySelector('.tab-menu')
+        const menu = document.querySelector('.menu')
         return menu ? menu.textContent : ''
       })(),
       tabSheet: (() => {
@@ -1005,12 +1005,12 @@ let cspViolations = 0
     const menuState = async () =>
       JSON.parse(
         await window.webContents.executeJavaScript(`(() => {
-          const menu = document.querySelector('.point-menu')
+          const menu = document.querySelector('.menu')
           const box = menu ? menu.getBoundingClientRect() : null
           return JSON.stringify({
             open: Boolean(menu),
             role: menu ? menu.getAttribute('role') : null,
-            items: menu ? Array.prototype.map.call(menu.querySelectorAll('.point-menu-item'), (button) => button.textContent) : [],
+            items: menu ? Array.prototype.map.call(menu.querySelectorAll('.menu-item'), (button) => button.textContent) : [],
             focused: menu && document.activeElement ? document.activeElement.textContent : '',
             // A menu opened near an edge must still be clickable: no item may fall outside.
             inside: Boolean(
@@ -1056,7 +1056,7 @@ let cspViolations = 0
 
     // Copy details writes one line to the system clipboard, not to the screen.
     await window.webContents.executeJavaScript(
-      "document.querySelector('.point-menu-item[data-action=\"copy\"]').click()",
+      "document.querySelector('.menu-item[data-action=\"copy\"]').click()",
     )
     for (let waited = 0; waited < 60; waited += 1) {
       const state = JSON.parse(await entryState())
@@ -1094,7 +1094,7 @@ let cspViolations = 0
         clientY: mark.y,
         button: 2,
       }))
-      document.querySelector('.point-menu-item[data-action=\"correct\"]').click()
+      document.querySelector('.menu-item[data-action=\"correct\"]').click()
       return true
     })()`)
     for (let waited = 0; waited < 60; waited += 1) {
@@ -1136,7 +1136,7 @@ let cspViolations = 0
         clientY: mark.y,
         button: 2,
       }))
-      document.querySelector('.point-menu-item[data-action="remove"]').click()
+      document.querySelector('.menu-item[data-action="remove"]').click()
       return true
     })()`)
     for (let waited = 0; waited < 60; waited += 1) {
@@ -1156,7 +1156,7 @@ let cspViolations = 0
         title: button ? button.title : null,
         beside: beside ? beside.textContent : null,
         focus: document.activeElement ? String(document.activeElement.className || '') : '',
-        menu: Boolean(document.querySelector('.point-menu')),
+        menu: Boolean(document.querySelector('.menu')),
       })
     })()`)
     const undoState = JSON.parse(undoButton)
@@ -1261,7 +1261,7 @@ let cspViolations = 0
         host.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }))
         const ring = host.querySelector('svg.layer-over .select-dot')
         host.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }))
-        const menu = document.querySelector('.point-menu')
+        const menu = document.querySelector('.menu')
         const opened = Boolean(menu)
         const focused = document.activeElement ? document.activeElement.textContent : ''
         if (menu) {
@@ -1271,7 +1271,7 @@ let cspViolations = 0
           ring: ring ? ring.getAttribute('visibility') : 'none',
           opened: opened,
           focused: focused,
-          closed: document.querySelector('.point-menu') === null,
+          closed: document.querySelector('.menu') === null,
           focusReturned: document.activeElement === host,
         })
       })()`),
@@ -1297,7 +1297,7 @@ let cspViolations = 0
         clientY: mark.y,
         button: 2,
       }))
-      return Boolean(document.querySelector('.point-menu'))
+      return Boolean(document.querySelector('.menu'))
     })()`)
     if (!menuOpenedForRepaint) throw new Error('the menu did not open for the repaint check')
     await runCli(['add', '--x', '8.5', '--y', '12.5'])
@@ -1309,7 +1309,7 @@ let cspViolations = 0
     await sleep(200)
     const repainted = JSON.parse(
       await window.webContents.executeJavaScript(`(() => JSON.stringify({
-        menu: Boolean(document.querySelector('.point-menu')),
+        menu: Boolean(document.querySelector('.menu')),
         focus: document.activeElement ? String(document.activeElement.className || '') : '',
         tag: document.activeElement ? document.activeElement.tagName : '',
       }))()`),
@@ -1427,7 +1427,7 @@ let cspViolations = 0
           clientY: mark.y,
           button: 2,
         }))
-        const item = document.querySelector('.point-menu-item[data-action="remove"]')
+        const item = document.querySelector('.menu-item[data-action="remove"]')
         if (item) item.click()
         return JSON.stringify({ id: mark.id, marks: Number(host.dataset.marks || 0) })
       })()`),
@@ -1455,7 +1455,7 @@ let cspViolations = 0
         host.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }))
         host.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }))
         return JSON.stringify({
-          menu: Boolean(document.querySelector('.point-menu')),
+          menu: Boolean(document.querySelector('.menu')),
           ring: host.querySelector('svg.layer-over .select-dot').getAttribute('visibility'),
         })
       })()`),
@@ -1542,7 +1542,7 @@ let cspViolations = 0
           clientY: mark.y,
           button: 2,
         }))
-        const item = document.querySelector('.point-menu-item[data-action="remove"]')
+        const item = document.querySelector('.menu-item[data-action="remove"]')
         const opened = Boolean(item)
         if (item) item.click()
         return JSON.stringify({ opened, status: document.getElementById('entry-status').textContent })
@@ -1591,7 +1591,7 @@ let cspViolations = 0
           clientY: mark.y,
           button: 2,
         }))
-        const item = document.querySelector('.point-menu-item[data-action="remove"]')
+        const item = document.querySelector('.menu-item[data-action="remove"]')
         if (item) item.click()
         return JSON.stringify({ id: mark.id })
       })()`),
@@ -3369,14 +3369,14 @@ let cspViolations = 0
     const readTabMenu = async () =>
       JSON.parse(
         await window.webContents.executeJavaScript(`(() => {
-          const menu = document.querySelector('.tab-menu')
+          const menu = document.querySelector('.menu')
           if (!menu) return JSON.stringify({ open: false })
           const box = menu.getBoundingClientRect()
           return JSON.stringify({
             open: true,
             role: menu.getAttribute('role'),
             label: menu.getAttribute('aria-label'),
-            items: Array.prototype.map.call(menu.querySelectorAll('.tab-menu-item'), (b) => b.textContent),
+            items: Array.prototype.map.call(menu.querySelectorAll('.menu-item'), (b) => b.textContent),
             focused: document.activeElement ? document.activeElement.textContent : '',
             inside:
               box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth && box.bottom <= window.innerHeight,
@@ -3385,7 +3385,7 @@ let cspViolations = 0
       )
     const dismissTabMenu = async () => {
       await window.webContents.executeJavaScript(`(() => {
-        const menu = document.querySelector('.tab-menu')
+        const menu = document.querySelector('.menu')
         if (menu) menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
         return true
       })()`)
@@ -3436,7 +3436,7 @@ let cspViolations = 0
     await dismissTabMenu()
     await openRailMenu('second look')
     await window.webContents.executeJavaScript(
-      "document.querySelector('.tab-menu-item[data-action=\"rename\"]').click()",
+      "document.querySelector('.menu-item[data-action=\"rename\"]').click()",
     )
     for (let waited = 0; waited < 60; waited += 1) {
       if (await window.webContents.executeJavaScript("document.getElementById('rename-dialog').open")) break
@@ -3580,7 +3580,7 @@ let cspViolations = 0
     // Duplicate it. The copy opens, is a tab of its own, and closes without taking the original with it.
     await openRailMenu('third look')
     await window.webContents.executeJavaScript(
-      "document.querySelector('.tab-menu-item[data-action=\"duplicate\"]').click()",
+      "document.querySelector('.menu-item[data-action=\"duplicate\"]').click()",
     )
     for (let waited = 0; waited < 60; waited += 1) {
       if (await window.webContents.executeJavaScript("document.getElementById('rename-dialog').open")) break
@@ -3655,7 +3655,7 @@ let cspViolations = 0
     // tab's close changes the rail and nothing else.
     await openRailMenu('third look')
     await window.webContents.executeJavaScript(
-      "document.querySelector('.tab-menu-item[data-action=\"close\"]').click()",
+      "document.querySelector('.menu-item[data-action=\"close\"]').click()",
     )
     const closedBackground = await waitStatus(/^Closed /, 'closing a background tab from its row')
     const afterBackground = JSON.parse(await entryState())
@@ -3689,7 +3689,7 @@ let cspViolations = 0
     )
     await openRailMenu('third look copy')
     await window.webContents.executeJavaScript(
-      "document.querySelector('.tab-menu-item[data-action=\"rename\"]').click()",
+      "document.querySelector('.menu-item[data-action=\"rename\"]').click()",
     )
     for (let waited = 0; waited < 60; waited += 1) {
       if (await window.webContents.executeJavaScript("document.getElementById('rename-dialog').open")) break
@@ -3757,7 +3757,7 @@ let cspViolations = 0
     })()`)
     await sleep(200)
     await window.webContents.executeJavaScript(
-      "document.querySelector('.tab-menu-item[data-action=\"rename\"]').click()",
+      "document.querySelector('.menu-item[data-action=\"rename\"]').click()",
     )
     for (let waited = 0; waited < 60; waited += 1) {
       if (await window.webContents.executeJavaScript("document.getElementById('rename-dialog').open")) break
@@ -3774,7 +3774,7 @@ let cspViolations = 0
     // And the drawn tab leaves from its own row too: the window moves to the tab beside it.
     await openRailMenu('third copy')
     await window.webContents.executeJavaScript(
-      "document.querySelector('.tab-menu-item[data-action=\"close\"]').click()",
+      "document.querySelector('.menu-item[data-action=\"close\"]').click()",
     )
     const closedThird = await waitStatus(/^Closed /, 'closing the drawn tab from its row')
     await window.webContents.executeJavaScript(`(() => {

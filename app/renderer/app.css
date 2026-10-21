@@ -801,8 +801,7 @@ button {
 /* A point's menu: three verbs in a small surface that sits where the pointer asked. It is a menu,
    not a card, so it carries a border and no elevation; the one accent marks the item under the
    pointer or the keyboard. */
-.point-menu,
-.tab-menu {
+.menu {
   position: fixed;
   z-index: 20;
   min-width: 168px;
@@ -812,8 +811,7 @@ button {
   border-radius: var(--radius);
 }
 
-.point-menu-item,
-.tab-menu-item {
+.menu-item {
   display: block;
   width: 100%;
   padding: var(--s2) var(--s3);
@@ -827,16 +825,13 @@ button {
   cursor: pointer;
 }
 
-.point-menu-item:hover,
-.point-menu-item:focus-visible,
-.tab-menu-item:hover,
-.tab-menu-item:focus-visible {
+.menu-item:hover,
+.menu-item:focus-visible {
   background: var(--accent-soft);
   outline: none;
 }
 
-.point-menu-item:focus-visible,
-.tab-menu-item:focus-visible {
+.menu-item:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }

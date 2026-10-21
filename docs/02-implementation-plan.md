@@ -59,10 +59,11 @@ word a person reads and every number format — ADR 0015; `format.js` was folded
 correction, undo), `chart.js` (the drawing's interaction; an ES module mounted by `panels.js`),
 `tabs.js` (tab sheet, the name sheet and axes), `tab-actions.js` (the open tab's lifecycle: open,
 close, reopen, the trash load, rename, duplicate, undo of a creation, and the rail menu),
-`projects.js` (project sheet and shape flow), `import.js` (import
-sheet), `navigation.js` (the few cross-module shell actions), and `app.js` (the project and the boot —
-the open tab's lifecycle moved to `tab-actions.js` in 2026-10-21). New window work lands in the module
-that owns its surface rather than in `app.js`.
+`menu.js` (the one popover: placement, keys, dismissal, `aria-expanded` and where the keyboard goes
+back), `projects.js` (project sheet and shape flow), `import.js` (import sheet), `navigation.js` (the
+few cross-module shell actions), and `app.js` (the project and the boot — the open tab's lifecycle
+moved to `tab-actions.js` in 2026-10-21). New window work lands in the module that owns its surface
+rather than in `app.js`.
 
 Verification so far: 366 tests in 24 files pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
 (`pnpm app:build`) before the suite, because the desktop shell loads that bundle rather than `src/core`,

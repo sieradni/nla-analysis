@@ -222,11 +222,11 @@ async function submitName(event) {
     ui.renameInput.focus()
     return
   }
+  var from = naming.name
   var act = naming.mode === 'duplicate' ? duplicateTab : renameTab
-  var about = naming
   ui.renameConfirm.disabled = true
   try {
-    var opened = await act(about.name, next, function (error) {
+    var opened = await act(from, next, function (error) {
       ui.renameError.hidden = false
       ui.renameError.textContent = refusal((error && error.message) || 'the tab could not be renamed')
       var hint = error && error.hint

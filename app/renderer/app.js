@@ -8,13 +8,7 @@
  * is the wiring, the project, and the boot.
  */
 import { state, ui, bridge, call, showFailure, showEmpty, showView } from './state.js'
-import {
-  closeOpenTab,
-  loadClosedTabs,
-  openView,
-  reopenClosedTab,
-  showNoTabs,
-} from './tab-actions.js'
+import { closeTab, loadClosedTabs, openView, reopenClosedTab, showNoTabs } from './tab-actions.js'
 import { renderProjects, renderTabs, renderFoot } from './rail.js'
 import { renderView, watchOpenTab, captureRestore } from './panels.js'
 import { applyStatic, builtInShape, empty as emptyCopy, refusal, status as copyStatus } from './copy.js'
@@ -184,7 +178,9 @@ export function wire() {
   wireTabs()
   wireImport()
   wireEntry()
-  ui.closeTab.addEventListener('click', closeOpenTab)
+  ui.closeTab.addEventListener('click', function () {
+    closeTab(state.view && state.view.name)
+  })
   // Ctrl+Shift+T reopens the last closed tab wherever the keyboard is, including inside a field: the
   // chord has no meaning to a text input, so unlike Ctrl+Z it is not deferred to the field it is in.
   // This listener sits on the document because that is the window's own key path — the entry bar's

@@ -458,8 +458,9 @@ describe('renaming and copying a tab', () => {
     expect(existsSync(join(root, 'views', 'old-name.json'))).toBe(false)
     expect(existsSync(join(root, 'views', 'new-name.json'))).toBe(true)
     await expect(loadView(root, 'old name')).rejects.toThrow(/no view named/)
-    expect((await listViews(root)).views.map((summary) => summary.name)).toContain('new name')
-    expect((await listViews(root)).views.map((summary) => summary.name)).not.toContain('old name')
+    const listed = (await listViews(root)).views.map((summary) => summary.name)
+    expect(listed).toContain('new name')
+    expect(listed).not.toContain('old name')
   })
 
   it('refuses a rename onto another tab, or onto the file another name already uses', async () => {

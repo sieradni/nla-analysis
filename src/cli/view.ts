@@ -271,11 +271,6 @@ export async function runViewCommand(
 
   if (sub === 'rm' || sub === 'rename' || sub === 'duplicate') {
     if (!viewName) io.die(`missing a view name`, 1, `bench view ${sub} <name>`)
-    const other = args[2]
-    if (sub !== 'rm' && (other === undefined || other.trim() === '')) {
-      io.die(`missing the name to ${sub === 'rename' ? 'rename it to' : 'copy it to'}`, 1,
-        sub === 'rename' ? 'bench view rename "drift" "drift over time"' : 'bench view duplicate "drift" "drift (copy)"')
-    }
     const workspace = await io.open(options.project)
 
     // Closing goes through the same path the window's close uses, so the tab is archived where the
@@ -304,19 +299,38 @@ export async function runViewCommand(
       return
     }
 
+    // A name to move it to, or to copy it to: the same sentence either way, with the verb changed.
+    const other = args[2]
+    if (other === undefined || other.trim() === '') {
+      io.die(
+        `missing the name to ${sub === 'rename' ? 'rename it to' : 'copy it to'}`,
+        1,
+        sub === 'rename'
+          ? 'bench view rename "drift" "drift over time"'
+          : 'bench view duplicate "drift" "drift (copy)"',
+      )
+    }
+
     let view: ViewFile
     try {
       view = sub === 'rename'
-        ? await renameView(workspace.dir, viewName, other as string)
-        : await duplicateView(workspace.dir, viewName, other as string)
+        ? await renameView(workspace.dir, viewName, other)
+        : await duplicateView(workspace.dir, viewName, other)
     } catch (error) {
       io.fail(error)
     }
-    const file = viewPath(workspace.dir, view.name)
     if (io.json) {
       process.stdout.write(
         JSON.stringify(
-          { ok: true, data: { file, name: view.name, from: viewName, panels: view.panels.length } },
+          {
+            ok: true,
+            data: {
+              file: viewPath(workspace.dir, view.name),
+              name: view.name,
+              from: viewName,
+              panels: view.panels.length,
+            },
+          },
           null,
           2,
         ) + '\n',
