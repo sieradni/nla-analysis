@@ -10,9 +10,11 @@ import { renderChart } from '../src/core/chart.ts'
 import { Workspace } from '../src/core/workspace.ts'
 import {
   closeView,
+  duplicateView,
   listClosedViews,
   listViews,
   loadView,
+  renameView,
   renderView,
   restoreClosedView,
   saveView,
@@ -439,6 +441,64 @@ describe('closing a tab', () => {
       .then(() => null)
       .catch((error: unknown) => error)
     expect((missing as BenchError).kind).toBe('missing')
+  })
+})
+
+describe('renaming and copying a tab', () => {
+  it('renames: the same panels under a new name, in a file of the new name', async () => {
+    const { panel } = await materializePanel(workspace, { dataset: 'main', title: 'renamed' })
+    const view: ViewFile = { v: 1, name: 'old name', layout: { columns: 1 }, panels: [panel] }
+    await saveView(root, view)
+
+    const renamed = await renameView(root, 'old name', 'new name')
+    expect(renamed.name).toBe('new name')
+    // The drawing is not rewritten: the panel, its query and its materialized points are the ones
+    // the tab already had.
+    expect(renamed.panels).toEqual([panel])
+    expect(existsSync(join(root, 'views', 'old-name.json'))).toBe(false)
+    expect(existsSync(join(root, 'views', 'new-name.json'))).toBe(true)
+    await expect(loadView(root, 'old name')).rejects.toThrow(/no view named/)
+    expect((await listViews(root)).views.map((summary) => summary.name)).toContain('new name')
+    expect((await listViews(root)).views.map((summary) => summary.name)).not.toContain('old name')
+  })
+
+  it('refuses a rename onto another tab, or onto the file another name already uses', async () => {
+    const { panel } = await materializePanel(workspace, { dataset: 'main' })
+    await saveView(root, { v: 1, name: 'keeper', layout: { columns: 1 }, panels: [panel] })
+    await saveView(root, { v: 1, name: 'mover', layout: { columns: 1 }, panels: [panel] })
+    const before = await readFile(join(root, 'views', 'mover.json'), 'utf8')
+
+    for (const target of ['keeper', 'KEEPER', ' keeper ']) {
+      await expect(renameView(root, 'mover', target)).rejects.toBeInstanceOf(BenchError)
+    }
+    // And a name that is not the same name but becomes the same file: refusing by name alone would
+    // let this quietly replace the tab that already owns that file.
+    await saveView(root, { v: 1, name: 'punctu-ated', layout: { columns: 1 }, panels: [panel] })
+    await expect(renameView(root, 'mover', 'punctu ated')).rejects.toThrow(/already uses that file name/)
+    // Refused before anything is written: the tab that was there is untouched.
+    expect(await readFile(join(root, 'views', 'mover.json'), 'utf8')).toBe(before)
+    expect((await loadView(root, 'keeper')).name).toBe('keeper')
+    // Renaming to the name it already has is not a refusal; it is the tab, unchanged.
+    expect((await renameView(root, 'mover', 'mover')).name).toBe('mover')
+  })
+
+  it('copies a tab as a tab of its own, with no reference back to the one it came from', async () => {
+    const { panel } = await materializePanel(workspace, { dataset: 'main' })
+    await saveView(root, { v: 1, name: 'source', layout: { columns: 2 }, panels: [panel, panel] })
+
+    const copy = await duplicateView(root, 'source', 'source copy')
+    expect(copy.name).toBe('source copy')
+    expect(copy.layout.columns).toBe(2)
+    expect(copy.panels).toEqual([panel, panel])
+    expect(existsSync(join(root, 'views', 'source.json'))).toBe(true)
+
+    // The two are separate files from here: editing the copy's spec cannot rewrite the original's.
+    copy.panels[0]!.title = 'only in the copy'
+    await saveView(root, copy)
+    expect((await loadView(root, 'source')).panels[0]!.title).toBeUndefined()
+    expect((await loadView(root, 'source copy')).panels[0]!.title).toBe('only in the copy')
+    // And a copy cannot quietly replace a tab that exists.
+    await expect(duplicateView(root, 'source', 'source copy')).rejects.toBeInstanceOf(BenchError)
   })
 })
 

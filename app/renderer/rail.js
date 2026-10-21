@@ -1,6 +1,6 @@
 /* The left rail: projects, saved tabs, and the folder the open project lives in. */
 import { state, ui, node } from './state.js'
-import { formatDay } from './copy.js'
+import { formatDay, tabMenu } from './copy.js'
 import { actions } from './navigation.js'
 
 export function renderProjects() {
@@ -71,7 +71,22 @@ export function renderTabs() {
     button.addEventListener('click', function () {
       actions.openView(view.name)
     })
-    item.appendChild(button)
+    // A tab's own acts, on the tab's own row — including for a tab that is not the drawing on
+    // screen, which is the one case the header's close button cannot reach.
+    var row = node('div', 'tab-row')
+    row.appendChild(button)
+    var more = node('button', 'tab-more', '⋯')
+    more.type = 'button'
+    more.setAttribute('aria-haspopup', 'menu')
+    more.setAttribute('aria-expanded', 'false')
+    more.setAttribute('aria-label', tabMenu.label + ' “' + view.name + '”')
+    more.title = tabMenu.label
+    more.addEventListener('click', function (event) {
+      event.stopPropagation()
+      actions.tabMenu(more, view.name)
+    })
+    row.appendChild(more)
+    item.appendChild(row)
     ui.tabs.appendChild(item)
   })
 }

@@ -9,7 +9,13 @@
  * real relaunch.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { noteClosed, putBackClosed, setClosedTabs, takeClosed } from '../app/renderer/closed-tabs.js'
+import {
+  noteClosed,
+  putBackClosed,
+  setClosedTabs,
+  takeClosed,
+  takeClosedFile,
+} from '../app/renderer/closed-tabs.js'
 
 /** The archive reference the core hands back from a close. */
 const archive = (name, closedAt = '2026-10-21T03-00-00-000Z') => ({
@@ -82,6 +88,18 @@ describe('the closed-tab list', () => {
     expect(names[0]).toBe('tab 24')
     expect(names[4]).toBe('tab 20')
     expect(names[19]).toBe('tab 5')
+  })
+
+  it('takes one archive by file, for a redo that names the one its own undo left', () => {
+    noteClosed(archive('older'), history('p1'))
+    noteClosed(archive('newer'), history('p2'))
+    const taken = takeClosedFile(archive('older').file)
+    // Not the newest: a redo restores the tab its undo closed, not whatever closed last.
+    expect(taken.entry.name).toBe('older')
+    expect(taken.history.undos[0].id).toBe('p1')
+    // The list keeps the other one, and the archive it took is gone from it.
+    expect(takeClosed().entry.name).toBe('newer')
+    expect(takeClosedFile(archive('older').file)).toBe(null)
   })
 
   it('forgets everything when another project opens', () => {

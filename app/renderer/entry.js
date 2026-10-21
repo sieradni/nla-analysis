@@ -31,13 +31,14 @@ import {
 } from './history.js'
 import { renderTabs } from './rail.js'
 import { renderView, captureRestore, renderMeta, renderStatuses, renderPanelLabels } from './panels.js'
+import { actions } from './navigation.js'
 
 /*
  * The one description of every kind of act: what the bar and the status call it, what its tooltip
  * says, and the function that carries it out in each direction. `undoLastAction`, `redoLastAction`,
  * the bar's button and the status's redo all read this table, so a fifth kind is one row here and
  * nowhere else. The words are `copy.js`'s (`labels`, `actTitle`); this table only pairs them with a
- * kind and an effect — it is the only place in the renderer where the four kinds are written down.
+ * kind and an effect — it is the only place in the renderer where the five kinds are written down.
  */
 var ACTS = {
   point: {
@@ -67,6 +68,25 @@ var ACTS = {
   import: {
     undo: { label: labels.undoImport, title: actTitle('undo', labels.actImport), run: undoImport },
     redo: { label: labels.redoImport, title: actTitle('redo', labels.actImportRedo), run: redoImport },
+  },
+  // A tab this window created. Its two directions close and restore a tab, which is the tab
+  // lifecycle's own state, so the table names the direction and nothing else: growing a second copy
+  // of "close a tab" here is how two ways to close one would start to disagree.
+  tab: {
+    undo: {
+      label: labels.undoTab,
+      title: actTitle('undo', labels.actTab),
+      run: function (entry) {
+        return actions.undoTabCreated(entry)
+      },
+    },
+    redo: {
+      label: labels.redoTab,
+      title: actTitle('redo', labels.actTabRedo),
+      run: function (entry) {
+        return actions.redoTabCreated(entry)
+      },
+    },
   },
 }
 

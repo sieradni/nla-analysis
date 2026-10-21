@@ -537,6 +537,67 @@ export async function restoreClosedView(dir: string, file: string): Promise<View
 }
 
 /**
+ * A tab's identity on disk is its slug, and two names can produce one file: `a b` and `a-b` are the
+ * same tab as far as the filesystem is concerned. `requireFreeName` compares names; this compares the
+ * file a name would become, so renaming to a near-twin cannot silently replace another tab.
+ */
+async function requireFreeSlug(dir: string, name: string, except?: string): Promise<void> {
+  const file = `views/${slugFor(name)}${VIEW_SUFFIX}`
+  const { views } = await listViews(dir)
+  const clash = views.find((view) => view.file === file && view.name !== except)
+  if (clash) {
+    throw new BenchError('invalid', `a tab named "${clash.name}" already uses that file name`, {
+      hint: 'pick a name that differs by more than punctuation',
+    })
+  }
+}
+
+/**
+ * Rename a tab: the same drawing under another name.
+ *
+ * A tab is one file and its name is part of the file, so this writes the tab under the new name and
+ * takes the old file away — nothing is archived, because a rename is undone by renaming back and the
+ * panels, query and axes are the tab the person already had. Refused before anything is written when
+ * the name belongs to another tab, or would become another tab's file.
+ */
+export async function renameView(dir: string, from: string, to: string): Promise<ViewFile> {
+  const target = to.trim()
+  if (target === '') {
+    throw new BenchError('invalid', 'a tab needs a name', { hint: 'name the question this tab answers' })
+  }
+  const view = await loadView(dir, from)
+  if (target === view.name) return view
+  await requireFreeName(dir, target, false)
+  await requireFreeSlug(dir, target, view.name)
+  const renamed = { ...view, name: target }
+  const before = viewPath(dir, view.name)
+  const after = viewPath(dir, renamed.name)
+  await saveView(dir, renamed)
+  // One slug, one file: the old one is only left behind when the name moved to a different file.
+  if (after !== before) await rm(before)
+  return renamed
+}
+
+/**
+ * Copy a tab: the same panels under another name, as a tab of its own from that moment on.
+ *
+ * Nothing in a panel refers to the tab that holds it, so a copy is the same spec under a new name.
+ * The copy is deep, so editing one tab's file can never rewrite the other's before it is saved.
+ */
+export async function duplicateView(dir: string, from: string, to: string): Promise<ViewFile> {
+  const target = to.trim()
+  if (target === '') {
+    throw new BenchError('invalid', 'a tab needs a name', { hint: 'name the question this tab answers' })
+  }
+  await requireFreeName(dir, target, false)
+  await requireFreeSlug(dir, target)
+  const view = await loadView(dir, from)
+  const copy: ViewFile = JSON.parse(JSON.stringify({ ...view, name: target })) as ViewFile
+  await saveView(dir, copy)
+  return copy
+}
+
+/**
  * Never overwrite a view in passing: a tab the user built is theirs until they close it or ask to
  * replace it. Replacing one is an explicit act, and the caller says so with `overwrite`.
  */

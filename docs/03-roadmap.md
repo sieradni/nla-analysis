@@ -24,6 +24,14 @@ window was formatting instants in UTC while the reader is not there, so a point 
 named in the U11 row (an estimate is not yet a thing the log can hold, and a shape that designates no
 time field still has no door to its canonical instant).
 
+**Recorded 2026-10-21 (third pass):** a tab's own acts are reachable from the window. Every tab row in
+  the rail carries a menu — **Rename… / Duplicate… / Close tab** — and the CLI has the same three
+  (`bench view rm`, `rename`, `duplicate`), so a tab can be removed, renamed or copied without a
+  terminal and without a second way to make one vanish. Creating a tab is now undoable: it is the fifth
+  kind in the tab's history, and its undo is the project's own close, so the file waits in the trash and
+  the redo brings it home. The open tab's lifecycle moved out of `app.js` into
+  `app/renderer/tab-actions.js` rather than growing the shell.
+
 **Direction 2026-10-21 — reviews are advisory.** The UI review loop is on hold: a change is done when
 the code is green, the states behave and the work is as good as it can be, not when a frame is
 approved. The user reports what is wrong from actual use, and each report becomes a row here. No pass
@@ -45,7 +53,8 @@ missing, and what would closing it look like".
   import sheet, version diff, field-pair tabs, and live refresh from another writer are built. Marks
   are painted on a canvas between two halves of the core's SVG, so a 10k rescale is inside the 50 ms
   re-render budget. A tab closes to the project's trash and comes back with `Ctrl+Shift+T`, including
-  in a window started after the one that closed it.
+  in a window started after the one that closed it; any tab — on screen or not — can be renamed,
+  copied or closed from its own row, and the tab a person creates can be undone.
 - **Shipping:** `pnpm app:package` writes a portable Windows build with its own CLI; the release
   workflow is green through artifact upload, but no `v*` tag has been cut.
 - **User surface:** specified on 2026-10-20 ([ADR 0015](adr/0015-user-surface.md),
@@ -54,8 +63,8 @@ missing, and what would closing it look like".
   `app/renderer/copy.js`, and the tab strip no longer names a dataset, shape or version. The point
   menu, removal and its restore, correction undo and import undo are built too: a point can be removed
   from its own menu and brought back as the same record, a correction reversed, and an import undone as
-  a new version that holds the rows it replaced. Tab management, the versions panel, the import
-  wording, display labels, tab undo and the resizable rail are not built. §6 is the list.
+  a new version that holds the rows it replaced. The versions panel, the import
+  wording, display labels and the resizable rail are not built. §6 is the list.
 - **Time is a control, not a syntax (2026-10-21).** An `instant` field is a date/time control with a
   **Now** button in the entry bar and in the correction strip, which are one builder; the moment a
   person presses is stored as canonical UTC, and every time the window shows — hover, strip, status,
@@ -64,7 +73,8 @@ missing, and what would closing it look like".
   marked, and a value the core cannot parse is refused in the core's own words (U29; U11's
   designated-field half. Replacing an *estimated* time still waits on U9, and on a way to move the
   canonical time of a shape that designates nothing).
-- **Not built:** the rows below — tab/project management, the versions panel, entry extras, the
+- **Not built:** the rows below — project management (`bench projects --forget`), the versions panel,
+  entry extras, the
   shape flow, a resizable rail, the rest of the user-surface pass, and the delivery items.
 
 ## Verified on this tree (2026-10-19)
@@ -138,8 +148,9 @@ limit of each:
 | import CSV/TSV/JSONL with a mapping sheet and a version diff | `Import…` | done | `app-import.png`, `app-version-diff.png` |
 | **remove any point, from its menu, with undo** | point menu, `app/renderer/entry.js` | **done 2026-10-20** | right-click or Shift+F10 opens **Copy details / Correct… / Remove**; Remove is one click with no reason prompt, the bar's single undo is labelled **Undo removal**, and undo writes `point_restored` naming the retraction it reverses ([ADR 0016](adr/0016-point-restore.md)) — the window passes that id back, so a later removal is never reversed under an older act's name. Evidence: `tests/binder.test.ts` (a restore event), `tests/workspace.test.ts` (a named removal, and a stale one refused), `tests/shell.test.ts` "brings a removed point back as the same record", `tests/cli.test.ts` (retract → restore → a second restore refused), `pnpm app:capture` (right-click, clipboard, remove with focus back on the chart, undo, redo, keyboard, a menu closed by a repaint, a kept recipe panel that offers no menu, a plain refusal frame), `app-point-menu.png`, `app-point-menu-removed.png`. U2, U5, U6 |
 | browse dataset versions and diffs | import sheet | partial | `bench dataset list\versions\diff` exists; no panel lists versions or shows a diff outside an import |
+| **undo creating a tab** | entry bar, `app/renderer/history.js` | **done 2026-10-21** | the tab's history has a fifth kind: a tab this window created (by the sheet or by copying one) is its own first act. The bar reads **Undo new tab**, and undo closes it through the project's own close path, so its file waits in the trash with its acts; redo moves that archive home again — **Redo new tab** in the status, `Ctrl+Shift+Z` on the keyboard. One button for the one way back: the close an undo performs does not also offer **Undo tab close**. Frames `app-tab-creation-undone.png`; capture checks the archive, the rail, the labels and a byte-identical log |
 | close a tab, and reopen it with `Ctrl+Shift+T` | tab header, `app/renderer/closed-tabs.js` | **done 2026-10-21** | **Close tab** takes the file to `views/.trash/`, the status offers **Undo tab close**, and `Ctrl+Shift+T` moves that archive back — same drawing, same counts, same undo when this window closed it, and it still works after a relaunch because the list is the project's trash — with nothing written to the log. Frames `app-tab-closed-100/125/150.png`, `app-tab-reopened-100/125/150.png`, `app-tab-reopened-relaunch.png` |
-| rename / duplicate a tab | — | missing | no `bench view rm` either (U7's remaining half) |
+| **rename, duplicate, and close any tab from the rail** | tab row menu, `app/renderer/tab-actions.js` | **done 2026-10-21** | every tab's row carries a small **⋯** (announced as *Actions for this tab “drift over time”*) opening **Rename… / Duplicate… / Close tab**; Rename and Duplicate share one sheet (`Rename tab` / `Duplicate tab`, with what each will mean), and a refusal is said in the sheet rather than behind it. Rename keeps the drawing and its acts and moves the file; Duplicate opens the copy as a tab of its own. Close works for a tab that is not on screen, which is the case the header's button cannot reach — a background close leaves the drawing alone. Nothing writes an event. The same three acts are on the CLI: `bench view rm`, `bench view rename <name> <new name>`, `bench view duplicate <name> <new name>`, with `rm` going through the close path whose archives the window's reopen reads. Frames `app-tab-menu-100/125/150.png`, `app-tab-sheet-100/125/150.png`; evidence in U7's row |
 | rename a project, or forget it from recents | — | missing | registry has no `forget`; deletion is not offered anywhere and should not be |
 | extend a shape / designate its time field / run a migration | — | partial | core/CLI paths for extension and designation are done ([ADR 0013](adr/0013-shape-extension.md), [ADR 0014](adr/0014-observation-time.md)); the window has no flow yet |
 | record a decision | — | missing | CLI `bench decide` only |
@@ -180,7 +191,7 @@ row, and that is said in the row.
 | 1 | **Canvas renderer** | M | **done 2026-10-19** — a rescale measures 35.1–47.4 ms at 10k (was 147–174), `pnpm app:measure` exits non-zero over 50 ms and when no full-redraw sample arrived or a submit was programmatic, and `pnpm app:capture` checks the canvas's coverage and painted pixels | — |
 | 2 | **Resizable rail** | S | drag handle plus `ArrowLeft`/`ArrowRight` when focused; width in `$BENCH_HOME/ui.json`, restored on launch; no reflow jitter; three-scaling screenshot | U19 |
 | 3 | **Point actions** | M | **done 2026-10-20** — right-click and Shift+F10 (on the selected mark) open **Copy details / Correct… / Remove**; Copy writes one line, values and time first and the record id last; Remove is one action with no reason prompt and one undo button in the bar, labelled with the act it reverses; undo writes `point_restored`, so the same id, values, time and version come back, and redo removes it again. A retracted point leaves the plot panels, the count and every action that names it; a recipe panel that cannot rerun keeps the drawing it was saved with, says it is out of date, and stops offering its marks. The earlier wording here said a removed point should stay *visible* as retracted, which contradicts U6's "the mark disappears"; U6 wins, and the log keeps the record. Evidence: `app-point-menu.png`, the capture's menu/clipboard/remove/undo/redo/keyboard checks, `tests/window-copy.test.mjs`, `tests/binder.test.ts`, `tests/workspace.test.ts`, `tests/shell.test.ts`, `tests/cli.test.ts` | U2, U5, U6 |
-| 4 | **Tab and project management** | M | `bench view rm <name>`, a rail action for rename/delete with Undo, and `bench projects --forget <path>` dropping recency only | U7 |
+| 4 | **Project management** | S | `bench projects --forget <path>` dropping recency only, and a rail action that renames or forgets a project. The tab half landed 2026-10-21: `bench view rm/rename/duplicate`, a menu on every tab row, and undo of creating a tab | U7 |
 | 5 | **Dataset versions panel** | M | a tab or sheet listing every version with rows and `+n −n ~n`, a diff between any two, and which panels are pinned to which version; reads `Workspace`, runs nothing | — |
 | 6 | **Entry extras** | M | paste a TSV block → preview against the shape → commit; auto-advance after Enter; stream mode; requirements §6's targets still hold | `add --stdin` |
 | 7 | **Shape extension and designation in the window** | S–M | a flow that says which points lack a field, records the same `shape_extended` / `shape_time_designated` events the CLI does, and shows the new declaration | — |
@@ -253,7 +264,7 @@ Creating a custom-shaped project (`QP Stats`, 2026-10-19) also found gaps that a
 | code signing | missing | **decided 2026-10-20: ship unsigned.** SmartScreen will warn on first launch; `docs/packaging.md` says so, and a certificate is a later decision on its own, not a blocker for the portable build |
 | installer / auto-update | missing | portable zip only; ADR 0009 records that choice |
 | Python not bundled | by design for now | recipe source ships; `run fit`/`drift` need a `recipes/.venv` or numpy/scipy on PATH |
-| renderer module split | missing | `app.js` now carries close, reopen and the trash load on top of wiring, and `entry.js` is ~1,070 lines; the split AGENTS.md describes (the act table, a closed-tab controller) is owed before the window grows again |
+| renderer module split | **partial 2026-10-21** | the open tab's lifecycle and every act on a tab — open, close, reopen, the trash load, rename, duplicate, undo-of-creation and the rail menu — moved out of `app.js` into `app/renderer/tab-actions.js`, so `app.js` is the project and the boot again (434 → ~250 lines). `entry.js` is still ~1,150 lines and owes the split AGENTS.md describes (the act table, a closed-tab controller) before the window grows again |
 | perf receipt re-measured | stale | the 2026-10-19 figures predate two window passes, and the 2026-10-20 run missed the 50 ms re-render budget on a busy machine (the tree before the change missed it too). Run `pnpm app:measure` when the window will not interrupt the user, and before any release claim |
 | documentation polish | partial | the plan still carries pre-window text (Tauri, `src/ui`, `bench/perf.ts`) and says at the top that it is history; the review log's oldest rows use internal vocabulary. Neither is a correctness risk — one pass folding them into a single historical section is planned when the user-surface list is smaller |
 | a corrupt closed-tab archive is silent | missing | `listClosedViews` reports files it could not read, but no surface shows them, so a damaged archive simply never appears; say so once in the no-tabs state rather than letting a tab vanish |
@@ -266,7 +277,7 @@ None of them is waiting on the user, and none should be reopened without changin
 
 | # | question | decision | carried by |
 |---|---|---|---|
-| 1 | deleting a tab | move to `views/.trash/`, offer Undo; no log event, no confirmation dialog | U7 |
+| 1 | deleting a tab | move to `views/.trash/`, offer Undo; no log event, no confirmation dialog | U7 — **done 2026-10-21** (rail menu, `bench view rm`, undo of creation) |
 | 2 | where UI preferences live | `$BENCH_HOME/ui.json`, disposable app state, never project data | U19 |
 | 3 | tooltip identity | no id in the UI; values only; **Copy details** lives in the point menu | U1, U2 |
 | 4 | retraction in the window | a point-menu action, one click, no reason prompt; undo restores the same record | U5, U6 |

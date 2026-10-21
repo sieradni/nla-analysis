@@ -5,7 +5,7 @@
  * means; the core calls, the repaint and the status line stay in `entry.js`, which asks what the
  * next act is, takes it, and reports back whether it happened.
  *
- * Four kinds:
+ * Five kinds:
  *   point      — a point this window recorded. Undo withdraws it; redo brings the same record back.
  *   removal    — a point taken out from its menu. `retraction` names the act an undo must reverse,
  *                so a later removal by another writer cannot be undone under this one's name.
@@ -14,11 +14,19 @@
  *   import     — a dataset version replaced the one before it. Undo restores the older version's
  *                rows as a new version; redo restores the imported one. Nothing is deleted either
  *                way, and the two version numbers never move backwards.
+ *   tab        — a tab this window created, by the tab sheet or by copying one. Undo closes it
+ *                through the project's own close path, so its file waits in the trash with its acts;
+ *                redo moves that archive home again. `file` names the archive a redo would take.
  *
  * The history belongs to the drawing it happened in. `state.showView` is the one place the open tab
  * changes, and the only caller of `resetTabHistory` (tests reset it directly), so the stacks are
  * cleared with the drawing: the bar cannot offer an act against a point the current drawing never
  * showed.
+ *
+ * A tab act is the one exception, and it is kept in one place: undoing it closes the drawing that
+ * holds it, so the change that would clear the stacks is the act itself. The direction that must
+ * outlive that change is put back by `keepTabUndo`/`keepTabRedo` — the act names a tab, not a point,
+ * so it is still true of the window after the stage moved.
  *
  * The stacks are bounded, and adjacent acts are deliberately not merged: one Save is one act, and a
  * second correction of the same point is a second step backwards. A person who fixes two numbers
@@ -113,6 +121,9 @@ export function reconcileImport(report) {
   var dataset = typeof report.dataset === 'string' ? report.dataset : null
 
   undos = undos.filter(function (entry) {
+    // A tab act names a tab, not a record: an import cannot withdraw the fact that this window made
+    // one, and the tab it made is still the tab holding these acts.
+    if (entry.kind === 'tab') return true
     if (entry.kind !== 'import') return gone === null ? false : !gone.has(entry.id)
     // An import act's undo restores the version it replaced, which is only still an older state of
     // this dataset if the act belongs to this dataset and named a version it has moved past since.
@@ -141,6 +152,31 @@ export function noteImport(dataset, version, restored) {
     restored: restored === undefined ? null : restored,
   })
   redos = []
+}
+
+/**
+ * A tab came into being in this window. It is the first act of the drawing it opens, so the caller
+ * notes it after `showView`: the stack it lands in is the new tab's own.
+ */
+export function noteTabCreated(name) {
+  push(undos, { kind: 'tab', name: name, file: null })
+  redos = []
+}
+
+/**
+ * A tab act whose undo changed the drawing: the redo that names the archive it left behind is put
+ * back after `showView` cleared the stacks. A new act ends the redo branch, and this is one.
+ */
+export function keepTabRedo(entry) {
+  redos = [entry]
+}
+
+/**
+ * A tab act whose redo changed the drawing, at the head of the restored tab's own acts: the tab was
+ * created before anything done in it, so it is the last thing an undo reaches, not the first.
+ */
+export function keepTabUndo(entry) {
+  undos = [entry].concat(undos)
 }
 
 /** Values were corrected. `before` and `after` are whole value maps, so either can be written back. */

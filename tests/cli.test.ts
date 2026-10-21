@@ -1417,4 +1417,80 @@ describe('projects and views, as executed', () => {
     expect(missing.code).toBe(2)
     expect(missing.stderr).toContain('bench view list')
   })
+
+  it('renames a tab, keeping its panels and moving its file', async () => {
+    const before = JSON.parse(
+      (await bench(['--project', dir, 'view', 'show', 'tab one', '--json'])).stdout,
+    ) as { data: { view: { panels: unknown[] } } }
+
+    const renamed = await bench(['--project', dir, 'view', 'rename', 'tab one', 'drift tab'])
+    expect(renamed.code).toBe(0)
+    expect(renamed.stdout).toContain('renamed "tab one" to "drift tab"')
+    expect(existsSync(join(dir, 'views', 'tab-one.json'))).toBe(false)
+    expect(existsSync(join(dir, 'views', 'drift-tab.json'))).toBe(true)
+
+    const after = JSON.parse(
+      (await bench(['--project', dir, 'view', 'show', 'drift tab', '--json'])).stdout,
+    ) as { data: { view: { name: string; panels: unknown[] } } }
+    expect(after.data.view.name).toBe('drift tab')
+    // A rename is the same drawing under another name, not a re-materialized panel.
+    expect(after.data.view.panels).toEqual(before.data.view.panels)
+    // The old name is gone as a tab, not hidden behind a second file.
+    expect((await bench(['--project', dir, 'view', 'show', 'tab one'])).code).toBe(2)
+  })
+
+  it('copies a tab as a tab of its own, and refuses to copy over one that exists', async () => {
+    const copied = await bench(['--project', dir, 'view', 'duplicate', 'drift tab', 'drift tab copy'])
+    expect(copied.code).toBe(0)
+    expect(copied.stdout).toContain('copied "drift tab" to "drift tab copy"')
+    expect(copied.stdout).toContain('views/drift-tab-copy.json')
+
+    const listed = JSON.parse(
+      (await bench(['--project', dir, 'view', 'list', '--json'])).stdout,
+    ) as { data: { views: { name: string; panels: number }[] } }
+    expect(listed.data.views.map((view) => view.name)).toEqual(
+      expect.arrayContaining(['drift tab', 'drift tab copy']),
+    )
+    // The copy draws on its own, from its own file.
+    const rendered = await bench(['--project', dir, 'view', 'render', 'drift tab copy', '--json'])
+    expect(rendered.code).toBe(0)
+    expect((JSON.parse(rendered.stdout) as { data: { panels: number } }).data.panels).toBe(1)
+
+    const twice = await bench(['--project', dir, 'view', 'duplicate', 'drift tab', 'drift tab copy'])
+    expect(twice.code).toBe(1)
+    expect(twice.stderr).toContain('already exists')
+
+    // A name is required, and the refusal says what the command looks like.
+    const nameless = await bench(['--project', dir, 'view', 'duplicate', 'drift tab'])
+    expect(nameless.code).toBe(1)
+    expect(nameless.stderr).toContain('bench view duplicate')
+  })
+
+  it('closes a tab from the CLI into the trash, not out of existence', async () => {
+    const closed = await bench(['--project', dir, 'view', 'rm', 'drift tab copy'])
+    expect(closed.code).toBe(0)
+    expect(closed.stdout).toContain('closed "drift tab copy"')
+    expect(closed.stdout).toContain('views/.trash/')
+    expect(existsSync(join(dir, 'views', 'drift-tab-copy.json'))).toBe(false)
+
+    // The archive is the tab: a later window reopens these bytes, so they carry the name and the
+    // panel, not a tombstone.
+    const archives = (await readdir(join(dir, 'views', '.trash'))).filter((name) =>
+      name.startsWith('drift-tab-copy-'),
+    )
+    expect(archives).toHaveLength(1)
+    const archive = JSON.parse(
+      await readFile(join(dir, 'views', '.trash', archives[0]!), 'utf8'),
+    ) as { name: string; panels: unknown[] }
+    expect(archive.name).toBe('drift tab copy')
+    expect(archive.panels).toHaveLength(1)
+
+    expect((await bench(['--project', dir, 'view', 'show', 'drift tab copy'])).code).toBe(2)
+    // The tab beside it is untouched: closing one is not clearing the project.
+    expect((await bench(['--project', dir, 'view', 'show', 'drift tab'])).code).toBe(0)
+
+    const missing = await bench(['--project', dir, 'view', 'rm', 'no such tab'])
+    expect(missing.code).toBe(2)
+    expect(missing.stderr).toContain('no view named')
+  })
 })

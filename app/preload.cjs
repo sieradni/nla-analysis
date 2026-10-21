@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('bench', {
   closeView: (dir, name) => ipcRenderer.invoke('bench:closeView', dir, name),
   closedViews: (dir) => ipcRenderer.invoke('bench:closedViews', dir),
   restoreClosedView: (dir, file) => ipcRenderer.invoke('bench:restoreClosedView', dir, file),
+  // Renaming and copying are tab acts too: the same file under another name, or a second one beside
+  // it. Neither touches the log, and neither invents a panel the core did not already describe.
+  renameView: (dir, from, to) => ipcRenderer.invoke('bench:renameView', dir, from, to),
+  duplicateView: (dir, from, to) => ipcRenderer.invoke('bench:duplicateView', dir, from, to),
   createProject: (parent, name, shape) =>
     ipcRenderer.invoke('bench:createProject', parent, name, shape),
   // Writing: append one point, correct one point, remove one, bring a removed one back, restore a

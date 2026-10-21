@@ -34,9 +34,11 @@ import type { IncrementalMark } from '../src/core/panels.ts'
 import { RecipeRunner } from '../src/core/runner.ts'
 import {
   closeView as closeViewFile,
+  duplicateView as duplicateViewFile,
   listClosedViews,
   listViews,
   loadView,
+  renameView as renameViewFile,
   requireFreeName,
   restoreClosedView as restoreClosedViewFile,
   saveView,
@@ -304,6 +306,32 @@ export async function restoreClosedView(dir: string, file: string): Promise<Open
   const view = await restoreClosedViewFile(workspace.dir, file)
   await cacheView(workspace.dir, view)
   return describe(workspace, view, reread)
+}
+
+/**
+ * Rename a tab: the same drawing under another name.
+ *
+ * The file is the tab, so the session forgets the old name on the way back — a cached copy keyed by
+ * it would otherwise answer a later `openView` for a tab that no longer exists.
+ */
+export async function renameView(dir: string, from: string, to: string): Promise<OpenedView> {
+  const workspace = await workspaceFor(dir)
+  const view = await renameViewFile(workspace.dir, from, to)
+  discardStagedView(workspace.dir, from)
+  if (isCachedView(workspace.dir, from)) clearCachedView()
+  await cacheView(workspace.dir, view)
+  return describe(workspace, view, false)
+}
+
+/**
+ * Copy a tab under another name. The panels are the tab, so the copy is described by the same path
+ * any tab is, and it is the copy the window holds afterwards.
+ */
+export async function duplicateView(dir: string, from: string, to: string): Promise<OpenedView> {
+  const workspace = await workspaceFor(dir)
+  const view = await duplicateViewFile(workspace.dir, from, to)
+  await cacheView(workspace.dir, view)
+  return describe(workspace, view, false)
 }
 
 export async function openView(dir: string, name: string): Promise<OpenedView> {

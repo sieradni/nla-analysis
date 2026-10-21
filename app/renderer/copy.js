@@ -441,6 +441,37 @@ export var pointMenu = {
 }
 
 /**
+ * A tab's menu, in the rail where the tab lives. Rename and Duplicate open a sheet, hence the
+ * ellipsis; Close is the act the header already offered, given a second door on the tab itself.
+ */
+export var tabMenu = {
+  label: 'Actions for this tab',
+  rename: 'Rename…',
+  duplicate: 'Duplicate…',
+  close: 'Close tab',
+}
+
+/**
+ * The one sheet Rename and Duplicate share: the same question (a name), asked about the same tab.
+ * Each mode says what the name will mean, because "rename" and "copy" are one field apart and very
+ * different afterwards.
+ */
+export var nameSheet = {
+  label: 'Tab name',
+  cancel: 'Cancel',
+  rename: {
+    title: 'Rename tab',
+    note: 'The tab keeps its panels, its axes and the data it reads; only its name changes.',
+    confirm: 'Rename',
+  },
+  duplicate: {
+    title: 'Duplicate tab',
+    note: 'The copy starts as the same drawing and is a tab of its own from then on.',
+    confirm: 'Create copy',
+  },
+}
+
+/**
  * The sentence a direction of the bar's button says around one act's phrase. The phrase comes from
  * `labels`; the table in `entry.js` pairs it with a kind, so this file keeps the words and knows no
  * kinds. Preserved word for word from the four per-kind functions it replaced.
@@ -468,11 +499,13 @@ export var labels = {
   undoRemoval: 'Undo removal',
   undoCorrection: 'Undo correction',
   undoImport: 'Undo import',
+  undoTab: 'Undo new tab',
   redo: 'Redo',
   redoPoint: 'Redo added point',
   redoRemoval: 'Redo removal',
   redoCorrection: 'Redo correction',
   redoImport: 'Reapply import',
+  redoTab: 'Redo new tab',
   // The phrase each act's tooltip is built from: "Undo the last point added here". They sit here,
   // flat and keyed by no kind, so the words stay in this file while `entry.js` owns which act is
   // which. The redo phrases are the other direction's grammar, not a second list of acts.
@@ -480,10 +513,12 @@ export var labels = {
   actRemoval: 'the last point removed here',
   actCorrection: 'the last correction made here',
   actImport: 'the last import',
+  actTab: 'the tab created here',
   actPointRedo: 'the point added here',
   actRemovalRedo: 'the point removed here',
   actCorrectionRedo: 'the correction made here',
   actImportRedo: 'the import that was undone',
+  actTabRedo: 'the tab created here',
   closeTab: 'Close tab',
   // The inverse of closing is the window's own, not the tab history's: the label says the act it
   // reverses, like every other control in this window.
@@ -508,6 +543,8 @@ export function applyStatic(ui) {
   if (ui.entryUndo) ui.entryUndo.textContent = labels.undo
   if (ui.importOpen) ui.importOpen.textContent = labels.importFile
   if (ui.entryCancel) ui.entryCancel.textContent = labels.cancel
+  if (ui.renameLabel) ui.renameLabel.textContent = nameSheet.label
+  if (ui.renameCancel) ui.renameCancel.textContent = nameSheet.cancel
 }
 
 /** The one sentence a panel that could not be redrawn needs, so every status says it the same way. */
@@ -615,6 +652,12 @@ export var status = {
   },
   reopenedTab: function (change) {
     return 'Reopened “' + change.name + '”.'
+  },
+  renamedTab: function (change) {
+    return 'Renamed “' + change.from + '” to “' + change.name + '”. The drawing is unchanged.'
+  },
+  duplicatedTab: function (change) {
+    return 'Copied “' + change.from + '” as “' + change.name + '”. The copy is a tab of its own.'
   },
   rereadAfterWrite: function () {
     return 'The project changed on disk while this tab was open, so it was reread and redrawn.'

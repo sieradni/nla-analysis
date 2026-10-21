@@ -1,9 +1,18 @@
-/* The tab dialog: choose a dataset, a recipe or a plot, and the axes a plot reads. */
+/*
+ * The tab sheet: choose a dataset, a recipe or a plot and the axes a plot reads, and the smaller sheet
+ * that asks a tab's new name for Rename and Duplicate.
+ *
+ * The acts themselves (rename, copy, close) are `tab-actions.js`'s: a sheet asks a question, it does
+ * not move a tab. This module owns the words on the sheet and the field they are typed into.
+ */
 import { state, ui, node, bridge, call, showView } from './state.js'
-import { datasetOption, status as copyStatus } from './copy.js'
+import { datasetOption, nameSheet, refusal, status as copyStatus } from './copy.js'
 import { renderTabs } from './rail.js'
 import { renderView } from './panels.js'
 import { setStatus, focusFirstField } from './entry.js'
+import { noteTabCreated } from './history.js'
+import { actions } from './navigation.js'
+import { duplicateTab, renameTab } from './tab-actions.js'
 
 /** Put the project's datasets in the select, and the catalog in the panel select once it arrives. */
 export function fillTabDialog() {
@@ -145,8 +154,10 @@ export async function createTab(event) {
     state.views = listed.views
     state.correction = null
     state.selection = null
-    // The new tab is a different drawing: the history of the one it replaced goes with it.
+    // The new tab is a different drawing: the history of the one it replaced goes with it — and the
+    // first act of the new one is its own creation, so undo closes it and redo brings it back.
     showView(opened)
+    noteTabCreated(opened.view.name)
     state.entryKey = null
     state.timing = null
     ui.tabDialog.close()
@@ -176,7 +187,65 @@ export async function createTab(event) {
   }
 }
 
-/** The tab sheet's controls: the new-tab button, the form, and the axis pickers that follow it. */
+/*
+ * The name sheet, shared by Rename and Duplicate. What is being named is held here: the menu that
+ * asked is gone by the time the person presses the button, and the sheet is the only thing left that
+ * knows which tab the question is about.
+ */
+var naming = null
+
+export function openNameSheet(mode, name) {
+  if (!state.project || !name) return
+  var copy = mode === 'duplicate' ? nameSheet.duplicate : nameSheet.rename
+  naming = { mode: mode === 'duplicate' ? 'duplicate' : 'rename', name: name }
+  ui.renameTitle.textContent = copy.title
+  ui.renameNote.textContent = copy.note
+  ui.renameConfirm.querySelector('span').textContent = copy.confirm
+  ui.renameError.hidden = true
+  ui.renameError.textContent = ''
+  // A copy's name suggests itself and is the reason the field is selected: the person is one word
+  // away from accepting it, and one keystroke away from replacing it.
+  ui.renameInput.value = naming.mode === 'duplicate' ? name + ' copy' : name
+  ui.renameDialog.showModal()
+  ui.renameInput.focus()
+  ui.renameInput.select()
+}
+
+/** The sheet's one button: ask the act for the name, and say a refusal where the name was typed. */
+async function submitName(event) {
+  event.preventDefault()
+  if (!naming) return
+  var next = ui.renameInput.value.trim()
+  if (next === '') {
+    ui.renameError.hidden = false
+    ui.renameError.textContent = 'A tab needs a name.'
+    ui.renameInput.focus()
+    return
+  }
+  var act = naming.mode === 'duplicate' ? duplicateTab : renameTab
+  var about = naming
+  ui.renameConfirm.disabled = true
+  try {
+    var opened = await act(about.name, next, function (error) {
+      ui.renameError.hidden = false
+      ui.renameError.textContent = refusal((error && error.message) || 'the tab could not be renamed')
+      var hint = error && error.hint
+      if (hint) ui.renameError.textContent += ' ' + refusal(hint)
+    })
+    if (opened === null) {
+      ui.renameInput.focus()
+      ui.renameInput.select()
+      return
+    }
+    naming = null
+    ui.renameDialog.close()
+    focusFirstField()
+  } finally {
+    ui.renameConfirm.disabled = false
+  }
+}
+
+/** The tab sheets' controls: new tab, the name sheet, and the axis pickers that follow the dataset. */
 export function wireTabs() {
   ui.newTab.addEventListener('click', openTabDialog)
   ui.tabForm.addEventListener('submit', createTab)
@@ -186,4 +255,11 @@ export function wireTabs() {
   ui.tabDataset.addEventListener('change', fillTabAxes)
   ui.tabPanel.addEventListener('change', fillTabAxes)
   ui.tabName.addEventListener('input', syncTabReplace)
+  ui.renameForm.addEventListener('submit', submitName)
+  ui.renameCancel.addEventListener('click', function () {
+    naming = null
+    ui.renameDialog.close()
+  })
 }
+
+actions.openNameSheet = openNameSheet

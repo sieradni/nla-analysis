@@ -812,6 +812,50 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(log)
   })
 
+  it('renames a tab through the bridge the window calls, keeping the drawing and its data', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const opened = (await api.openView!(dir, 'drift over time')) as Window
+    const log = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+
+    const renamed = (await api.renameView!(dir, 'drift over time', 'drift, renamed')) as Window
+    expect(renamed.view.name).toBe('drift, renamed')
+    // The drawing the window gets back is the tab it had: same panels, same counts, same entry target.
+    expect(renamed.view.panels).toEqual(opened.view.panels)
+    expect(renamed.entry.active).toBe(opened.entry.active)
+    expect(existsSync(join(dir, 'views', 'drift-over-time.json'))).toBe(false)
+    expect(existsSync(join(dir, 'views', 'drift-renamed.json'))).toBe(true)
+    expect(((await api.openProject!(dir)) as Window).views.map((view: Window) => view.name)).toContain(
+      'drift, renamed',
+    )
+
+    // A tab that is already there is a refusal, not a replacement.
+    await api.writeView!(dir, { name: 'second tab', dataset: 'main' })
+    await expect(api.renameView!(dir, 'second tab', 'drift, renamed')).rejects.toThrow(/already exists/)
+    expect(existsSync(join(dir, 'views', 'second-tab.json'))).toBe(true)
+    // A tab is derived state: renaming one writes no event.
+    expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(log)
+  })
+
+  it('copies a tab through the bridge the window calls, as a tab of its own', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const source = (await api.openView!(dir, 'drift over time')) as Window
+
+    const copy = (await api.duplicateView!(dir, 'drift over time', 'drift over time copy')) as Window
+    expect(copy.view.name).toBe('drift over time copy')
+    expect(copy.view.panels).toEqual(source.view.panels)
+    // Both are in the project, and the copy is described like any tab — it is not a pointer back.
+    const listed = (await api.openProject!(dir)) as Window
+    const names = listed.views.map((view: Window) => view.name)
+    expect(names).toEqual(expect.arrayContaining(['drift over time', 'drift over time copy']))
+    expect(existsSync(join(dir, 'views', 'drift-over-time-copy.json'))).toBe(true)
+    // The copy can be closed on its own, leaving the tab it came from untouched.
+    const closed = (await api.closeView!(dir, 'drift over time copy')) as Window
+    expect(closed.name).toBe('drift over time copy')
+    expect(((await api.openView!(dir, 'drift over time')) as Window).view.name).toBe('drift over time')
+  })
+
   it('writes a field-pair tab for a custom shape through the same core the window calls', async () => {
     const api = await shell()
     const parent = await mkdtemp(join(tmpdir(), 'bench-shell-axes-'))

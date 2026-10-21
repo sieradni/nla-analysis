@@ -133,6 +133,24 @@
       </form>
     </dialog>
 
+    <!-- Renaming and copying a tab are the same question asked twice: what is the new name. One
+         sheet asks it, because two would be the same form with a different title. -->
+    <dialog id="rename-dialog" class="sheet" aria-labelledby="rename-dialog-title">
+      <form id="rename-form" autocomplete="off">
+        <h2 id="rename-dialog-title"></h2>
+        <p id="rename-note" class="sheet-note"></p>
+        <label class="sheet-field">
+          <span id="rename-label">Tab name</span>
+          <input id="rename-input" type="text" required />
+        </label>
+        <div class="sheet-actions">
+          <button id="rename-cancel" class="ghost" type="button">Cancel</button>
+          <button id="rename-confirm" class="entry-add" type="submit"><span></span></button>
+        </div>
+        <div id="rename-error" class="sheet-error" role="status" hidden></div>
+      </form>
+    </dialog>
+
     <!-- Creating a project is choosing a log and the shape of the points it will hold. The shape is
          declared once, at init, and every later point inherits it, so this is the only moment the
          fields can be picked. -->

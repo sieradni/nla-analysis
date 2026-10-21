@@ -10,12 +10,15 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   appendedId,
+  keepTabRedo,
+  keepTabUndo,
   nextRedo,
   nextUndo,
   noteAppend,
   noteCorrection,
   noteImport,
   noteRemoval,
+  noteTabCreated,
   permanentRefusal,
   reconcileImport,
   redoFailed,
@@ -333,6 +336,50 @@ describe('the tab history', () => {
     expect(kept.undos).toHaveLength(1)
     restoreTabHistory(kept)
     expect(nextUndo()).toMatchObject({ kind: 'point', id: 'p1' })
+  })
+
+  it('records a tab coming into being as an act the bar can reverse', () => {
+    noteTabCreated('drift over time')
+    expect(nextUndo()).toMatchObject({ kind: 'tab', name: 'drift over time', file: null })
+    // Its undo changes the drawing, so the archive close leaves behind is what the redo names.
+    const tab = takeUndo()
+    undoFinished(tab, { file: 'drift-over-time-2026-10-21T00-00-00-000Z.json' })
+    expect(nextRedo()).toMatchObject({
+      kind: 'tab',
+      name: 'drift over time',
+      file: 'drift-over-time-2026-10-21T00-00-00-000Z.json',
+    })
+  })
+
+  it('puts the surviving direction of a tab act back after the drawing cleared the stacks', () => {
+    // Closing the tab a creation made is the change that calls `resetTabHistory`; without this the
+    // bar would offer nothing for the act that just happened.
+    resetTabHistory()
+    keepTabRedo({ kind: 'tab', name: 'made here', file: 'made-here-1.json' })
+    expect(nextRedo()).toMatchObject({ kind: 'tab', file: 'made-here-1.json' })
+    // A redo restores the tab, which is another change of drawing; the undo goes back too, and a new
+    // act would end the branch this is the only entry of.
+    keepTabUndo({ kind: 'tab', name: 'made here', file: null })
+    expect(nextUndo()).toMatchObject({ kind: 'tab', name: 'made here' })
+  })
+
+  it('keeps a tab act at the head of the acts a reopened tab brings back', () => {
+    noteTabCreated('made here')
+    const tab = takeUndo()
+    undoFinished(tab, { file: 'made-here-1.json' })
+    // The restore put the tab's own acts back, and the creation is older than all of them.
+    restoreTabHistory({ undos: [{ kind: 'point', id: 'p9' }], redos: [], appended: 'p9' })
+    keepTabUndo({ kind: 'tab', name: 'made here', file: null })
+    expect(takeUndo()).toMatchObject({ kind: 'point', id: 'p9' })
+    expect(takeUndo()).toMatchObject({ kind: 'tab', name: 'made here' })
+  })
+
+  it('keeps the tab act when an import rewrites records the tab does not name', () => {
+    // An import withdraws records; a tab is not a record, and the tab that holds these acts is still
+    // the tab on screen.
+    noteTabCreated('still here')
+    reconcileImport(written(['p1'], 2, 'main'))
+    expect(nextUndo()).toMatchObject({ kind: 'tab', name: 'still here' })
   })
 
   it('forgets everything on a view change', () => {

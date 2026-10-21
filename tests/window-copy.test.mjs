@@ -383,6 +383,22 @@ describe('the entry bar', () => {
       copy.status.tabSaved({ name: 'regimes', replaced: false, panel }),
       copy.status.closedTab({ name: 'drift over time' }),
       copy.status.reopenedTab({ name: 'drift over time' }),
+      copy.status.renamedTab({ from: 'drift', name: 'drift over time' }),
+      copy.status.duplicatedTab({ from: 'drift', name: 'drift copy' }),
+      copy.actTitle('undo', copy.labels.actTab),
+      copy.actTitle('redo', copy.labels.actTabRedo),
+      copy.tabMenu.label,
+      copy.tabMenu.rename,
+      copy.tabMenu.duplicate,
+      copy.tabMenu.close,
+      copy.nameSheet.label,
+      copy.nameSheet.cancel,
+      copy.nameSheet.rename.title,
+      copy.nameSheet.rename.note,
+      copy.nameSheet.rename.confirm,
+      copy.nameSheet.duplicate.title,
+      copy.nameSheet.duplicate.note,
+      copy.nameSheet.duplicate.confirm,
       copy.status.refreshed([{ state: 'current' }]),
       copy.status.refreshed([{ state: 'stale' }]),
       copy.empty.noTabs(),
@@ -403,6 +419,21 @@ describe('the entry bar', () => {
       expect(label).not.toMatch(/…$/)
       expectPlain(label, `label ${label}`)
     })
+  })
+
+  it('says what renaming and copying a tab did, and what the copy becomes', () => {
+    expect(copy.status.renamedTab({ from: 'drift', name: 'drift over time' })).toBe(
+      'Renamed “drift” to “drift over time”. The drawing is unchanged.',
+    )
+    expect(copy.status.duplicatedTab({ from: 'drift', name: 'drift copy' })).toBe(
+      'Copied “drift” as “drift copy”. The copy is a tab of its own.',
+    )
+    // The two acts a tab menu offers open a sheet, and the sheet says what each one will mean: the
+    // difference between them is one word, and it is the whole difference.
+    expect(copy.tabMenu.rename.endsWith('…')).toBe(true)
+    expect(copy.tabMenu.duplicate.endsWith('…')).toBe(true)
+    expect(copy.tabMenu.close.endsWith('…')).toBe(false)
+    expect(copy.nameSheet.rename.note).not.toBe(copy.nameSheet.duplicate.note)
   })
 })
 

@@ -1,5 +1,5 @@
 /**
- * `bench view` — list, show, render, create, add, save.
+ * `bench view` — list, show, render, create, add, save, rm, rename, duplicate.
  *
  * This module owns the view command's output and its one panel-materialization helper. The view file
  * format, storage, and rendering live in `core/views.ts`; a panel's selection and materialization
@@ -12,8 +12,11 @@ import { plotHint } from '../core/hints.ts'
 import { materializePanel, panelStatuses, type PanelRequest } from '../core/panels.ts'
 import { launcherCommand, launcherProjectPath } from '../core/project.ts'
 import {
+  closeView,
+  duplicateView,
   listViews,
   loadView,
+  renameView,
   renderView,
   requireFreeName,
   saveView,
@@ -136,7 +139,11 @@ export async function runViewCommand(
 ): Promise<void> {
   const [sub, viewName] = args
   if (!sub) {
-    io.die('missing a view subcommand', 1, 'bench view list | show | new | add | save | render')
+    io.die(
+      'missing a view subcommand',
+      1,
+      'bench view list | show | new | add | save | render | rm | rename | duplicate',
+    )
   }
 
   if (sub === 'list') {
@@ -262,6 +269,69 @@ export async function runViewCommand(
     return
   }
 
+  if (sub === 'rm' || sub === 'rename' || sub === 'duplicate') {
+    if (!viewName) io.die(`missing a view name`, 1, `bench view ${sub} <name>`)
+    const other = args[2]
+    if (sub !== 'rm' && (other === undefined || other.trim() === '')) {
+      io.die(`missing the name to ${sub === 'rename' ? 'rename it to' : 'copy it to'}`, 1,
+        sub === 'rename' ? 'bench view rename "drift" "drift over time"' : 'bench view duplicate "drift" "drift (copy)"')
+    }
+    const workspace = await io.open(options.project)
+
+    // Closing goes through the same path the window's close uses, so the tab is archived where the
+    // window's reopen door looks for it — not a second way for a tab to vanish.
+    if (sub === 'rm') {
+      let closed
+      try {
+        closed = await closeView(workspace.dir, viewName)
+      } catch (error) {
+        io.fail(error)
+      }
+      if (io.json) {
+        process.stdout.write(
+          JSON.stringify(
+            { ok: true, data: { file: join(workspace.dir, 'views', '.trash', closed.file), name: closed.name, panels: closed.panels } },
+            null,
+            2,
+          ) + '\n',
+        )
+        return
+      }
+      process.stdout.write(`closed "${closed.name}"  (${closed.panels} panel(s))\n`)
+      process.stdout.write(
+        `  its file waits in views/.trash/${closed.file}; Ctrl+Shift+T in the window puts it back\n`,
+      )
+      return
+    }
+
+    let view: ViewFile
+    try {
+      view = sub === 'rename'
+        ? await renameView(workspace.dir, viewName, other as string)
+        : await duplicateView(workspace.dir, viewName, other as string)
+    } catch (error) {
+      io.fail(error)
+    }
+    const file = viewPath(workspace.dir, view.name)
+    if (io.json) {
+      process.stdout.write(
+        JSON.stringify(
+          { ok: true, data: { file, name: view.name, from: viewName, panels: view.panels.length } },
+          null,
+          2,
+        ) + '\n',
+      )
+      return
+    }
+    process.stdout.write(
+      sub === 'rename'
+        ? `renamed "${viewName}" to "${view.name}"  (views/${slugFor(view.name)}.json)\n`
+        : `copied "${viewName}" to "${view.name}"  (views/${slugFor(view.name)}.json)\n`,
+    )
+    process.stdout.write(`  ${view.panels.length} panel(s)\n`)
+    return
+  }
+
   if (sub === 'new' || sub === 'add') {
     if (!viewName) io.die('missing a view name', 1, `bench view ${sub} <name> --dataset main`)
     const workspace = await io.open(options.project)
@@ -371,5 +441,9 @@ export async function runViewCommand(
     return
   }
 
-  io.die(`unknown view subcommand "${sub}"`, 1, 'bench view list | show | new | add | save | render')
+  io.die(
+    `unknown view subcommand "${sub}"`,
+    1,
+    'bench view list | show | new | add | save | render | rm | rename | duplicate',
+  )
 }

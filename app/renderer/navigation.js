@@ -14,4 +14,15 @@ export const actions = {
   selectPoint: null,
   pointAction: null,
   setStatus: null,
+  // A tab's own menu: the rail draws the button, the open-tab lifecycle owns the popover and the
+  // acts behind it, so the rail never learns how to close or rename anything.
+  tabMenu: null,
+  // The name sheet Rename and Duplicate share. `tabs.js` owns the sheet; the acts it asks for are
+  // `tab-actions.js`'s, reached through these entries rather than by importing each other.
+  openNameSheet: null,
+  closeTab: null,
+  // The two directions of the fifth kind of act. `entry.js` calls them by kind, because the table
+  // that names every act is the one place a kind becomes a button.
+  undoTabCreated: null,
+  redoTabCreated: null,
 }

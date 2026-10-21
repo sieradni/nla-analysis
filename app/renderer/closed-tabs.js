@@ -65,6 +65,23 @@ export function takeClosed() {
   return { entry: entry, history: history }
 }
 
+/**
+ * One archive by file, taken off the list: a redo of creating a tab names the file its own undo left
+ * behind, so it must restore that tab rather than whichever close was newest. Null when the list no
+ * longer holds it — a pruned or already-reopened archive is still worth trying, and the core refuses
+ * it with a sentence rather than this module guessing.
+ */
+export function takeClosedFile(file) {
+  for (var index = 0; index < closed.length; index += 1) {
+    if (closed[index].file !== file) continue
+    var entry = closed.splice(index, 1)[0]
+    var history = histories.get(entry.file) || null
+    histories.delete(entry.file)
+    return { entry: entry, history: history }
+  }
+  return null
+}
+
 /** Put a tab back after a reopen failed for a reason that may pass: it keeps its place, with its acts. */
 export function putBackClosed(taken) {
   if (!taken) return

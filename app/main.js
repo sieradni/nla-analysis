@@ -201,6 +201,21 @@ ipcMain.handle('bench:restoreClosedView', (_event, dir, file) =>
   guarded(() => bench.restoreClosedView(dir, file)),
 )
 
+// Renaming moves the tab to another file. If it was the tab being watched, stop watching it under
+// the old name: the watcher would otherwise report that file gone while the window is already
+// opening the same tab under its new name.
+ipcMain.handle('bench:renameView', (_event, dir, from, to) =>
+  guarded(async () => {
+    if (watchedTab && watchedTab.dir === dir && watchedTab.name === from) stopWatching()
+    return bench.renameView(dir, from, to)
+  }),
+)
+
+// A copy is a new tab beside the one it came from; it does not move the tab that is being watched.
+ipcMain.handle('bench:duplicateView', (_event, dir, from, to) =>
+  guarded(() => bench.duplicateView(dir, from, to)),
+)
+
 // One tab at a time, because one tab is on screen. The window calls this whenever the tab it is
 // drawing changes; `name: null` means nothing is open, and no watcher should be left running.
 ipcMain.handle('bench:watch', (_event, dir, name) =>

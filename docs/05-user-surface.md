@@ -158,8 +158,14 @@ act, not a log event: nothing is written, and a tab switch or a repaint cannot f
 tab outlives the window**: the list is read back from the project's trash when a project opens, so
 closing a tab and quitting still leaves one `Ctrl+Shift+T` away, with the same words; what cannot come
 back is the undo of acts made before that window opened, and the bar says so by being empty. On an
-empty closed list the chord does nothing at all. Not built: undoing a tab create (U7, a separate
-pass).
+empty closed list the chord does nothing at all. **Creating a tab is the fifth kind** (2026-10-21): the
+tab a person makes — from the tab sheet or by copying one — is the first act of its own history, so the
+bar reads **Undo new tab**, and undo closes it through the project's own close path (the file waits in
+the trash with its acts), while the status offers **Redo new tab** to move it home. The close that undo
+performs does not also offer **Undo tab close**: one act has one way back. Because that act changes the
+drawing and a drawing change clears the stacks, the surviving direction is re-installed after the
+change (`keepTabUndo`/`keepTabRedo`) — the act names a tab, not a point, so it is still true of the
+window afterwards.
 Evidence: `tests/history.test.mjs` (both directions, the branch, the bound), `tests/window-copy.test.mjs`
 (the labels), `tests/version-restore.test.ts` (rows, empty first version, optional-field exactness),
 `tests/cli.test.ts` (`dataset restore`, both directions and the refusals), `tests/shell.test.ts` (a
@@ -218,6 +224,27 @@ surface is not needed until a person asks for one.
 
 **Done when:** delete → undo restores the exact file and the tab opens again; a deleted tab no longer
 appears in the rail; the trash does not accumulate forever (a bounded, disposable folder).
+
+**Built 2026-10-21 — and given a door in the window.** A tab's own row in the rail carries a small
+**⋯** (announced as *Actions for this tab “drift over time”*), opening **Rename… / Duplicate… / Close
+tab**. **Close tab** moves the file to the trash and offers **Undo tab close**, which is the same
+reopen `Ctrl+Shift+T` performs; it works on a tab that is not on screen, where the header's button
+cannot reach. **Rename…** and **Duplicate…** share one sheet, because they are one question (a name)
+asked about one tab; the sheet says what the name will mean — *The tab keeps its panels, its axes and
+the data it reads; only its name changes* versus *The copy starts as the same drawing and is a tab of
+its own from then on* — and a refusal caused by the name is said in the sheet, under the field, not
+behind it in the status bar. Renaming keeps the drawing and the tab's acts, and only moves its file;
+copying opens the copy, and the copy is undoable as a creation. A tab the person creates is undoable
+(see U4). The same three acts are in the CLI, for an agent operating a project: `bench view rm
+<name>`, `bench view rename <name> <new name>`, `bench view duplicate <name> <new name>`; `rm` goes
+through the close path rather than deleting anything, so its archive is the one the window reopens.
+No event is written by any of them: a tab is a saved question, not data. Evidence: `src/core/views.ts`
+(`renameView`, `duplicateView`, free-name and free-slug refusals), `tests/views.test.ts`,
+`tests/cli.test.ts` (a real project: rename moves the file, duplicate draws on its own, rm leaves a
+restorable archive), `tests/shell.test.ts` (the bundled core the window loads), `tests/history.test.mjs`
+(the fifth kind), and `pnpm app:capture` (the menu, the sheet, rename, duplicate, a background close,
+and undo/redo of a creation, at 100/125/150% — `app-tab-menu-*.png`, `app-tab-sheet-*.png`,
+`app-tab-creation-undone.png`).
 
 ---
 
@@ -633,7 +660,7 @@ the linked `U` item is where it is carried out.
 
 | # | question | decision | carried by |
 |---|---|---|---|
-| 1 | deleting a tab | move to `views/.trash/` and offer Undo; no log event, no confirmation dialog | U7 |
+| 1 | deleting a tab | move to `views/.trash/` and offer Undo; no log event, no confirmation dialog | U7 — done 2026-10-21 (rail menu, `bench view rm`, rename and duplicate, undo of creation) |
 | 2 | where UI preferences live | `$BENCH_HOME/ui.json`, disposable app state, never project data | U19 |
 | 3 | tooltip identity | no id in the UI; values only; Copy details from the point menu | U1, U2 |
 | 4 | retraction in the window | a point menu action, one click, no reason prompt; undo restores the same record | U5, U6 |

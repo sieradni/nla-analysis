@@ -137,6 +137,9 @@ Views (a tab is a view file in the project)
   bench view add <name> [options]       append a panel to an existing view
   bench view save [name] --file <json>  store a view file (use - for stdin)
   bench view render <name> [--refresh]  draw the saved specs to artifacts/view-<name>.svg
+  bench view rm <name>                  close a view: its file waits in views/.trash/
+  bench view rename <name> <new name>   the same view under another name
+  bench view duplicate <name> <new name>  copy a view, panels and all
 
 Options for add
   --values '{"x":1,"y":2}'   explicit field values

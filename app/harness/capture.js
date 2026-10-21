@@ -41,6 +41,26 @@ import {
  * A frame taken by the renderer, not the window compositor. `capturePage` can return the surface it
  * last composited, which for a dialog that has just opened is the page underneath it.
  */
+/**
+ * Write one frame, retrying a sharing violation.
+ *
+ * A just-captured PNG in a repository folder can be locked for a few hundred milliseconds by the
+ * scanner or the sync client on this platform, and `open` answers UV_UNKNOWN rather than a kind
+ * this file could act on. A three-minute review must not die on that: the retry is what makes the
+ * harness's own output the only thing it reports on.
+ */
+async function saveFrame(file, data) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await writeFile(file, data)
+      return
+    } catch (error) {
+      if (attempt >= 8) throw error
+      await sleep(300)
+    }
+  }
+}
+
 export async function rendererScreenshot() {
   const session = window.webContents.debugger
   if (!session.isAttached()) session.attach('1.3')
@@ -169,7 +189,7 @@ export async function captureRelaunch() {
   if ((await logCount(project)) !== eventsBefore) throw new Error('reopening after a relaunch wrote an event')
   // The renderer's own paint, not the last surface the compositor happened to hold: a hidden review
   // window can hand back the frame from before the repaint.
-  await writeFile(join(captureDir, 'app-tab-reopened-relaunch.png'), await rendererScreenshot())
+  await saveFrame(join(captureDir, 'app-tab-reopened-relaunch.png'), await rendererScreenshot())
 
   // And with the list empty, the chord stays quiet: no sentence, no write, no repaint.
   const statusBefore = JSON.parse(await entryState()).status
@@ -252,6 +272,22 @@ async function assertPlainSurface(where) {
       menu: (() => {
         const menu = document.querySelector('.point-menu')
         return menu ? menu.textContent : ''
+      })(),
+      // The tab's menu and the sheet it opens say what the acts mean, so they are held to the same
+      // rule as every other surface a person reads.
+      tabMenu: (() => {
+        const menu = document.querySelector('.tab-menu')
+        return menu ? menu.textContent : ''
+      })(),
+      tabSheet: (() => {
+        const dialog = document.getElementById('rename-dialog')
+        if (!dialog || !dialog.open) return ''
+        return ['rename-dialog-title', 'rename-note', 'rename-label', 'rename-confirm', 'rename-error']
+          .map((id) => {
+            const element = document.getElementById(id)
+            return element ? element.textContent : ''
+          })
+          .join(' | ')
       })(),
       sheet: (() => {
         const dialog = document.getElementById('import-dialog')
@@ -368,7 +404,7 @@ let cspViolations = 0
   async function frameAt(factor, file) {
     window.webContents.setZoomFactor(factor)
     await sleep(600)
-    await writeFile(join(captureDir, file), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, file), (await window.webContents.capturePage()).toPNG())
     frames += 1
     const facts = JSON.parse(
       await window.webContents.executeJavaScript(`(() => {
@@ -431,7 +467,7 @@ let cspViolations = 0
     // Two frames after a zoom change, so the capture never catches the previous layout.
     await new Promise((done) => setTimeout(done, 600))
     const image = await window.webContents.capturePage()
-    await writeFile(join(captureDir, `app-${label}.png`), image.toPNG())
+    await saveFrame(join(captureDir, `app-${label}.png`), image.toPNG())
     // Layout facts per scaling, not once at the end: each frame has to be checked at its own size.
     const layout = await window.webContents.executeJavaScript(`(() => {
       const box = (selector) => {
@@ -547,7 +583,7 @@ let cspViolations = 0
   }
   await assertVerdictExplained('the first drawing')
   await new Promise((done) => setTimeout(done, 300))
-  await writeFile(join(captureDir, 'app-interaction.png'), (await window.webContents.capturePage()).toPNG())
+  await saveFrame(join(captureDir, 'app-interaction.png'), (await window.webContents.capturePage()).toPNG())
 
   // The canvas hides both SVG halves from the accessibility tree, so the host label is what a
   // screen reader hears. Read the tree itself: an aria-label that Chromium ignores would still be
@@ -612,7 +648,7 @@ let cspViolations = 0
       throw new Error('the evidence line did not pick up the point that was typed: ' + evidenceAfter)
     }
     await assertPlainSurface('after entry')
-    await writeFile(join(captureDir, 'app-entry.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-entry.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // Undo by keyboard, with the bar empty: Ctrl+Z retracts the point this window appended, which
@@ -627,7 +663,7 @@ let cspViolations = 0
     await new Promise((done) => setTimeout(done, 300))
     console.log('[bench] undo-state ' + (await entryState()))
     await assertPlainSurface('after undo')
-    await writeFile(join(captureDir, 'app-undo.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-undo.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     const tailEvent = async () => {
@@ -715,7 +751,7 @@ let cspViolations = 0
     // A refusal is a surface too: the core's message is written for an agent and can name the record
     // or shape it checked, so the frame this writes is read back like every other one.
     await assertPlainSurface('the refused entry')
-    await writeFile(join(captureDir, 'app-refused.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-refused.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // A second writer, which is how this product is meant to be operated: an agent runs `bench` in a
@@ -755,7 +791,7 @@ let cspViolations = 0
     if (savedView.panels[1].n !== 16) {
       throw new Error(`the saved tab says n = ${savedView.panels[1].n}, the log holds 16`)
     }
-    await writeFile(join(captureDir, 'app-second-writer.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-second-writer.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // Correct a record by selecting it. The click is dispatched into the drawing's own pointer
@@ -836,7 +872,7 @@ let cspViolations = 0
       throw new Error('the correction did not say the recipe panel is now out of date')
     }
     await assertPlainSurface('after a correction')
-    await writeFile(join(captureDir, 'app-corrected.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-corrected.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // The correction is the newest act, and the bar's one button says so. Undo writes the values the
@@ -906,7 +942,7 @@ let cspViolations = 0
     if (redoCorrection.title !== 'Redo the correction made here (Ctrl+Shift+Z or Ctrl+Y in an empty field)') {
       throw new Error('the redo tooltip does not name the correction: ' + redoCorrection.title)
     }
-    await writeFile(join(captureDir, 'app-correction-undo.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-correction-undo.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
     await assertPlainSurface('after undoing a correction')
 
@@ -1015,7 +1051,7 @@ let cspViolations = 0
     if (opened.focused !== 'Copy details') throw new Error('the menu did not put the keyboard on its first item')
     if (!opened.inside) throw new Error('the point menu was not fully inside the window')
     await assertPlainSurface('the point menu')
-    await writeFile(join(captureDir, 'app-point-menu.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-point-menu.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // Copy details writes one line to the system clipboard, not to the screen.
@@ -1150,7 +1186,7 @@ let cspViolations = 0
       throw new Error('choosing Remove from the menu did not return focus to a chart: ' + undoState.focus)
     }
     if (undoState.menu) throw new Error('the menu stayed open after Remove')
-    await writeFile(join(captureDir, 'app-point-menu-removed.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-point-menu-removed.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
     if (removedMarks !== beforeRemove - 1) {
       throw new Error(`the removed mark is still drawn (${beforeRemove} → ${removedMarks})`)
@@ -1368,13 +1404,13 @@ let cspViolations = 0
       "document.querySelector('.panel-evidence .verdict').dispatchEvent(new PointerEvent('pointerenter'))",
     )
     await sleep(250)
-    await writeFile(join(captureDir, 'app-verdict.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-verdict.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
     await window.webContents.executeJavaScript(
       "document.querySelector('.panel-evidence .verdict').dispatchEvent(new PointerEvent('pointerleave'))",
     )
     if (!tabNames.includes('regimes')) throw new Error('the new tab is not in the rail')
-    await writeFile(join(captureDir, 'app-new-tab.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-new-tab.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // A recipe panel is kept when a write changes the data: it still draws the marks it was drawn
@@ -1610,8 +1646,12 @@ let cspViolations = 0
     if (undoAfterNewTab.title !== 'second look') {
       throw new Error('creating a tab did not open it: ' + undoAfterNewTab.title)
     }
-    if (!undoAfterNewTab.disabled) {
-      throw new Error('the bar still offers the old tab\u2019s undo: ' + JSON.stringify(undoAfterNewTab))
+    // The previous tab's act is gone with the drawing. What the bar offers is this tab's own first
+    // act — the fact that it was made — and nothing else.
+    if (undoAfterNewTab.disabled || undoAfterNewTab.label !== 'Undo new tab') {
+      throw new Error(
+        'a new tab does not offer the act that made it: ' + JSON.stringify(undoAfterNewTab),
+      )
     }
 
     // A project created from the window, with fields of its own choosing. The shape is declared at
@@ -1753,7 +1793,7 @@ let cspViolations = 0
     for (const [label, factor] of [['100', 1], ['125', 1.25], ['150', 1.5]]) {
       window.webContents.setZoomFactor(factor)
       await sleep(600)
-      await writeFile(join(captureDir, `app-empty-tab-${label}.png`), (await window.webContents.capturePage()).toPNG())
+      await saveFrame(join(captureDir, `app-empty-tab-${label}.png`), (await window.webContents.capturePage()).toPNG())
       frames += 1
     }
     window.webContents.setZoomFactor(1)
@@ -1780,7 +1820,7 @@ let cspViolations = 0
     if (!/n = 1/.test(firstPoint.readout)) {
       throw new Error(`the new project should hold one point: "${firstPoint.readout}"`)
     }
-    await writeFile(join(captureDir, 'app-new-project.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-new-project.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // A tab whose axes are not x/y, driven through the same bar: the custom shape's fields have to
@@ -1851,7 +1891,7 @@ let cspViolations = 0
     if (!redrawnImage || !/x mass, y extension/.test(redrawnImage.name)) {
       throw new Error('the redrawn custom-axis panel lost its axes: ' + JSON.stringify(redrawnExposed))
     }
-    await writeFile(join(captureDir, 'app-custom-axis.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-custom-axis.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // A tab that is open while an agent writes. Nothing is typed after the CLI runs, so the frame can
@@ -1898,7 +1938,7 @@ let cspViolations = 0
     if (!/reread and redrawn/.test(live.status || '')) {
       throw new Error('the bar did not say the tab was reread and redrawn')
     }
-    await writeFile(join(captureDir, 'app-live.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-live.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // Replaced, not deleted: the same tab name now holds a different file. The window has to draw the
@@ -1925,7 +1965,7 @@ let cspViolations = 0
     if (!/reread and redrawn/.test(replaced.status || '')) {
       throw new Error('the bar did not report the replaced tab')
     }
-    await writeFile(join(captureDir, 'app-tab-replaced.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-tab-replaced.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // Deleted under the window: an honest empty state, a rail without the tab, and a bar that still
@@ -1956,7 +1996,7 @@ let cspViolations = 0
     if (gone.tabs !== 0) throw new Error(`the rail still lists the deleted tab (${gone.tabs} items)`)
     if (!/removed on disk/.test(gone.status || '')) throw new Error('the bar did not say the tab was removed')
     if (!/n = 15/.test(gone.readout || '')) throw new Error(`the bar lost its target: "${gone.readout}"`)
-    await writeFile(join(captureDir, 'app-tab-gone.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-tab-gone.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // Importing from the window. The file is the deliberately messy fixture: two comment lines, extra
@@ -2074,7 +2114,7 @@ let cspViolations = 0
     // written. Captured after the import the dialog is gone, which is a screenshot of the wrong state.
     // `capturePage` reads the window's compositor, which can hand back its previous surface when a
     // modal sheet opens; the renderer's own screenshot is the page as it is now.
-    await writeFile(join(captureDir, 'app-import.png'), await rendererScreenshot())
+    await saveFrame(join(captureDir, 'app-import.png'), await rendererScreenshot())
     frames += 1
 
     await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
@@ -2241,7 +2281,7 @@ let cspViolations = 0
       throw new Error('the strip is not the plain count: ' + stripAfterReExport)
     }
     await assertPlainSurface('after a re-export')
-    await writeFile(join(captureDir, 'app-version-diff.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-version-diff.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // The same log read back through the other door: if the CLI and the window disagreed about what
@@ -2341,7 +2381,7 @@ let cspViolations = 0
     // one invented instant on every row and then call the result a diff.
     const currentRows = JSON.parse(await readCli(['list', '--json'], importProject)).data
     const untimedFile = join(dirname(importProject), 'lab-export-untimed.csv')
-    await writeFile(
+    await saveFrame(
       untimedFile,
       'x,y\n' + currentRows.map((point) => `${point.values.x},${point.values.y}`).join('\n') + '\n',
     )
@@ -2369,7 +2409,7 @@ let cspViolations = 0
     if (!/is-error/.test(untimedSheet.planClass)) {
       throw new Error('the missing time column was not shown as a refusal: ' + untimedSheet.planClass)
     }
-    await writeFile(join(captureDir, 'app-import-untimed.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-import-untimed.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
     await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
     for (let waited = 0; waited < 60; waited += 1) {
@@ -2399,7 +2439,7 @@ let cspViolations = 0
     // The clock under a name bench does not guess. The sheet's picker is the only place that can say
     // it, and the diff is computed against the version the file actually shares rows with.
     const namedFile = join(dirname(importProject), 'lab-export-taken-at.csv')
-    await writeFile(
+    await saveFrame(
       namedFile,
       'taken_at,x,y\n' +
         currentRows.map((point) => `${point.t_observed},${point.values.x},${point.values.y}`).join('\n') +
@@ -2440,7 +2480,7 @@ let cspViolations = 0
       throw new Error('the named time column was not planned as one added row: ' + namedPlan)
     }
     await assertPlainSurface('the named time column sheet')
-    await writeFile(join(captureDir, 'app-import-time.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-import-time.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
     await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
     for (let waited = 0; waited < 100; waited += 1) {
@@ -2477,7 +2517,7 @@ let cspViolations = 0
     const csvOf = (rows) =>
       't_observed,x,y\n' + rows.map((point) => `${point.t_observed},${point.values.x},${point.values.y}`).join('\n') + '\n'
     // Version 3: the tab's first panel stays pinned to 2; the second is added after this import.
-    await writeFile(
+    await saveFrame(
       join(dirname(mixedProject), 'mixed-v3.csv'),
       csvOf(mixedBase) + '2026-10-17T09:00:00Z,9,21\n',
     )
@@ -2485,7 +2525,7 @@ let cspViolations = 0
     await readCli(['view', 'add', 'mixed versions', '--dataset', 'main'], mixedProject)
     // Version 4: the dataset moves past both panels, so the strip must say what is pinned and what
     // the data is at now.
-    await writeFile(
+    await saveFrame(
       join(dirname(mixedProject), 'mixed-v4.csv'),
       csvOf(mixedBase) + '2026-10-17T09:00:00Z,9,21\n2026-10-18T09:00:00Z,10,23\n',
     )
@@ -2512,7 +2552,7 @@ let cspViolations = 0
       throw new Error('a panel drawn from older data does not say so: ' + mixedBadges)
     }
     await assertPlainSurface('a tab drawn from two versions')
-    await writeFile(join(captureDir, 'app-mixed-versions.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-mixed-versions.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
 
     // Undoing an import from the window. Its own copy of the fixture keeps the version numbers in the
@@ -2522,7 +2562,7 @@ let cspViolations = 0
     const undoImportProject = join(dirname(writableDir), 'undo-import')
     await cp(startupDir, undoImportProject, { recursive: true })
     const undoImportFile = join(dirname(undoImportProject), 'two-rows.csv')
-    await writeFile(
+    await saveFrame(
       undoImportFile,
       'timestamp,x,y\n2026-01-05T09:00:00Z,21.4,3.301\n2026-01-05T09:05:00Z,21.9,3.355\n',
       'utf8',
@@ -2662,7 +2702,7 @@ let cspViolations = 0
     if (JSON.stringify(restoredVersion.diff) !== JSON.stringify({ added: 14, removed: 2, changed: 0 })) {
       throw new Error('the restore recorded a diff that does not match the rows: ' + JSON.stringify(restoredVersion.diff))
     }
-    await writeFile(join(captureDir, 'app-import-undone.png'), (await window.webContents.capturePage()).toPNG())
+    await saveFrame(join(captureDir, 'app-import-undone.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
     await assertPlainSurface('after undoing an import')
 
@@ -2843,7 +2883,7 @@ let cspViolations = 0
       .filter((event) => event.type === 'point_recorded')
       .at(-1)
     const keepsFile = join(dirname(keepsProject), 'keeps.csv')
-    await writeFile(
+    await saveFrame(
       keepsFile,
       rowsOf([
         ...baseRows,
@@ -2914,7 +2954,7 @@ let cspViolations = 0
       throw new Error('selecting the typed point did not open its strip: ' + JSON.stringify(stripBeforeDrops))
     }
     const dropsFile = join(dirname(keepsProject), 'drops.csv')
-    await writeFile(dropsFile, rowsOf(baseRows), 'utf8')
+    await saveFrame(dropsFile, rowsOf(baseRows), 'utf8')
     const importedDrops = await importThroughSheet(dropsFile, /^Imported 14 rows/, 'the import that withdraws the point')
     console.log('[bench] import-drops ' + JSON.stringify({ status: importedDrops.status, readout: importedDrops.readout }))
 
@@ -3300,6 +3340,473 @@ let cspViolations = 0
     if (backAcross.tabs !== 2) throw new Error('the rail does not hold both tabs again')
     if ((await logCount(closedProject)) !== eventsBeforeSwitchClose) {
       throw new Error('closing a tab with a neighbour, or reopening it, wrote an event')
+    }
+
+    // --- the tab's own acts ---------------------------------------------------------------------
+    // Everything below is reached the way a person reaches it: the menu on the tab's row, the sheet
+    // it opens, and the keyboard. Files and the rail are read back, because "the tab was renamed"
+    // is a claim about the project, not about a frame.
+    const railNames = async () =>
+      window.webContents.executeJavaScript(
+        "Array.prototype.map.call(document.querySelectorAll('#tabs .item-name'), (n) => n.textContent)",
+      )
+    const openRailMenu = async (name) => {
+      const opened = await window.webContents.executeJavaScript(`(() => {
+        const row = Array.prototype.find.call(document.querySelectorAll('#tabs li'), (item) => {
+          const label = item.querySelector('.item-name')
+          return label && label.textContent === ${JSON.stringify(name)}
+        })
+        if (!row) return null
+        const trigger = row.querySelector('.tab-more')
+        if (!trigger) return null
+        trigger.click()
+        return { label: trigger.getAttribute('aria-label'), expanded: trigger.getAttribute('aria-expanded') }
+      })()`)
+      if (!opened) throw new Error('no tab row with a menu for ' + name)
+      await sleep(150)
+      return opened
+    }
+    const readTabMenu = async () =>
+      JSON.parse(
+        await window.webContents.executeJavaScript(`(() => {
+          const menu = document.querySelector('.tab-menu')
+          if (!menu) return JSON.stringify({ open: false })
+          const box = menu.getBoundingClientRect()
+          return JSON.stringify({
+            open: true,
+            role: menu.getAttribute('role'),
+            label: menu.getAttribute('aria-label'),
+            items: Array.prototype.map.call(menu.querySelectorAll('.tab-menu-item'), (b) => b.textContent),
+            focused: document.activeElement ? document.activeElement.textContent : '',
+            inside:
+              box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth && box.bottom <= window.innerHeight,
+          })
+        })()`),
+      )
+    const dismissTabMenu = async () => {
+      await window.webContents.executeJavaScript(`(() => {
+        const menu = document.querySelector('.tab-menu')
+        if (menu) menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        return true
+      })()`)
+      await sleep(150)
+    }
+
+    // The menu on a tab that is not the drawing on screen: the header's close button cannot reach
+    // that tab, which is the case this menu exists for.
+    const eventsBeforeTabActs = await logCount(closedProject)
+    const trigger = await openRailMenu('second look')
+    const menu = await readTabMenu()
+    console.log('[bench] tab-menu ' + JSON.stringify({ trigger, ...menu }))
+    if (!menu.open || menu.role !== 'menu') throw new Error('the tab row opened no menu')
+    if (menu.items.join('|') !== 'Rename…|Duplicate…|Close tab') {
+      throw new Error('the tab menu does not offer the three acts: ' + JSON.stringify(menu.items))
+    }
+    if (menu.focused !== 'Rename…') throw new Error('the tab menu did not put the keyboard on its first item')
+    if (!menu.inside) throw new Error('the tab menu was not fully inside the window')
+    if (trigger.expanded !== 'true') throw new Error('the trigger does not say its menu is open')
+
+    // One frame per scaling, with the menu opened at that scaling: a menu placed at 100% and then
+    // zoomed would be measured against a window it was never positioned in.
+    for (const [label, factor] of [
+      ['100', 1],
+      ['125', 1.25],
+      ['150', 1.5],
+    ]) {
+      window.webContents.setZoomFactor(factor)
+      await sleep(500)
+      await dismissTabMenu()
+      await openRailMenu('second look')
+      await sleep(250)
+      const seen = await readTabMenu()
+      const overflowX = await window.webContents.executeJavaScript(
+        'document.documentElement.scrollWidth - window.innerWidth',
+      )
+      await saveFrame(join(captureDir, `app-tab-menu-${label}.png`), await rendererScreenshot())
+      frames += 1
+      console.log(`[bench] tab-menu-${label} ` + JSON.stringify({ ...seen, overflowX }))
+      if (!seen.inside) throw new Error(`the tab menu left the window at ${label}%`)
+      if (overflowX > 0) throw new Error(`the rail scrolls sideways at ${label}%`)
+      await assertPlainSurface(`the tab menu at ${label}%`)
+    }
+    window.webContents.setZoomFactor(1)
+    await sleep(400)
+
+    // Rename, through the menu and the sheet it opens.
+    await dismissTabMenu()
+    await openRailMenu('second look')
+    await window.webContents.executeJavaScript(
+      "document.querySelector('.tab-menu-item[data-action=\"rename\"]').click()",
+    )
+    for (let waited = 0; waited < 60; waited += 1) {
+      if (await window.webContents.executeJavaScript("document.getElementById('rename-dialog').open")) break
+      await sleep(100)
+    }
+    const renameSheet = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => JSON.stringify({
+        open: document.getElementById('rename-dialog').open,
+        title: document.getElementById('rename-dialog-title').textContent,
+        note: document.getElementById('rename-note').textContent,
+        label: document.getElementById('rename-label').textContent,
+        prefilled: document.getElementById('rename-input').value,
+        confirm: document.getElementById('rename-confirm').textContent,
+      }))()`),
+    )
+    console.log('[bench] rename-sheet ' + JSON.stringify(renameSheet))
+    if (!renameSheet.open) throw new Error('Rename… opened no sheet')
+    if (renameSheet.title !== 'Rename tab') throw new Error('the sheet does not say what it will do: ' + renameSheet.title)
+    if (renameSheet.prefilled !== 'second look') throw new Error('the sheet did not offer the name the tab has')
+    if (renameSheet.confirm !== 'Rename') throw new Error('the sheet\u2019s button does not say Rename: ' + renameSheet.confirm)
+    await assertPlainSurface('the rename sheet')
+    await window.webContents.executeJavaScript(`(() => {
+      const input = document.getElementById('rename-input')
+      input.value = 'second look renamed'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      document.getElementById('rename-confirm').click()
+      return true
+    })()`)
+    const renamedStatus = await waitStatus(/^Renamed /, 'renaming a tab')
+    const renamedNames = await railNames()
+    const renamedTitle = await window.webContents.executeJavaScript(
+      "document.getElementById('view-title').textContent",
+    )
+    console.log(
+      '[bench] tab-renamed ' +
+        JSON.stringify({ status: renamedStatus.status, names: renamedNames, title: renamedTitle }),
+    )
+    if (!renamedNames.includes('second look renamed')) throw new Error('the rail kept the old name: ' + renamedNames)
+    if (renamedNames.includes('second look')) throw new Error('the rail shows both names: ' + renamedNames)
+    if (renamedTitle !== 'drift over time') {
+      throw new Error('renaming another tab moved the drawing: ' + renamedTitle)
+    }
+    if (!existsSync(join(closedProject, 'views', 'second-look-renamed.json'))) {
+      throw new Error('the renamed tab has no file under its new name')
+    }
+    if (existsSync(join(closedProject, 'views', 'second-look.json'))) {
+      throw new Error('the renamed tab left its old file behind')
+    }
+
+    // A tab that comes into being can be taken back: the bar offers it, Ctrl+Z closes it through the
+    // same close path, and the redo restores it from the archive that close left.
+    await window.webContents.executeJavaScript("document.getElementById('new-tab').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      if (await window.webContents.executeJavaScript("document.getElementById('tab-dialog').open")) break
+      await sleep(100)
+    }
+    await window.webContents.executeJavaScript(`(() => {
+      const name = document.getElementById('tab-name')
+      name.value = 'third look'
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(200)
+    await window.webContents.executeJavaScript("document.getElementById('tab-create').click()")
+    const madeTab = await waitStatus(/^Created the tab/, 'creating a third tab')
+    const madeUndo = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const button = document.getElementById('entry-undo')
+        return JSON.stringify({ label: button.textContent, title: button.title, disabled: button.disabled })
+      })()`),
+    )
+    console.log(
+      '[bench] tab-created ' +
+        JSON.stringify({ status: madeTab.status, tabs: madeTab.tabs, undo: madeUndo }),
+    )
+    if (madeUndo.disabled || madeUndo.label !== 'Undo new tab') {
+      throw new Error('creating a tab offers no way to take it back: ' + JSON.stringify(madeUndo))
+    }
+    if (madeUndo.title !== 'Undo the tab created here (Ctrl+Z in an empty field)') {
+      throw new Error('the tab-creation tooltip does not name the act: ' + madeUndo.title)
+    }
+
+    await focusField(0)
+    pressKey('Z', ['control'])
+    const unmadeTab = await waitStatus(/^Closed /, 'undoing the creation of a tab')
+    const afterUnmade = JSON.parse(await entryState())
+    const unmadeAction = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const button = document.querySelector('#entry-status .status-action')
+        const undo = document.getElementById('entry-undo')
+        return JSON.stringify({
+          action: button ? button.textContent : null,
+          title: button ? button.title : null,
+          undo: undo.textContent,
+        })
+      })()`),
+    )
+    const unmadeArchives = (await readdir(join(closedProject, 'views', '.trash'))).filter((name) =>
+      name.startsWith('third-look-'),
+    )
+    console.log(
+      '[bench] tab-creation-undone ' +
+        JSON.stringify({
+          status: unmadeTab.status,
+          tabs: afterUnmade.tabs,
+          archives: unmadeArchives.length,
+          ...unmadeAction,
+        }),
+    )
+    if (afterUnmade.tabs !== 2) throw new Error('undoing the creation left the tab in the rail: ' + afterUnmade.tabs)
+    if (unmadeArchives.length !== 1) throw new Error('undoing the creation left no archive to redo from')
+    // One button for the one way back: the redo names the tab act, and the status does not also
+    // offer a second control for the same restoration.
+    if (unmadeAction.action !== 'Redo new tab') {
+      throw new Error('undoing a creation offered no way back: ' + unmadeAction.action)
+    }
+    if (unmadeAction.title !== 'Redo the tab created here (Ctrl+Shift+Z or Ctrl+Y in an empty field)') {
+      throw new Error('the redo tooltip does not name the tab act: ' + unmadeAction.title)
+    }
+    if (unmadeAction.undo !== 'Undo') {
+      throw new Error('the bar still offers an undo after taking the tab back: ' + unmadeAction.undo)
+    }
+    await saveFrame(join(captureDir, 'app-tab-creation-undone.png'), await rendererScreenshot())
+    frames += 1
+
+    pressKey('Z', ['control', 'shift'])
+    const remadeTab = await waitStatus(/^Reopened /, 'redoing the creation of a tab')
+    const remadeTitle = await window.webContents.executeJavaScript(
+      "document.getElementById('view-title').textContent",
+    )
+    console.log(
+      '[bench] tab-creation-redone ' +
+        JSON.stringify({ status: remadeTab.status, tabs: remadeTab.tabs, title: remadeTitle }),
+    )
+    if (remadeTitle !== 'third look') throw new Error('the redo restored a different tab: ' + remadeTitle)
+    if (remadeTab.tabs !== 3) throw new Error('the redone tab is not in the rail: ' + remadeTab.tabs)
+    if (!existsSync(join(closedProject, 'views', 'third-look.json'))) {
+      throw new Error('the redone tab wrote no file')
+    }
+
+    // Duplicate it. The copy opens, is a tab of its own, and closes without taking the original with it.
+    await openRailMenu('third look')
+    await window.webContents.executeJavaScript(
+      "document.querySelector('.tab-menu-item[data-action=\"duplicate\"]').click()",
+    )
+    for (let waited = 0; waited < 60; waited += 1) {
+      if (await window.webContents.executeJavaScript("document.getElementById('rename-dialog').open")) break
+      await sleep(100)
+    }
+    const duplicateSheet = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => JSON.stringify({
+        title: document.getElementById('rename-dialog-title').textContent,
+        note: document.getElementById('rename-note').textContent,
+        prefilled: document.getElementById('rename-input').value,
+        confirm: document.getElementById('rename-confirm').textContent,
+      }))()`),
+    )
+    console.log('[bench] duplicate-sheet ' + JSON.stringify(duplicateSheet))
+    if (duplicateSheet.title !== 'Duplicate tab') throw new Error('the copy sheet is titled ' + duplicateSheet.title)
+    if (duplicateSheet.prefilled !== 'third look copy') {
+      throw new Error('the copy sheet did not suggest a free name: ' + duplicateSheet.prefilled)
+    }
+    if (duplicateSheet.confirm !== 'Create copy') {
+      throw new Error('the copy sheet\u2019s button says ' + duplicateSheet.confirm)
+    }
+    await assertPlainSurface('the copy sheet')
+    // The sheet at each scaling, measured where it stands: a wide name field or a button pushed off
+    // the dialog is a failure at the size it broke at.
+    for (const [label, factor] of [
+      ['100', 1],
+      ['125', 1.25],
+      ['150', 1.5],
+    ]) {
+      window.webContents.setZoomFactor(factor)
+      await sleep(500)
+      const box = JSON.parse(
+        await window.webContents.executeJavaScript(`(() => {
+          const dialog = document.getElementById('rename-dialog')
+          const rect = dialog.getBoundingClientRect()
+          const field = document.getElementById('rename-input')
+          const confirm = document.getElementById('rename-confirm')
+          const bits = [field, confirm].map((element) => element.getBoundingClientRect())
+          return JSON.stringify({
+            inside: rect.left >= 0 && rect.top >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight,
+            controlsInside: bits.every((b) => b.left >= rect.left - 1 && b.right <= rect.right + 1),
+            overflowX: document.documentElement.scrollWidth - window.innerWidth,
+          })
+        })()`),
+      )
+      await saveFrame(join(captureDir, `app-tab-sheet-${label}.png`), await rendererScreenshot())
+      frames += 1
+      console.log(`[bench] tab-sheet-${label} ` + JSON.stringify(box))
+      if (!box.inside) throw new Error(`the name sheet left the window at ${label}%`)
+      if (!box.controlsInside) throw new Error(`the name sheet clips its controls at ${label}%`)
+      if (box.overflowX > 0) throw new Error(`the window scrolls sideways at ${label}%`)
+    }
+    window.webContents.setZoomFactor(1)
+    await sleep(400)
+    await window.webContents.executeJavaScript("document.getElementById('rename-confirm').click()")
+    const copiedStatus = await waitStatus(/^Copied /, 'copying a tab')
+    const copyTitle = await window.webContents.executeJavaScript(
+      "document.getElementById('view-title').textContent",
+    )
+    const copiedNames = await railNames()
+    console.log(
+      '[bench] tab-copied ' +
+        JSON.stringify({ status: copiedStatus.status, title: copyTitle, names: copiedNames }),
+    )
+    if (copyTitle !== 'third look copy') throw new Error('the copy did not open: ' + copyTitle)
+    if (copiedNames.length !== 4) throw new Error('the copy is not in the rail: ' + JSON.stringify(copiedNames))
+    if (!existsSync(join(closedProject, 'views', 'third-look-copy.json'))) {
+      throw new Error('the copy wrote no file')
+    }
+
+    // Close the original from its own row while the copy is the drawing on screen: a background
+    // tab's close changes the rail and nothing else.
+    await openRailMenu('third look')
+    await window.webContents.executeJavaScript(
+      "document.querySelector('.tab-menu-item[data-action=\"close\"]').click()",
+    )
+    const closedBackground = await waitStatus(/^Closed /, 'closing a background tab from its row')
+    const afterBackground = JSON.parse(await entryState())
+    const stillDrawn = await window.webContents.executeJavaScript(
+      "document.getElementById('view-title').textContent",
+    )
+    console.log(
+      '[bench] tab-closed-in-background ' +
+        JSON.stringify({
+          status: closedBackground.status,
+          tabs: afterBackground.tabs,
+          drawn: stillDrawn,
+          names: await railNames(),
+        }),
+    )
+    if (stillDrawn !== 'third look copy') {
+      throw new Error('closing a background tab moved the drawing: ' + stillDrawn)
+    }
+    if (afterBackground.tabs !== 3) throw new Error('closing one background tab removed the wrong number')
+
+    // Rename the tab that is on screen: the drawing is the same drawing under another name, so the
+    // header and the file move with it and nothing is redrawn into a different tab.
+    const titleBeforeOpenRename = await window.webContents.executeJavaScript(
+      "document.getElementById('view-title').textContent",
+    )
+    const marksBeforeOpenRename = await window.webContents.executeJavaScript(
+      "Array.prototype.reduce.call(document.querySelectorAll('.panel-chart'), (total, host) => total + Number(host.dataset.marks || 0), 0)",
+    )
+    const metaBeforeOpenRename = await window.webContents.executeJavaScript(
+      "document.getElementById('view-meta').textContent",
+    )
+    await openRailMenu('third look copy')
+    await window.webContents.executeJavaScript(
+      "document.querySelector('.tab-menu-item[data-action=\"rename\"]').click()",
+    )
+    for (let waited = 0; waited < 60; waited += 1) {
+      if (await window.webContents.executeJavaScript("document.getElementById('rename-dialog').open")) break
+      await sleep(100)
+    }
+    await window.webContents.executeJavaScript(`(() => {
+      const input = document.getElementById('rename-input')
+      input.value = 'third copy'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      document.getElementById('rename-confirm').click()
+      return true
+    })()`)
+    const renamedOpen = await waitStatus(/^Renamed /, 'renaming the tab on screen')
+    const openRename = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => JSON.stringify({
+        title: document.getElementById('view-title').textContent,
+        meta: document.getElementById('view-meta').textContent,
+        marks: Array.prototype.reduce.call(document.querySelectorAll('.panel-chart'), (total, host) => total + Number(host.dataset.marks || 0), 0),
+        current: (() => {
+          const row = document.querySelector('#tabs .item[aria-current=\"true\"]')
+          return row ? row.querySelector('.item-name').textContent : null
+        })(),
+      }))()`),
+    )
+    console.log(
+      '[bench] tab-renamed-open ' +
+        JSON.stringify({
+          status: renamedOpen.status,
+          before: { title: titleBeforeOpenRename, marks: marksBeforeOpenRename },
+          ...openRename,
+        }),
+    )
+    if (openRename.title !== 'third copy') {
+      throw new Error('renaming the drawn tab did not rename the header: ' + openRename.title)
+    }
+    if (openRename.current !== 'third copy') {
+      throw new Error('the rail does not mark the renamed tab as the open one: ' + openRename.current)
+    }
+    // The same drawing, not a rebuilt one: the same facts line and the same marks on the canvas.
+    if (metaBeforeOpenRename === '' || openRename.meta !== metaBeforeOpenRename) {
+      throw new Error(
+        'renaming the drawn tab changed its facts: "' + metaBeforeOpenRename + '" -> "' + openRename.meta + '"',
+      )
+    }
+    if (openRename.marks !== marksBeforeOpenRename || openRename.marks === 0) {
+      throw new Error(
+        'renaming the drawn tab redrew it differently: ' +
+          marksBeforeOpenRename +
+          ' -> ' +
+          openRename.marks,
+      )
+    }
+    if (!existsSync(join(closedProject, 'views', 'third-copy.json'))) {
+      throw new Error('the renamed drawn tab has no file under its new name')
+    }
+
+    // Back to the two tabs the relaunch steps expect, under the name they expect.
+    await window.webContents.executeJavaScript(`(() => {
+      const row = Array.prototype.find.call(document.querySelectorAll('#tabs li'), (item) => {
+        const label = item.querySelector('.item-name')
+        return label && label.textContent === 'second look renamed'
+      })
+      row.querySelector('.tab-more').click()
+      return true
+    })()`)
+    await sleep(200)
+    await window.webContents.executeJavaScript(
+      "document.querySelector('.tab-menu-item[data-action=\"rename\"]').click()",
+    )
+    for (let waited = 0; waited < 60; waited += 1) {
+      if (await window.webContents.executeJavaScript("document.getElementById('rename-dialog').open")) break
+      await sleep(100)
+    }
+    await window.webContents.executeJavaScript(`(() => {
+      const input = document.getElementById('rename-input')
+      input.value = 'second look'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      document.getElementById('rename-confirm').click()
+      return true
+    })()`)
+    await waitStatus(/^Renamed /, 'renaming the tab back')
+    // And the drawn tab leaves from its own row too: the window moves to the tab beside it.
+    await openRailMenu('third copy')
+    await window.webContents.executeJavaScript(
+      "document.querySelector('.tab-menu-item[data-action=\"close\"]').click()",
+    )
+    const closedThird = await waitStatus(/^Closed /, 'closing the drawn tab from its row')
+    await window.webContents.executeJavaScript(`(() => {
+      const item = Array.prototype.find.call(document.querySelectorAll('#tabs .item'), (button) =>
+        button.textContent.indexOf('drift over time') !== -1,
+      )
+      item.click()
+      return true
+    })()`)
+    for (let waited = 0; waited < 100; waited += 1) {
+      if ((await window.webContents.executeJavaScript("document.getElementById('view-title').textContent")) === 'drift over time') break
+      await sleep(100)
+    }
+    const settledNames = await railNames()
+    console.log(
+      '[bench] tab-acts-settled ' +
+        JSON.stringify({
+          status: closedThird.status,
+          tabs: closedThird.tabs,
+          names: settledNames,
+          eventsWritten: (await logCount(closedProject)) - eventsBeforeTabActs,
+        }),
+    )
+    if (settledNames.length !== 2) throw new Error('the tab acts did not settle to two tabs: ' + settledNames)
+    if ((await logCount(closedProject)) !== eventsBeforeTabActs) {
+      throw new Error('renaming, copying or closing a tab wrote an event')
+    }
+    // The relaunch proof that follows starts from a project whose trash holds exactly the tab it
+    // closes. This section closed several (it is a scratch copy of the fixture), and clearing them
+    // keeps that proof about its own close rather than about the ones before it.
+    for (const archive of await readdir(join(closedProject, 'views', '.trash'))) {
+      await rm(join(closedProject, 'views', '.trash', archive), { force: true })
     }
 
     // Quit, and start again. The tab is closed first, so the relaunch has something the earlier

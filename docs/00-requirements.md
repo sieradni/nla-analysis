@@ -180,7 +180,11 @@ same artifact. A plain plot may name its fields; absent `x_field`/`y_field` mean
 and `y`.
 
 **Implemented** ([ADR 0004](adr/0004-views-and-projects.md)): one file per tab in `views/<slug>.json`,
-written by `bench view new|add|save` and read by `bench view show|render`. A panel stores the question
+written by `bench view new|add|save` and read by `bench view show|render`. A tab can also be removed,
+renamed and copied — `bench view rm|rename|duplicate`, and the menu on a tab's row in the window —
+where `rm` moves the file to `views/.trash/` rather than deleting it, so the same archive the window
+reopens is the one the CLI closed; renaming keeps the panels and moves the file, and a copy is a tab of
+its own from then on. A panel stores the question
 (`dataset`, `version`, `query`, `x_field`/`y_field`, `recipe`, `params`) *and* the answer (`chart`,
 `verdict`, `n`), plus
 fingerprints of the rows and recipe it consumed — so a saved tab renders without Python, and still says
@@ -263,7 +267,10 @@ import writes a new version holding the replaced version's rows. Closing a tab i
 rather than by the tab's history — **Close tab** moves the file to `views/.trash/` and `Ctrl+Shift+T`
 moves it back, with the undo it had if this window closed it, and still after a relaunch because the
 list comes from that folder — because a close is a window act the log never hears about. What is still
-not built is undoing a tab create (roadmap U7). Text fields keep their own undo while focused.
+built since is undoing a tab create (2026-10-21): the tab a person makes, from the sheet or by copying
+one, is the fifth kind of act, and its undo goes through that same close path — the bar reads **Undo
+new tab**, the file waits in the trash, and the status offers **Redo new tab** to move it home. Text
+fields keep their own undo while focused.
 
 **Buttons, not commands (decided 2026-10-20):** every action a person needs is reachable from the
 window. A CLI command may appear only inside a collapsed "for agents" detail, never as the only way
