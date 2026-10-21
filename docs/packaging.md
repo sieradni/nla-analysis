@@ -129,7 +129,8 @@ that made them. The frame is in the contact sheet with the others.
 
 This is separate from `pnpm verify`: rebuilding and launching a 369 MB artifact on every unit-test run
 would make the suite useless as a quick check. `pnpm verify` stays the code gate; this is the packaging
-gate.
+gate. The check launches a real window that takes focus, so run it only when the machine is free —
+never as an unattended step (direction 2026-10-21).
 
 ## Out of scope, on purpose
 

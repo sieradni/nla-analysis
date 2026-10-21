@@ -13,6 +13,18 @@ of per-frame verdicts, then listed what the window gets wrong for a person. Thos
 create is **§6 below**, and it comes before the remaining finish plan except where a step is its
 dependency. Nothing in that backlog waits on the user.
 
+**Recorded 2026-10-21:** closing a tab is now undoable across a relaunch — the closed-tab list is the
+project's `views/.trash/`, read when a project opens (U7) — and two gaps were named rather than
+guessed at: the acts inside a reopened tab do not cross the process (the bar is empty, and the window
+does not yet say so), and a date/time field is still the one value a person has to hand-type (**U29**).
+
+**Direction 2026-10-21 — reviews are advisory.** The UI review loop is on hold: a change is done when
+the code is green, the states behave and the work is as good as it can be, not when a frame is
+approved. The user reports what is wrong from actual use, and each report becomes a row here. No pass
+runs `app:capture`, `app:measure` or `app:package:check` unless the user asks or the machine is free:
+each opens a real window that takes focus and interrupts them. The seven rows that were awaiting review
+are closed by this direction, and nothing in this file waits on a verdict again.
+
 Open work only; completed steps stay in the
 [implementation plan](02-implementation-plan.md) progress table. Requirements remain the authority on
 *what* ([00-requirements.md](00-requirements.md)); this file is the live, itemised answer to "what is
@@ -26,7 +38,9 @@ missing, and what would closing it look like".
 - **Window:** project and tab switching, point entry, correction by selecting a mark, undo, the
   import sheet, version diff, field-pair tabs, and live refresh from another writer are built. Marks
   are painted on a canvas between two halves of the core's SVG, so a 10k rescale is inside the 50 ms
-  re-render budget.- **Shipping:** `pnpm app:package` writes a portable Windows build with its own CLI; the release
+  re-render budget. A tab closes to the project's trash and comes back with `Ctrl+Shift+T`, including
+  in a window started after the one that closed it.
+- **Shipping:** `pnpm app:package` writes a portable Windows build with its own CLI; the release
   workflow is green through artifact upload, but no `v*` tag has been cut.
 - **User surface:** specified on 2026-10-20 ([ADR 0015](adr/0015-user-surface.md),
   [05-user-surface.md](05-user-surface.md)) and **partly built**. The hover, the entry-bar statuses,
@@ -37,13 +51,16 @@ missing, and what would closing it look like".
   a new version that holds the rows it replaced. Tab management, the versions panel, the import
   wording, display labels, tab undo and the resizable rail are not built. §6 is the list.
 - **Not built:** the rows below — tab/project management, the versions panel, entry extras, the
-  shape flow, a resizable rail, the rest of the user-surface pass, and the delivery items.
+  shape flow, a resizable rail, the rest of the user-surface pass, and the delivery items. A date/time
+  field is still a plain text input, so recording a point on a shape that designates its own time means
+  hand-typing an ISO timestamp and being refused if the clock is mistyped; that is U29.
 
 ## Verified on this tree (2026-10-19)
 
 Both measurements were run against the same working tree, on the machine that built it. Re-run them
 before trusting a number in a later session; a stale measurement is how the canvas verdict nearly
-rested on the wrong figure.
+rested on the wrong figure. Both harnesses open a real window and bring it to the front: run them when
+the machine is free, never as an unattended step (direction 2026-10-21). `pnpm verify` opens no window.
 
 | what | command | observed | budget |
 |---|---|---|---|
@@ -87,8 +104,8 @@ limit of each:
 2. The slice that closes a row **updates this file in the same commit**, moving the row to `done` and
    naming what now proves it. [AGENTS.md](../AGENTS.md) makes that part of the definition of done.
 3. `done` still means the plan's gates: the behaviour through the interface a user uses, a test that
-   would fail if it regressed, `bench check` green, and a screenshot at 100/125/150% for anything
-   visual.
+   would fail if it regressed, `bench check` green. A frame at 100/125/150% is evidence that a visual
+   step was looked at, not the thing that closes it (direction 2026-10-21).
 4. **Not enforced automatically.** Nothing fails the build when a row goes stale. The only teeth are
    rule 2 and the review at the start of a session. If a generated version is wanted later, the
    progress tables are structured enough to derive one.
@@ -103,12 +120,13 @@ limit of each:
 | hover tooltip: values only | chart hover | **done 2026-10-20** | `copy.tooltipLines` composes the readout: values with the axis label and unit, the time only when it is not an axis, and no id, dataset, shape, recipe or version. `app-interaction.png` reads `x 3 · y 8.09`; `tests/window-copy.test.mjs`, and `pnpm app:capture` refuses log vocabulary in the hover |
 | wheel zoom, keyboard pan, hover ring | chart | done | `app-interaction.png` |
 | add a point from the entry bar | entry bar | done | `app-entry.png`; measured 22.2–25.8 ms median (2026-10-19) |
-| undo the last point (`Ctrl+Z` in an empty bar) | entry bar | done | `app-undo.png`; the same button names whichever act is later — the last added point, removal or correction — and the status offers the matching redo (U4/U5/U6); tab undo remains U7 |
+| undo the last point (`Ctrl+Z` in an empty bar) | entry bar | done | `app-undo.png`; the same button names whichever act is later — the last added point, removal or correction — and the status offers the matching redo (U4/U5/U6); a closed tab is reopened by the status's own **Undo tab close** or `Ctrl+Shift+T`, outside that history (U7) |
 | correct a point by clicking its mark | chart selection | done | `app-corrected.png` |
 | import CSV/TSV/JSONL with a mapping sheet and a version diff | `Import…` | done | `app-import.png`, `app-version-diff.png` |
 | **remove any point, from its menu, with undo** | point menu, `app/renderer/entry.js` | **done 2026-10-20** | right-click or Shift+F10 opens **Copy details / Correct… / Remove**; Remove is one click with no reason prompt, the bar's single undo is labelled **Undo removal**, and undo writes `point_restored` naming the retraction it reverses ([ADR 0016](adr/0016-point-restore.md)) — the window passes that id back, so a later removal is never reversed under an older act's name. Evidence: `tests/binder.test.ts` (a restore event), `tests/workspace.test.ts` (a named removal, and a stale one refused), `tests/shell.test.ts` "brings a removed point back as the same record", `tests/cli.test.ts` (retract → restore → a second restore refused), `pnpm app:capture` (right-click, clipboard, remove with focus back on the chart, undo, redo, keyboard, a menu closed by a repaint, a kept recipe panel that offers no menu, a plain refusal frame), `app-point-menu.png`, `app-point-menu-removed.png`. U2, U5, U6 |
 | browse dataset versions and diffs | import sheet | partial | `bench dataset list\versions\diff` exists; no panel lists versions or shows a diff outside an import |
-| rename / delete / duplicate a tab | — | missing | no `bench view rm` either. U7 moves a deleted tab to `views/.trash/` and offers Undo, so the question is not lost |
+| close a tab, and reopen it with `Ctrl+Shift+T` | tab header, `app/renderer/closed-tabs.js` | **done 2026-10-21** | **Close tab** takes the file to `views/.trash/`, the status offers **Undo tab close**, and `Ctrl+Shift+T` moves that archive back — same drawing, same counts, same undo when this window closed it, and it still works after a relaunch because the list is the project's trash — with nothing written to the log. Frames `app-tab-closed-100/125/150.png`, `app-tab-reopened-100/125/150.png`, `app-tab-reopened-relaunch.png` |
+| rename / duplicate a tab | — | missing | no `bench view rm` either (U7's remaining half) |
 | rename a project, or forget it from recents | — | missing | registry has no `forget`; deletion is not offered anywhere and should not be |
 | extend a shape / designate its time field / run a migration | — | partial | core/CLI paths for extension and designation are done ([ADR 0013](adr/0013-shape-extension.md), [ADR 0014](adr/0014-observation-time.md)); the window has no flow yet |
 | record a decision | — | missing | CLI `bench decide` only |
@@ -118,14 +136,16 @@ limit of each:
 | one column below 980 px of viewport | `.grid` media query (`app.css`) | done | two panels side by side stop being legible at 150% (~170 px each); below 980 px the grid is one column and 150% draws a 519 px panel, while 125% (~1013 px) keeps its two. `pnpm app:capture` computes the column count per scaling and throws when it disagrees with the viewport |
 | canvas renderer for a rescale | chart painter | **done** | `src/core/chart.ts` splits the drawing and packs the marks; `app/renderer/chart.js` paints them on a canvas. 10k rescale **35.1–47.4 ms** (was 147.0–173.6); `pnpm app:measure` gates on 50 ms and refuses a missing or patched redraw sample, and `pnpm app:capture` asserts the canvas covers the drawing and has 3,589 painted pixels. plan 5.6 |
 
-### The visual gate was closed by direction on 2026-10-20
+### Review is advisory, not a gate (direction 2026-10-21)
 
-`docs/ui-review-log.md` has **25 rows**; 24 were `pending` until the user reviewed the window and
-closed the batch by stating the direction, not by approving frames one at a time. The log quotes the
-direction and records what each row is now closed against. This is a decision about the direction,
-**not** a claim that every pixel was inspected, and it is not a licence to skip the frames: a new
-visual change still produces a capture and a row, under the readable protocol in
-[05-user-surface.md](05-user-surface.md) §7.
+`docs/ui-review-log.md` has **32 rows**. The batch of **25** reviewed on 2026-10-20 was closed by the
+user stating a direction rather than approving frames one at a time; the **7** added since — plain
+words, a first run, the drawing's evidence, the point menu, a correction's undo, a closed tab
+(including after a relaunch) and an undone import — are closed by the 2026-10-21 direction, which puts
+the whole loop on hold: the user reports defects from use, and a report becomes a row here. Frames are
+still welcome when the machine is free and still follow the readable protocol in
+[05-user-surface.md](05-user-surface.md) §7, but no step waits for one, and none of this is a claim
+that every pixel was inspected.
 
 The user also found defects the frames did not make obvious — ids in tooltips, duplicated facts, CLI
 instructions in empty states, `New…`/`Open…` spacing, unreadable number formatting. Those are in §6,
@@ -143,7 +163,7 @@ row, and that is said in the row.
 
 | # | slice | size | done means | depends on |
 |---|---|---|---|---|
-| 0 | **Land the tree; close the review gate** | S | **done 2026-10-20** — committed in `cb681b2` plus the docs commit and `a3888b4`; `pnpm verify` is green on the tree (264 tests). It landed as **one** code commit, not slices: `src/core/chart.ts`, the panels moving out of `views.ts`, `app/core.entry.ts` and the renderer share a compile boundary, so a split leaves every intermediate commit failing `tsc` (probe: the new chart alone at the old tree → `app/core.entry.ts(475)` type errors). The review gate was closed **by direction** on 2026-10-20 — 25 rows, no per-frame verdicts, quoted in the log | — |
+| 0 | **Land the tree; close the review gate** | S | **done 2026-10-20** — committed in `cb681b2` plus the docs commit and `a3888b4`; `pnpm verify` is green on the tree (264 tests). It landed as **one** code commit, not slices: `src/core/chart.ts`, the panels moving out of `views.ts`, `app/core.entry.ts` and the renderer share a compile boundary, so a split leaves every intermediate commit failing `tsc` (probe: the new chart alone at the old tree → `app/core.entry.ts(475)` type errors). The review gate was closed **by direction** on 2026-10-20 — 25 rows, no per-frame verdicts, quoted in the log; since 2026-10-21 review is advisory and blocks nothing | — |
 | 1 | **Canvas renderer** | M | **done 2026-10-19** — a rescale measures 35.1–47.4 ms at 10k (was 147–174), `pnpm app:measure` exits non-zero over 50 ms and when no full-redraw sample arrived or a submit was programmatic, and `pnpm app:capture` checks the canvas's coverage and painted pixels | — |
 | 2 | **Resizable rail** | S | drag handle plus `ArrowLeft`/`ArrowRight` when focused; width in `$BENCH_HOME/ui.json`, restored on launch; no reflow jitter; three-scaling screenshot | U19 |
 | 3 | **Point actions** | M | **done 2026-10-20** — right-click and Shift+F10 (on the selected mark) open **Copy details / Correct… / Remove**; Copy writes one line, values and time first and the record id last; Remove is one action with no reason prompt and one undo button in the bar, labelled with the act it reverses; undo writes `point_restored`, so the same id, values, time and version come back, and redo removes it again. A retracted point leaves the plot panels, the count and every action that names it; a recipe panel that cannot rerun keeps the drawing it was saved with, says it is out of date, and stops offering its marks. The earlier wording here said a removed point should stay *visible* as retracted, which contradicts U6's "the mark disappears"; U6 wins, and the log keeps the record. Evidence: `app-point-menu.png`, the capture's menu/clipboard/remove/undo/redo/keyboard checks, `tests/window-copy.test.mjs`, `tests/binder.test.ts`, `tests/workspace.test.ts`, `tests/shell.test.ts`, `tests/cli.test.ts` | U2, U5, U6 |
@@ -157,7 +177,7 @@ row, and that is said in the row.
 ### How to check this plan
 
 ```bash
-pnpm verify                 # typecheck, bundle the core and CLI, 286 tests
+pnpm verify                 # typecheck, bundle the core and CLI, 345 tests in 24 files
 pnpm app:measure            # real window at 10k; fails over either budget, a missing or patched
                             # redraw sample, or a non-keystroke submit
 pnpm app:package            # build the artifact from this tree
@@ -165,7 +185,9 @@ pnpm app:package:check      # launch it, type into a custom shape, then run its 
                             # removed from PATH
 ```
 
-`pnpm app:measure` needs a display and a focused OS window. `pnpm app:package:check` compares the
+`pnpm app:measure` needs a display and a focused OS window, so it — and `app:capture` and
+`app:package:check` — must not run while the user is using the machine (direction 2026-10-21): each
+brings a window to the front. `pnpm verify` is the always-safe gate. `pnpm app:package:check` compares the
 run against the tracked `docs/ui-review/app-packaged.json` and fails on any changed fact; pass
 `--record` once, deliberately, to accept a new report. The frame it writes is git-ignored, so a plain
 run leaves the tree clean and the check can be a CI step as it stands. A run that prints no report
@@ -218,6 +240,10 @@ Creating a custom-shaped project (`QP Stats`, 2026-10-19) also found gaps that a
 | code signing | missing | **decided 2026-10-20: ship unsigned.** SmartScreen will warn on first launch; `docs/packaging.md` says so, and a certificate is a later decision on its own, not a blocker for the portable build |
 | installer / auto-update | missing | portable zip only; ADR 0009 records that choice |
 | Python not bundled | by design for now | recipe source ships; `run fit`/`drift` need a `recipes/.venv` or numpy/scipy on PATH |
+| renderer module split | missing | `app.js` now carries close, reopen and the trash load on top of wiring, and `entry.js` is ~1,070 lines; the split AGENTS.md describes (the act table, a closed-tab controller) is owed before the window grows again |
+| perf receipt re-measured | stale | the 2026-10-19 figures predate two window passes, and the 2026-10-20 run missed the 50 ms re-render budget on a busy machine (the tree before the change missed it too). Run `pnpm app:measure` when the window will not interrupt the user, and before any release claim |
+| documentation polish | partial | the plan still carries pre-window text (Tauri, `src/ui`, `bench/perf.ts`) and says at the top that it is history; the review log's oldest rows use internal vocabulary. Neither is a correctness risk — one pass folding them into a single historical section is planned when the user-surface list is smaller |
+| a corrupt closed-tab archive is silent | missing | `listClosedViews` reports files it could not read, but no surface shows them, so a damaged archive simply never appears; say so once in the no-tabs state rather than letting a tab vanish |
 
 ## 5. Decisions closed on 2026-10-20
 
@@ -240,16 +266,20 @@ None of them is waiting on the user, and none should be reopened without changin
 | 11 | version `0.1.0` | cut only after README and LICENSE exist | finish plan 8 |
 | 12 | the receipt behind `--record` | `--record` is the only writer; a plain run compares and leaves the tree clean | done (`a3888b4`) |
 | 13 | `label`/`unit` as a declaration-only version | `label` yes, as a recorded declaration-only version; a unit change is still refused | U28 |
-| 14 | frames without verdicts | closed by direction on 2026-10-20; the log quotes the direction and the new protocol | U25, U26 |
+| 14 | frames without verdicts | closed by direction on 2026-10-20; **2026-10-21: reviews are advisory, so no frame waits on a verdict** | U25, U26 |
 
 ## 6. User surface — the backlog
 
 The details, the wording the user used, and the acceptance test for each row are in
 [05-user-surface.md](05-user-surface.md). This table is the order of work. Rows U1, U3, U10, U12,
 U14 and U22 landed on 2026-10-20 through `app/renderer/copy.js`; **U2, U5 and U6** landed with the
-point menu and the restore event; U4 now covers add, remove, correct and import in both directions,
-with tab delete (U7) still open; U13, U17, U18 and U21 are partly built; the rest is not started, and
-nothing here is waiting on a decision.
+point menu and the restore event; **U7's close half** landed on 2026-10-21 — a closed tab is one
+`Ctrl+Shift+T` away, and `bench view rm`, rename and duplicate are what is left of it; U4 now covers
+add, remove, correct and import in both directions; U13, U17, U18 and U21 are partly built; the rest is
+not started, and nothing here is waiting on a decision. **U29** is new on 2026-10-21: a date/time field
+can be filled with the current moment instead of only accepting a typed timestamp. **U30** plans the
+sentence a tab reopened after a relaunch should say about its empty undo. Review no longer gates any
+of it (direction 2026-10-21).
 
 ### 6.1 A point, and what hovering one says
 
@@ -263,10 +293,11 @@ nothing here is waiting on a decision.
 
 | id | slice | size | done means |
 |---|---|---|---|
-| **U4** | One undo/redo history for the tab | M | **partial 2026-10-21, corrections and imports landed** — one bounded history covers adding, removing and correcting a point, and importing a version, in both directions. `Ctrl+Z` picks the newest act whatever its kind, `Ctrl+Shift+Z`/`Ctrl+Y` redo, the bar's one undo names it (**Undo added point** / **Undo removal** / **Undo correction**) and the status carries the matching redo (**Redo added point** / **Redo removal** / **Redo correction**). Undoing an added point retracts it and redo restores the same record naming that retraction; undoing a correction writes the earlier values as a new `point_corrected`, redo writes the later ones; a removal is reversed by the restore that names the exact retraction, and a stale one is dropped rather than guessed at. A new act clears the redo branch; the stacks hold 50 acts and drop the oldest; each Save is its own act, never merged; a text field keeps its own undo. One reset seam (`state.showView`, the only caller of `resetTabHistory`) drops both stacks on every view change — another tab, another project, a watched redraw, or a tab built from the dialog — so the bar never offers an act against a point the current drawing did not show. One act table in `entry.js` gives every kind its label, tooltip and undo/redo function, and the words come from `copy.js`; neither module keeps a second list of kinds. **An import is a version**: undo calls `Workspace.restoreVersion` with the version it replaced (or the empty dataset before version 1), which appends a new version holding those rows through ordinary retraction, restore and correction events; redo restores the imported version the same way. The bar says **Undo import** / **Reapply import** and the status says what came back; the version number is in the CLI and the log, not the window (ADR 0015). **An import ends only the acts it touched**: the write reports the records it withdrew or rewrote, and only the undo entries naming those leave the stack — an act whose record the new version holds unchanged keeps its place, so type a point, import, undo the import, undo the point works end to end, while an act on a row the file withdrew or rewrote is dropped rather than offered and refused. The report is the write's own (`ImportedTable`'s `touched`, `dataset` and `version`), so a caller cannot omit half of it and mean "touched nothing"; a report the window cannot read ends every act, which is the safe direction, and import acts are judged per dataset. **The strip ends with the row it edits**: the strip is the tab's other memory of a record, so every path that withdraws one ends the edit — an import that withdrew or rewrote the row, undoing the add, redoing a removal, and a Save the core refused because the row had already gone (`correctPoint` refuses a withdrawn point as `missing`, so the correction never lands on a row nothing shows; `endEditFor` in `entry.js` is the one seam every such path calls). **A refusal that cannot be reversed is dropped**: the core's `kind` crosses the IPC boundary in an envelope the bundle builds (`refusalOf`), and `history.js` keeps an act only when the failure was not classified — a record another writer withdrew takes its undo control away, while a locked file leaves the button to try again. Not done: tab delete (U7, separate pass). Evidence: `app/renderer/history.js` (`permanentRefusal`), `app/core.entry.ts` (`refusalOf`), `app/main.js` (`guarded`), `entry.js` (`undoLastAction`/`redoLastAction`, `applyImportVersion`), `import.js` (`noteImport` after the write), `tests/history.test.mjs` (both directions, the branch, the bound, the reset, imports, and an import's kept / dropped / other-dataset / unreadable-report reconciliation), `tests/workspace.test.ts` and `tests/shell.test.ts` "refuses a correction onto a withdrawn row" (the refusal, its `missing` kind across the window's door, and a byte-identical log), `tests/version-restore.test.ts` (rows, empty first version, optional-field exactness), `tests/cli.test.ts` (`dataset restore`, both directions and refusals), `tests/shell.test.ts` (a correction and a version restored through the bundled core), capture's `correction-undo` / `correction-undone` / `correction-redone`, `undo-added` / `redo-added`, `import-undo-ready` / `import-undone` / `import-redone`, `import-keeps` / `import-keeps-undone` / `import-keeps-point-undone` / `import-drops` / `import-drops-strip` / `import-drops-save` / `import-drops-undone` (typing kept across an import and undone after it; a withdrawn typing dropped, with no event written by the next `Ctrl+Z`; the strip opened on the withdrawn row ends with it, and `Enter` writes no correction), `undo-strip` (a strip open on a point, the add undone under it with `Ctrl+Z`, the strip gone and `Enter` writing nothing), `refused-undo` (a record withdrawn under the window, a real `Ctrl+Z`, no event written and the control disabled), the second undo checks with the log read back, `app-correction-undo.png`, `app-import-undone.png` |
+| **U4** | One undo/redo history for the tab | M | **partial 2026-10-21, corrections and imports landed** — one bounded history covers adding, removing and correcting a point, and importing a version, in both directions. `Ctrl+Z` picks the newest act whatever its kind, `Ctrl+Shift+Z`/`Ctrl+Y` redo, the bar's one undo names it (**Undo added point** / **Undo removal** / **Undo correction**) and the status carries the matching redo (**Redo added point** / **Redo removal** / **Redo correction**). Undoing an added point retracts it and redo restores the same record naming that retraction; undoing a correction writes the earlier values as a new `point_corrected`, redo writes the later ones; a removal is reversed by the restore that names the exact retraction, and a stale one is dropped rather than guessed at. A new act clears the redo branch; the stacks hold 50 acts and drop the oldest; each Save is its own act, never merged; a text field keeps its own undo. One reset seam (`state.showView`, the only caller of `resetTabHistory`) drops both stacks on every view change — another tab, another project, a watched redraw, or a tab built from the dialog — so the bar never offers an act against a point the current drawing did not show. One act table in `entry.js` gives every kind its label, tooltip and undo/redo function, and the words come from `copy.js`; neither module keeps a second list of kinds. **An import is a version**: undo calls `Workspace.restoreVersion` with the version it replaced (or the empty dataset before version 1), which appends a new version holding those rows through ordinary retraction, restore and correction events; redo restores the imported version the same way. The bar says **Undo import** / **Reapply import** and the status says what came back; the version number is in the CLI and the log, not the window (ADR 0015). **An import ends only the acts it touched**: the write reports the records it withdrew or rewrote, and only the undo entries naming those leave the stack — an act whose record the new version holds unchanged keeps its place, so type a point, import, undo the import, undo the point works end to end, while an act on a row the file withdrew or rewrote is dropped rather than offered and refused. The report is the write's own (`ImportedTable`'s `touched`, `dataset` and `version`), so a caller cannot omit half of it and mean "touched nothing"; a report the window cannot read ends every act, which is the safe direction, and import acts are judged per dataset. **The strip ends with the row it edits**: the strip is the tab's other memory of a record, so every path that withdraws one ends the edit — an import that withdrew or rewrote the row, undoing the add, redoing a removal, and a Save the core refused because the row had already gone (`correctPoint` refuses a withdrawn point as `missing`, so the correction never lands on a row nothing shows; `endEditFor` in `entry.js` is the one seam every such path calls). **A refusal that cannot be reversed is dropped**: the core's `kind` crosses the IPC boundary in an envelope the bundle builds (`refusalOf`), and `history.js` keeps an act only when the failure was not classified — a record another writer withdrew takes its undo control away, while a locked file leaves the button to try again. Not done: undoing a tab's creation, and `bench view rm` / rename / duplicate (U7, separate pass); a tab that is closed is reopened from the project's trash, deliberately outside this history. Evidence: `app/renderer/history.js` (`permanentRefusal`), `app/core.entry.ts` (`refusalOf`), `app/main.js` (`guarded`), `entry.js` (`undoLastAction`/`redoLastAction`, `applyImportVersion`), `import.js` (`noteImport` after the write), `tests/history.test.mjs` (both directions, the branch, the bound, the reset, imports, and an import's kept / dropped / other-dataset / unreadable-report reconciliation), `tests/workspace.test.ts` and `tests/shell.test.ts` "refuses a correction onto a withdrawn row" (the refusal, its `missing` kind across the window's door, and a byte-identical log), `tests/version-restore.test.ts` (rows, empty first version, optional-field exactness), `tests/cli.test.ts` (`dataset restore`, both directions and refusals), `tests/shell.test.ts` (a correction and a version restored through the bundled core), capture's `correction-undo` / `correction-undone` / `correction-redone`, `undo-added` / `redo-added`, `import-undo-ready` / `import-undone` / `import-redone`, `import-keeps` / `import-keeps-undone` / `import-keeps-point-undone` / `import-drops` / `import-drops-strip` / `import-drops-save` / `import-drops-undone` (typing kept across an import and undone after it; a withdrawn typing dropped, with no event written by the next `Ctrl+Z`; the strip opened on the withdrawn row ends with it, and `Enter` writes no correction), `undo-strip` (a strip open on a point, the add undone under it with `Ctrl+Z`, the strip gone and `Enter` writing nothing), `refused-undo` (a record withdrawn under the window, a real `Ctrl+Z`, no event written and the control disabled), the second undo checks with the log read back, `app-correction-undo.png`, `app-import-undone.png` |
 | **U5** | `point_restored` event | M | **done 2026-10-20** — `point_restored` carries `dataset`, `restores` (the retraction event) and `version`; it repeats no values, so the same id, values, observation time and version come back. The fold applies it only to the retraction in force, counts it in the version it happened in, and `bench check` reports a chain that does not resolve. One event per undo; `Workspace.restorePoint` refuses an active point, and a caller that names a retraction gets that act reversed or a refusal when it is no longer the one in force. Evidence: `src/core/events.ts`, `binder.ts`, `workspace.ts`, `tests/binder.test.ts`, `tests/workspace.test.ts`, `tests/shell.test.ts`, `tests/cli.test.ts`, [ADR 0016](adr/0016-point-restore.md) |
 | **U6** | Remove is one action, no ceremony | S | **done 2026-10-20** — one click in the menu; the status reads `Removed · 14 points left in this tab` and the bar's undo reads **Undo removal**; no reason is asked for and none is recorded (the capture asserts `reason === undefined`); the CLI can still pass one. Evidence: `entry.js` `removePoint`, `copy.status.removed`, capture's `removed` check |
-| **U7** | Tab delete is recoverable | S | moves to `views/.trash/<slug>-<timestamp>.json`; Undo restores the exact file and reopens the tab; no log event; trash is bounded and disposable |
+| **U7** | Tab delete is recoverable | S | **partial 2026-10-21** — **Close tab** moves the file to `views/.trash/<slug>-<timestamp>.json` (last 20 kept, oldest pruned, invisible to `listViews`, ignored by `bench check`) and the window keeps a list of those archives; **Undo tab close** in the status, or `Ctrl+Shift+T` from anywhere including a text field, moves the archive home and reopens it with the same drawing and — when this window was the one that closed it — the same undo. A close is a window act: no event, no confirmation, no entry in the tab's own history, and the list survives a tab switch or a repaint because it lives outside `state.showView` (opening another project refills it — a closed tab belongs to the project it was closed in). **A close outlives the process**: the list is the project's trash, read by `listClosedViews` when a project opens, so a fresh window can reopen what an earlier one closed; the archive is moved, never copied, so a reopen writes no new bytes, and the acts of a tab closed before the window opened are honestly gone (the bar is empty). An empty list does nothing at all rather than refusing. Still open: `bench view rm`, rename and duplicate. Evidence: `src/core/views.ts` (`closeView`, `listClosedViews`, `restoreClosedView`, `trimTrash`), `app/renderer/closed-tabs.js`, `app.js` (`closeOpenTab`/`reopenClosedTab`/`loadClosedTabs`), `history.js` (`snapshotTabHistory`/`restoreTabHistory`), `tests/closed-tabs.test.mjs`, `tests/history.test.mjs`, `tests/views.test.ts` "closing a tab", `tests/shell.test.ts` "closes a tab, lists it for the next window, and moves the same one back", capture's `tab-closed` / `tab-reopened` / `tab-reopen-empty` / `tab-closed-by-key` with real keys and the log read back, then `relaunch-prepared` / `relaunch-start` / `relaunch-reopened` / `relaunch-empty` from a **second Electron process** on the same project, `app-tab-closed-*.png`, `app-tab-reopened-*.png`, `app-tab-reopened-relaunch.png` |
+| **U30** | A reopened tab says its earlier changes cannot be undone | S | a tab reopened after a relaunch is whole, but the bar is empty and nothing says why — the acts inside a tab are the window's memory and do not cross a process (U7). Say it once, in the status, only when the tab came from an archive this window did not close: `Reopened “…” · changes made before the restart cannot be undone here.` A reopen of a tab this window closed keeps the plain sentence and its undo, and an empty list still does nothing at all. Done when both sentences are covered by a test, neither repeats, and one sentence is what a person reads — not a warning box. A frame when one is wanted |
 
 ### 6.3 Time, imports, confirmation
 
@@ -276,6 +307,7 @@ nothing here is waiting on a decision.
 | **U9** | Untimed files import with a labelled estimate | M | `No time column — use the file order (estimated)`; rows carry the estimate; diff says so; a real time can replace it; a file *with* a clock never falls back |
 | **U10** | Import summary in plain language | S | **done 2026-10-20** — the sheet reads `5 rows · 5 columns · 2 comment lines skipped · replaces the 14 rows here now`; the plan reads `5 rows · 5 added, 14 removed, none changed · 14 rows not in this file will be withdrawn, not deleted`; the button says `Import 5 rows`. No version number, no `+1 −2 ~1`, no dataset or shape id anywhere in the sheet. Evidence: `copy.importSummary`/`importPlan`/`importButton`, `tests/window-copy.test.mjs`, capture assertions and `assertPlainSurface('the import sheet')` |
 | **U11** | Correct the observation time from the window | S–M | a date/time input in the correction row; an estimated time can be replaced; the mark moves on a time axis; status says what changed |
+| **U29** | A date/time field can be filled with the current moment | S | **recorded 2026-10-21 as a need, not built** — the entry bar draws every field as a plain text input, so a shape that designates an `instant` field as its observation time makes "record this, now" a hand-typed ISO timestamp, refused if the clock is mistyped; a shape with no designated time is stamped with the moment silently, so the same act means two different things depending on the shape. An `instant` field gets a date/time control with a **Now** button that fills the current local instant, shown in local time before the save and stored as canonical UTC; a typed ISO string still works, a blank value is refused and marked rather than stamped, and U11's correction row uses the same control so an estimated time can be replaced with the moment something happened. Done when: a point on a designated-instant shape is recorded with one press and no typed timestamp; the saved value is the instant pressed; the control is reachable keyboard-only; frames at 100/125/150% |
 
 ### 6.4 Explanation: badges, captions, numbers
 

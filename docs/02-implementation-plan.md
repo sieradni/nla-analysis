@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: Phases 0-3 complete (2026-10-19); the in-process seam ([ADR 0003](adr/0003-in-process-core.md)), the tab/project layer ([ADR 0004](adr/0004-views-and-projects.md)), a first desktop window ([ADR 0005](adr/0005-desktop-shell.md)), its write path ([ADR 0006](adr/0006-window-write-path.md)) and dataset versions ([ADR 0012](adr/0012-dataset-versions.md)) landed, and a portable Windows build now ships from a version tag. The **user surface was specified on 2026-10-20** ([ADR 0015](adr/0015-user-surface.md), [05-user-surface.md](05-user-surface.md)) and is queued as roadmap §6. The **open work is itemised in [03-roadmap.md](03-roadmap.md)**, which is updated in the same commit as each slice; this file keeps the phase structure and the history.
+Status: Phases 0-3 complete (2026-10-19); the in-process seam ([ADR 0003](adr/0003-in-process-core.md)), the tab/project layer ([ADR 0004](adr/0004-views-and-projects.md)), a first desktop window ([ADR 0005](adr/0005-desktop-shell.md)), its write path ([ADR 0006](adr/0006-window-write-path.md)) and dataset versions ([ADR 0012](adr/0012-dataset-versions.md)) landed, and the release workflow builds a portable Windows build, though no `v*` tag has been cut, so nothing is downloadable yet. The **user surface was specified on 2026-10-20** ([ADR 0015](adr/0015-user-surface.md), [05-user-surface.md](05-user-surface.md)) and is queued as roadmap §6. The **open work is itemised in [03-roadmap.md](03-roadmap.md)**, which is updated in the same commit as each slice; this file keeps the phase structure and the history.
 Supersedes §13 of [00-requirements.md](00-requirements.md) (slices).
 
 Where an early phase below says Tauri, `src/ui`, or `bench/perf.ts`, the shipped tree is Electron
@@ -32,15 +32,15 @@ those passages as the plan as it was written, not as a description of today's la
 | 4.8 field-pair plotting | done | one resolver ([axes.ts](../src/core/axes.ts)) for `bench chart`, saved panels, and the window's tab dialog; `x_field`/`y_field` default to `x`/`y`; numeric pairs and an `instant` time axis (clock ticks, one-day domain for a single point). QP Stats' two views are the live evidence |
 | 5.1 UI write path | decided | in process, not through the CLI: 15.7 ms versus 160 ms+ per command (ADR 0003) |
 | 5.2 shell: Electron vs Tauri+sidecar | decided | [ADR 0005](adr/0005-desktop-shell.md): Electron, because the core is TypeScript and stays in one process. Measured here: 369 MB dev install, 205–242 ms cold start, 466–514 MB working set (summed, so an upper bound) |
-| 5.3 first window slice | done | `pnpm app`: projects and tabs switch, a tab's panels draw from their stored specs, hover resolves a mark to its record id, wheel zoom and pan move the `viewBox`. Frames in `docs/ui-review/`, waiting on the user's verdict |
+| 5.3 first window slice | done | `pnpm app`: projects and tabs switch, a tab's panels draw from their stored specs, hover resolves a mark to its record id, wheel zoom and pan move the `viewBox`. Frames in `docs/ui-review/`; their verdicts are closed by the advisory-review direction (2026-10-21) |
 | 5.4 window write path | done | [ADR 0006](adr/0006-window-write-path.md): the entry bar appends through `Workspace` in process, a point inside the drawn axes arrives as one mark the core placed (0.8 ms), a point that rescales the axes asks for a full redraw, the tab file catches up after the paint, and undo is a `point_retracted` event. Refusals keep the typed values and name the field |
 | 5.5 entry-path measurement | done | `pnpm app:measure` builds a 10k-point project and types into the real window: **median 22.2–25.8 ms** keystroke→paint (p90 28.0–32.4 across runs) against the 100 ms budget; record 12–16 · rebuild 0.1–0.2 · paint 2–9, tab file 20–22 ms later. The rescale sample is 35.1–47.4 ms — see 5.6. The first run recorded 24.6 / 133.8 ms; the pre-canvas rescale was 147.0–173.6 ms. The harness fails when either budget misses, when the full-redraw sample is missing or was patched, and when any entry had to be submitted programmatically. |
 | 5.6 canvas renderer | done | `src/core/chart.ts` splits a chart into the layers before and after its marks and packs the projected marks (`Float32Array`), the point values and the ids; `app/renderer/chart.js` parses two small SVGs and paints every mark on a canvas between them, with hit-testing, hover, selection, zoom/pan and the incremental one-mark path. A 10k full redraw measures **35.1–47.4 ms** (rebuild 12–18 · paint 11–14), down from 147–174; `pnpm app:measure` exits non-zero over 50 ms and refuses a missing or patched full-redraw sample, and `pnpm app:capture` asserts the canvas covers the drawing and paints 3,589 pixels. The window's tab file is now saved after the paint (`persistView`), not on the keystroke path |
 | 5.7 installer / signing | **partial** | [docs/packaging.md](packaging.md): `pnpm app:package` writes a portable `artifacts/bench-win32-x64/` with the CLI beside it, and `.github/workflows/release.yml` builds, tests and zips it on a `v*` tag. The build ships **unsigned by decision on 2026-10-20** and the docs say SmartScreen will warn; an installer and auto-update stay out until asked (roadmap §4) |
 | 5.9 CI release | done | [run 39245803884](https://github.com/sieradni/nla-analysis/actions/runs/39245803884): verify, package, CLI smoke, zip (147.4 MB) and artifact upload are green; the release step is skipped on manual dispatch |
 | 5.8 entry extras (paste, stream, auto-advance) | not done | the entry bar and its undo keys are built; these are not |
-| 5.10 user surface pass | **not done** | specified 2026-10-20 by the user's review: no ids or event names in the window, a point menu (copy/correct/remove), full undo/redo, removal without a reason prompt, a stated time guess instead of a form, plain import summaries, no `current` badge, explained verdicts, one number format, one fact once, resizable/collapsible rail, hideable entry bar, buttons instead of CLI commands. [ADR 0015](adr/0015-user-surface.md), [05-user-surface.md](05-user-surface.md), roadmap §6 (U1–U28) |
-| 5.11 undo/redo | **partial** | one bounded history per tab covers adding, removing, correcting and importing, in both directions: the bar's undo names the act, the status offers its redo, a new act clears the redo branch, and 50 acts is the limit. A removal is reversed by `point_restored` naming the exact retraction ([ADR 0016](adr/0016-point-restore.md), U5); a correction is reversed by writing the earlier values as another correction; an append's redo restores the same record; an import is undone and redone through `restoreVersion`, which writes a new version holding the older rows ([ADR 0012](adr/0012-dataset-versions.md), [01-agent-interface](01-agent-interface.md)). The core refuses a retraction that is no longer in force, so undo can never reverse a later act by accident. A refusal carries the core's `kind` to the window (`refusalOf` in the bundle), so an act whose record has moved is dropped from the stack and its control disabled, while an unclassified failure stays retryable. Still not built: tab create/delete undo (U7). Evidence: `tests/history.test.mjs`, `tests/version-restore.test.ts`, `tests/cli.test.ts` (`dataset restore`), `tests/shell.test.ts`, `pnpm app:capture` (U4) |
+| 5.10 user surface pass | **partial** | specified 2026-10-20 by the user's review: no ids or event names in the window, a point menu (copy/correct/remove), full undo/redo, removal without a reason prompt, a stated time guess instead of a form, plain import summaries, no `current` badge, explained verdicts, one number format, one fact once, resizable/collapsible rail, hideable entry bar, buttons instead of CLI commands. The hover, point menu, removal, undo/redo, import words, explained verdicts, plain drawing, empty states, tab close/reopen and a date/time gap are in; roadmap §6 (U1–U30) is the live list and the only authority on what is left. [ADR 0015](adr/0015-user-surface.md), [05-user-surface.md](05-user-surface.md) |
+| 5.11 undo/redo | **partial** | one bounded history per tab covers adding, removing, correcting and importing, in both directions: the bar's undo names the act, the status offers its redo, a new act clears the redo branch, and 50 acts is the limit. A removal is reversed by `point_restored` naming the exact retraction ([ADR 0016](adr/0016-point-restore.md), U5); a correction is reversed by writing the earlier values as another correction; an append's redo restores the same record; an import is undone and redone through `restoreVersion`, which writes a new version holding the older rows ([ADR 0012](adr/0012-dataset-versions.md), [01-agent-interface](01-agent-interface.md)). The core refuses a retraction that is no longer in force, so undo can never reverse a later act by accident. A refusal carries the core's `kind` to the window (`refusalOf` in the bundle), so an act whose record has moved is dropped from the stack and its control disabled, while an unclassified failure stays retryable. Still not built: undoing a tab's creation, and `bench view rm` / rename / duplicate (U7) — a tab that is *closed* is now reopened from the project's trash by `Ctrl+Shift+T`, including after a relaunch, and that is a window act outside this history. Evidence: `tests/history.test.mjs`, `tests/version-restore.test.ts`, `tests/cli.test.ts` (`dataset restore`), `tests/shell.test.ts`, `pnpm app:capture` (U4) |
 | 4.x Tauri shell / views UI | superseded | the shell landed as Electron instead ([ADR 0005](adr/0005-desktop-shell.md)) |
 | windowed / rolling fit | not done | the third item on the time-variation menu |
 | 2.4 dataset versions / replace / diff | done | [ADR 0012](adr/0012-dataset-versions.md): an import into a populated dataset writes `dataset_version_created` with a parent and a `+n −n ~n` diff, the parent's rows are retracted/corrected rather than rewritten, and `foldVersion` rebuilds any older version from the log. Runs and panels pin `(dataset, version)`; `bench dataset versions\|diff` and the window's sheet read the same plan; an import with no observation time is refused in both doors, and the sheet picks the column that holds it |
@@ -62,7 +62,7 @@ sheet), `navigation.js` (the few cross-module shell actions), and `app.js` (wiri
 lifecycle only). New window work lands in the module
 that owns its surface rather than in `app.js`.
 
-Verification so far: 286 tests pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
+Verification so far: 345 tests in 24 files pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
 (`pnpm app:build`) before the suite, because the desktop shell loads that bundle rather than `src/core`,
 and a bundle that is only exercised by launching an app breaks silently — it did, once. The entry path is measured, not
 assumed: 15.7 ms keystroke→paint in process at 10k points against a 100 ms budget (ADR 0003), and
@@ -125,8 +125,11 @@ the integration risk can be retired in the first step instead of the last.
   keystroke→paint at 10k points in the real window and exits non-zero when the median is over budget;
   it also fails when no full-redraw sample arrived, when that sample was patched, or when an entry
   was submitted programmatically.
-- **Visual steps**: screenshot at 100/125/150% + a two-line "what to look at" note, logged in
-  [ui-review-log.md](ui-review-log.md). I never self-approve.
+- **Visual steps**: a frame at 100/125/150% plus a readable row when one is produced, logged in
+  [ui-review-log.md](ui-review-log.md). **Direction 2026-10-21: review is advisory, not a gate.** A
+  step is done when the code is green and the states behave; the user reports defects from use, and
+  each report becomes a roadmap row. Capture and measure harnesses open a window that takes focus, so
+  they run only when the machine is free.
 - **`bench check` green** at the end of every phase.
 
 ---
@@ -176,8 +179,9 @@ beyond tokens.
 **1.4 Entry bar.** Type `x  y`, Enter, point appended, chart updates, focus stays. Wire
 `bench/perf.ts` and measure it honestly.
 
-Gate: screenshot at three scalings + the perf number, in front of you. This is the "it's alive"
-moment and the first real design review.
+Gate (as rewritten 2026-10-21): a frame at three scalings, when the machine is free, plus the perf
+number — the number is the check. This is the "it's alive" moment; review is advisory, so it does not
+wait on a verdict.
 
 ## Phase 2 — make the truth trustworthy
 
@@ -218,7 +222,8 @@ the runner alive.
 shift on update.
 **4.5 MSI packaging** and a smoke test on a clean user profile.
 
-Gate: your approval on the real UI, then an installer you can run.
+Gate: the window at its best and the checks green (review is advisory as of 2026-10-21; defects reported
+from use become roadmap rows), then an installer you can run.
 
 ---
 

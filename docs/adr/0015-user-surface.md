@@ -82,12 +82,15 @@ after a write; a stale recipe panel offers **Refresh** and says why it will not 
 the panel's own `n` in the panel, the dataset's size once when panels disagree. Duplicate facts are
 removed, not restyled. A dataset named `main` in a project with one dataset is not information.
 
-**8. The review gate is readable or it is not a gate.** A frame's row states, in plain language: what
-this screen is for, the one thing to check, what "wrong" looks like, and the decision the user is
-being asked for. Internal names are not allowed in the "what to look at" column. The user may close a
-batch of frames by stating a direction instead of approving them one by one; that is recorded in
-[`docs/ui-review-log.md`](../ui-review-log.md) with their words, and it is a decision about the
-direction, not a claim that every pixel was inspected.
+**8. A frame is evidence, not an approval queue.** A frame's row states, in plain language: what this
+screen is for, the one thing to check, what "wrong" looks like, and what decision it informs. Internal
+names are not allowed in the "what to look at" column. The user may close a batch of frames by
+stating a direction instead of approving them one by one; that is recorded in
+[`docs/ui-review-log.md`](../ui-review-log.md) with their words. **Amended 2026-10-21:** review is
+advisory and does not block. Work is done when it is green and as good as it can be; the user reports
+defects from actual use and each report becomes a roadmap row
+([03-roadmap.md](../03-roadmap.md)). A frame is taken only when the window will not interrupt them,
+because the capture, measure and packaging checks bring a window to the front.
 
 ## What this changes concretely
 
@@ -118,7 +121,7 @@ direction, not a claim that every pixel was inspected.
 - The UI copy in `app/renderer` is now a first-class surface with a testable rule: no raw id, no event
   name, no version list and no CLI command in a primary label or a status line.
 - The review log's historical rows stay as evidence but their verdicts are closed by direction; new
-  rows follow the protocol in item 8.
+  rows are evidence too, not approval requests (item 8, amended 2026-10-21).
 - Two earlier ADRs are narrowed rather than reversed: the log is still append-only and still the
   truth; the window still never writes outside `Workspace`. What changes is who the window is written
   for.

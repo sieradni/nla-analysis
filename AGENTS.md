@@ -48,20 +48,24 @@ without re-litigating it.
   artifact and its CLI with Python removed from `PATH`, and fails unless both work. It compares the
   run against the committed receipt (`docs/ui-review/app-packaged.json`) and writes that file only
   with `--record`, so a plain run leaves the tree clean.
+- **The window takes focus.** `pnpm app`, `pnpm app:capture`, `pnpm app:measure` and
+  `pnpm app:package:check` each open a real Electron window and bring it to the front. Never run them
+  while the user is working on the machine, and never as an unattended step of a pass: a window that
+  steals focus interrupts them. `pnpm verify` (typecheck, bundle, tests) opens no window and is safe.
 - **Everything else**: `pnpm verify` (typecheck, bundle, tests), `pnpm fixture`, `pnpm review`.
 
 ## How work gets done
 
 - **Small steps.** One user-visible capability per step. Aim for a diff under ~400 lines, reviewable
   in 10 minutes. If a step needs to be bigger, split it.
-- **Plan, then build, then verify.** State the intended behavior before writing code. Test the
-  behavior you claimed, not just the exit code.
-- **UI work is gated on the user.** Produce a screenshot and a row that answers four things — what
-  this is, the one check, what wrong looks like, the decision wanted — at 100/125/150% scaling, and
-  wait for approval. Never self-approve a visual change. Log it in `docs/ui-review-log.md` under the
-  protocol there. The user may close a batch of frames by stating a direction instead of approving
-  each one; record their words, and treat that as a decision about the direction, not as a claim that
-  every pixel was inspected.
+- **UI review does not block.** (user's direction, 2026-10-21) Reach the highest quality you can,
+  then treat the work as ready for review and move on. Do not wait for a frame to be approved, and do
+  not open the window to take one unless the user asks or the machine is free — see *Running it*. The
+  user reports what is wrong from actual use; a report becomes a roadmap row, not a reopened gate.
+  When a frame is produced, log it in `docs/ui-review-log.md` under the protocol there, as evidence
+  rather than an approval request.
+- **Plan, then build, then verify, then commit.** State the intended behavior before writing code.
+  Test the behavior you claimed, not just the exit code. Finish the step with a commit.
 - **Say what was assumed before a write, and what changed after it.** When a mutation rests on a guess
   — which column holds the time, a missing field, an estimated instant, a dropped column — state it in
   one sentence and ask if the answer would change the data. Afterwards, summarise the change in plain
@@ -82,8 +86,10 @@ without re-litigating it.
 - **`pnpm verify` means green.** It runs the typecheck and the tests. Never commit on red.
 - **Commit at every good point**: each completed step, each fixed bug, each decision recorded. A
   green check plus a clean tree is the bar for ending a pass.
-- **Never leave uncommitted work behind.** If a step is half-done, either finish it or revert it;
-  a broken tree costs the next session more than it saves.
+- **Never end a session with uncommitted work.** Commit each logical step as it is finished, in small
+  commits rather than one dump at the end. If a step is half-done, either finish it, revert it, or
+  leave it out and add the roadmap row that plans it; a dirty tree costs the next session more than
+  the commit costs you.
 - **State what changed and why** in the message, and name anything deliberately left out.
 - **Never rewrite history** on a branch someone else may have built on. There is one branch until
   the user asks for more.
@@ -103,13 +109,15 @@ A step is done when all of these hold:
       status; anything non-obvious is explained on hover; no fact is shown twice.
 - [ ] Every reversible action it adds is covered by undo, and redo works.
 - [ ] Keyboard-only path works; focus is never lost or trapped.
-- [ ] Renders correctly at 100/125/150% scaling.
+- [ ] Renders correctly at 100/125/150% scaling when a window is run to check it; a frame is
+      evidence, not a gate (see *How work gets done*).
 - [ ] No layout shift or flicker when data updates.
 - [ ] Perf budget respected: keystroke→paint < 100 ms, re-render < 50 ms at 10k points.
 - [ ] No new dependency without a note.
 - [ ] `bench check` passes.
 - [ ] The row this closes in [docs/03-roadmap.md](docs/03-roadmap.md) is updated in the same commit, with
-      the evidence that proves it — or, for a new gap found on the way, a new row.
+      the evidence that proves it — or, for a new gap found on the way, a new row. Nothing subpar is
+      left only in someone's head: it is either fixed or planned.
 
 ## Visual standard
 
@@ -164,7 +172,11 @@ app/renderer/       the viewport, split by concern. app.js is wiring and the ope
                     entry.js owns typing, correction and the one table of act kinds (label,
                     tooltip, undo and redo function) that both dispatch and the bar read;
                     history.js owns the tab's undo/redo stacks, the refusal policy, what each
-                    act would reverse, and which acts an import's own report ends; tabs.js owns the tab
+                    act would reverse, and which acts an import's own report ends; closed-tabs.js owns
+                    the list of closed tabs — the archives `views/.trash/` holds, newest first, filled
+                    from the core on launch, plus the history each tab had when it closed here — which
+                    `Ctrl+Shift+T` takes from, deliberately outside `showView`, because closing is not
+                    a change of drawing; tabs.js owns the tab
                     sheet; projects.js owns the project sheet; import.js owns the import sheet;
                     navigation.js holds the few shell actions that cross a module.
                     Remaining window work lands here: resizable/collapsible rail in rail.js, the
@@ -197,7 +209,8 @@ A user's project:
 data/events.jsonl   truth (append-only, via bench only)
 data/raw/           untouched imports
 shapes/             point shape registry (declared in the log)
-views/              one JSON file per tab (`<slug>.json`), rendered by `bench view render`
+views/              one JSON file per tab (`<slug>.json`), rendered by `bench view render`;
+                    `views/.trash/` holds the last 20 closed tabs, out of every list
 artifacts/          generated output, all regenerable
 index.sqlite        derived index, disposable (not built yet)
 AGENTS.md           this project's own rules, written by `bench init`

@@ -29,7 +29,8 @@ conversation happens.
 ## Consequences
 
 - No packaging, signing, WebView2, or DPI work blocks progress. Every step is testable in a terminal.
-- Charts still need a visual gate: they are rendered to files and shown for approval.
+- Charts are still rendered to files and looked at. **Amended 2026-10-21:** that look is evidence, not
+  an approval gate — review is advisory, and a defect found in use becomes a roadmap row.
 - The first real UI risk is deferred, not retired. It returns in Phase 5, and it will then sit on a
   data model that no longer moves.
 - Manual entry is deferred with the UI; points arrive through `bench add` (by the agent on request).

@@ -4,12 +4,20 @@ Status: **decided 2026-10-20** from the user's review of the desktop window. **B
 U1 (hover), U3 (statuses and the correction strip), U10 (the import sheet's words), U12 (the state
 words, the spelled-out degrees of freedom and the verdict that explains itself), U14 (a plain drawing
 and an evidence line built from numbers) and U22 (the empty first panel), plus **U2, U5 and U6** — the
-point menu, the restore event and removal as one action with undo. U4 is partly built (a removal, its
-undo and its redo); U13, U17, U18 and U21 are partly built — the number formats, the rail labels, the
-deduplicated facts and the **Refresh** action — and the roadmap row for each names what is left. Everything a person reads is composed by one
+point menu, the restore event and removal as one action with undo. U4 now covers adding, removing,
+correcting and importing in both directions; U13, U17, U18 and U21 are partly built — the number
+formats, the rail labels, the deduplicated facts and the **Refresh** action — and the roadmap row for
+each names what is left. **Recorded 2026-10-21:** a new need, **U29**, was added to this list by the
+user — a date/time field can be filled with the current moment instead of only accepting a typed
+timestamp. It is not built. Everything a person reads is composed by one
 module, `app/renderer/copy.js`; the rest of the list is still open and the roadmap row says so. The
 work list is [03-roadmap.md](03-roadmap.md) §6, keyed by the same `U` numbers. The principle is
 [ADR 0015](adr/0015-user-surface.md).
+
+**Direction 2026-10-21:** the review loop is on hold. Work is done when it is green and as good as it
+can be; the user reports defects from real use, and each report becomes a row here or in the roadmap.
+No frame waits for approval, and the window is not opened to take one unless the machine is free —
+`app:capture`, `app:measure` and `app:package:check` each take the foreground.
 
 This file exists because the same review kept producing "open questions" that were not really open.
 They came from describing the log to the person who uses the window. Once the question is "what does
@@ -139,7 +147,16 @@ the number only moves forward and nothing is deleted. The window says `Restored 
 the import`, not a version number; the CLI (`bench dataset restore`) and the log name the version for
 the agent, which is the split [ADR 0015](adr/0015-user-surface.md) draws. The stacks hold 50 acts and
 drop the oldest; a new act clears the redo branch; each Save is its own act and is never merged with a
-neighbouring one. Not built: undoing a tab create or delete (U7, a separate pass).
+neighbouring one. **Closing a tab** has its own inverse, outside the tab's history: **Close tab** in the
+tab's header takes the tab off the screen and its file to `views/.trash/`, and `Ctrl+Shift+T` — or the
+status's **Undo tab close** — puts the same tab back with the same drawing, the same counts and the
+same undo, because the window kept the file it closed rather than rebuilding one. A close is a window
+act, not a log event: nothing is written, and a tab switch or a repaint cannot forget it. **The closed
+tab outlives the window**: the list is read back from the project's trash when a project opens, so
+closing a tab and quitting still leaves one `Ctrl+Shift+T` away, with the same words; what cannot come
+back is the undo of acts made before that window opened, and the bar says so by being empty. On an
+empty closed list the chord does nothing at all. Not built: undoing a tab create (U7, a separate
+pass).
 Evidence: `tests/history.test.mjs` (both directions, the branch, the bound), `tests/window-copy.test.mjs`
 (the labels), `tests/version-restore.test.ts` (rows, empty first version, optional-field exactness),
 `tests/cli.test.ts` (`dataset restore`, both directions and the refusals), `tests/shell.test.ts` (a
@@ -272,6 +289,27 @@ their own data.
 
 **Done when:** an estimated time can be replaced from the window; the corrected point moves in a
 time-axis drawing; the status says what changed; no CLI is involved.
+
+### U29. A time field can be filled with the current moment
+
+**Seen:** the entry bar gives every shape field the same plain text box. On a shape that designates an
+`instant` field as its observation time, adding a point means typing `2026-10-21T09:14:00+02:00` by
+hand — the one field in the window that asks a person to know a syntax — and a mistyped clock is a
+refusal rather than a correction. A shape with no designated time is stamped with the moment on save
+without being asked, so the same bar behaves in two different ways depending on a declaration the
+person may not remember.
+
+**Decision:** an `instant` field is a date/time control with a **Now** button. **Now** fills the
+current local instant; the field shows it in the reader's local time and the row stores the same
+instant in canonical UTC. Typing an ISO string stays a valid way in, because a transcribed observation
+is often not now. A blank time is refused with its field marked, never filled silently in a shape that
+asked for it; a shape with no designated time keeps being stamped at save, and that time is then shown
+and correctable (U11). The control is the same one the correction row uses.
+
+**Done when:** a point on a designated-instant shape is recorded with one press and no typed
+timestamp; what is stored is the moment pressed; a typed ISO string still records the same way; an
+empty field is refused and its field marked; the button and the field are reachable with the keyboard
+alone; frames at 100/125/150% show the control on one line with the other fields.
 
 ---
 
@@ -537,6 +575,11 @@ added, none removed, none changed → version 5`), with the id and event on a se
 
 ## 7. The review process itself
 
+**The loop is on hold (direction 2026-10-21).** A frame and its row are evidence that a change was
+looked at, not a request queued for approval. The user reports what is wrong from use; a report is
+recorded here as a row, with a `U` id in the roadmap, like any other finding. U25 and U26 below still
+govern how a row is written when one is produced.
+
 ### U25. A review row is readable by the person being asked
 
 **Seen:** the log's "what to look at" cells say `Chart renderer v1`, `the strip reads main · v2, v4`,
@@ -556,7 +599,7 @@ No internal names in that column. A row that needs a term explains it in the glo
 the log. Historical rows keep their text as evidence; their verdicts are closed by direction.
 
 **Done when:** a person who has never read the code can answer a row from the image and its three
-sentences; a new row with a bare frame filename or a pixel count is rejected in review.
+sentences; a row with a bare frame filename or a pixel count is rejected when it is written.
 
 ### U26. The contact sheet says where to start
 
