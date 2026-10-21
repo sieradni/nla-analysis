@@ -96,6 +96,22 @@ describe('importing a table', () => {
     expect(workspace.allEvents.filter((event) => event.type === 'import_completed')).toHaveLength(0)
   })
 
+  it('finds a clock under a name it does not know, but never reads a number column as one', async () => {
+    const { dir, workspace } = await project()
+    // `sample_at` is not a name the importer lists, so the values are the only thing that can say it
+    // is the clock — and they say it in one spelling the guess trusts.
+    await writeFile(join(dir, 'odd.csv'), 'sample_at,x,y\n2026-03-01T09:00:00Z,1,2\n2026-03-01T09:05:00Z,3,4\n')
+    const preview = await previewImport(workspace, join(dir, 'odd.csv'))
+    expect(preview.suggestedTime).toBe('sample_at')
+    const plan = await planImport(workspace, join(dir, 'odd.csv'), { mapping: { x: 'x', y: 'y' } })
+    expect(plan.timeColumn).toBe('sample_at')
+    expect(plan.sample[0]!.t).toBe('2026-03-01T09:00:00.000Z')
+
+    // A column of readings is not a clock: a file with no clock says so, rather than guessing.
+    await writeFile(join(dir, 'numbers.csv'), 'reading,count\n1.5,2\n2.5,3\n')
+    expect((await previewImport(workspace, join(dir, 'numbers.csv'))).suggestedTime).toBeNull()
+  })
+
   it("finds the time column in the file's own spelling, not only the lowercase one", async () => {
     const { dir, workspace } = await project()
     await writeFile(join(dir, 'upper.csv'), 'Timestamp,x,y\n2026-03-01T09:00:00Z,1,2\n')
@@ -147,12 +163,92 @@ describe('importing a table', () => {
     await writeFile(join(dir, 'plain.csv'), 'date,value\n2026-12-04T00:00:00Z,10\n', 'utf8')
     const direct = await planImport(workspace, join(dir, 'plain.csv'))
     expect(direct.timeColumn).toBe('date')
+
+    // The declaration is the authority, so the row order cannot stand in for it — and two answers
+    // to one question are a contradiction, not a preference.
+    await expect(
+      planImport(workspace, join(dir, 'plain.csv'), { estimate: true }),
+    ).rejects.toThrow(/takes the observation time from "date", so the file order cannot stand in/)
     await commitImport(workspace, direct)
     const reopened = await Workspace.open(dir)
     expect(reopened.dataset('main').points[0]).toMatchObject({
       values: { date: '2026-12-04T00:00:00.000Z', value: 10 },
       tObserved: '2026-12-04T00:00:00.000Z',
     })
+  })
+
+  it('plans the row order as a labelled estimate, writes the marker with every row, and re-reads by position', async () => {
+    const { dir, workspace } = await project()
+    const file = join(dir, 'untimed.csv')
+    // No clock at all: a row's place is the only thing the file says about when it happened.
+    await writeFile(file, 'x,y\n1,2\n3,4\n', 'utf8')
+    const mapping = { x: 'x', y: 'y' }
+
+    // Two answers to one question are a contradiction, not a preference.
+    await expect(planImport(workspace, file, { mapping, estimate: true, time: 'x' })).rejects.toThrow(
+      /a time column and the file order cannot both be the answer/,
+    )
+
+    // Asking for the estimate is a statement, not a fallback: the anchor is the plan's, so a preview
+    // and the write it precedes cannot hand out two different instants.
+    const plan = await planImport(workspace, file, {
+      mapping,
+      estimate: true,
+      estimateFrom: '2026-05-01T00:00:00Z',
+    })
+    expect(plan).toMatchObject({ estimated: true, timeColumn: null, rows: 2 })
+    expect(plan.sample.map((row) => row.t)).toEqual([
+      '2026-05-01T00:00:00.000Z',
+      '2026-05-01T00:00:00.001Z',
+    ])
+    await commitImport(workspace, plan)
+
+    const reopened = await Workspace.open(dir)
+    const points = reopened.dataset('main').points
+    expect(points.map((point) => point.tEstimated)).toEqual([true, true])
+    // The marker is in the log, not inferred by a reader: that is what lets it outlive the sheet.
+    expect(
+      reopened.allEvents.filter((event) => event.type === 'point_recorded').map((event) => event.t_estimated),
+    ).toEqual([true, true])
+    expect(reopened.allEvents.find((event) => event.type === 'import_completed')).toMatchObject({
+      time_estimated: true,
+    })
+
+    // A re-read of the same file changes nothing, so it is the no-op refusal rather than a version
+    // of two added rows and two withdrawn ones. Different bytes, so the duplicate-hash refusal is
+    // not the one answering.
+    await writeFile(file, '# re-exported unchanged\nx,y\n1,2\n3,4\n', 'utf8')
+    await expect(planImport(reopened, file, { mapping, estimate: true })).rejects.toThrow(
+      /already holds exactly these 2 row\(s\)/,
+    )
+
+    // One value moved. The row is identified by its place, the parent keeps its own instant — a
+    // fresh anchor is not evidence about when that row happened — and the estimate survives.
+    await writeFile(file, 'x,y\n1,9\n3,4\n', 'utf8')
+    const again = await planImport(reopened, file, {
+      mapping,
+      estimate: true,
+      estimateFrom: '2026-07-01T00:00:00Z',
+    })
+    expect({ added: again.diff.added, removed: again.diff.removed, changed: again.diff.changed }).toEqual({
+      added: 0,
+      removed: 0,
+      changed: 1,
+    })
+    expect(again.diff.changedRows[0]!).toMatchObject({ estimated: true })
+    await commitImport(reopened, again)
+
+    const after = await Workspace.open(dir)
+    const row = after.dataset('main').points.find((point) => point.values.x === 1)!
+    expect(row.values.y).toBe(9)
+    expect(row.tObserved).toBe('2026-05-01T00:00:00.000Z')
+    expect(row.tEstimated).toBe(true)
+
+    // The same file, re-sorted. Order is the identity here, so every disturbed position is a change
+    // — the honest answer, and the one that says an untimed file cannot be matched by anything else.
+    await writeFile(file, 'x,y\n3,4\n1,9\n', 'utf8')
+    const reversed = await planImport(after, file, { mapping, estimate: true })
+    expect(reversed.diff).toMatchObject({ added: 0, removed: 0, changed: 2 })
   })
 
   it('writes the points and the import record together, and preserves the original', async () => {

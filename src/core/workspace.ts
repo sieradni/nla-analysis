@@ -94,8 +94,10 @@ export interface PointCorrection {
   dataset: string
   values: Record<string, PointValue>
   now: Record<string, PointValue>
-  /** Present when the shape designates an observation-time field and it was re-derived. */
+  /** Present when the correction moved the row's canonical time (a designated field, or `--at`). */
   tObserved?: string
+  /** The row's time is still an estimate from an import's row order. */
+  estimated: boolean
 }
 
 export interface PointRetraction {
@@ -712,7 +714,18 @@ export class Workspace {
     return this.current
   }
 
-  async correctPoint(id: string, patch: Record<string, PointValue>, reason?: string): Promise<PointCorrection> {
+  /**
+   * `options.tObserved` moves the canonical time of a row whose shape designates no time field —
+   * the only way an imported estimate can be replaced by a real instant. A shape that does
+   * designate one keeps its own rule: the field is the authority, and an instant that disagrees
+   * with it is refused, exactly as `--at` is refused on `add`.
+   */
+  async correctPoint(
+    id: string,
+    patch: Record<string, PointValue>,
+    reason?: string,
+    options: { tObserved?: string } = {},
+  ): Promise<PointCorrection> {
     await this.freshen()
     const found = this.findPoint(id)
     if (!found) throw new BenchError('missing', `no point with id "${id}"`)
@@ -725,8 +738,12 @@ export class Workspace {
         hint: 'undo the removal to edit it again',
       })
     }
-    if (Object.keys(patch).length === 0) {
-      throw new BenchError('invalid', 'nothing to correct', { hint: `pass --values '{"y":3.5}'` })
+    // A correction can move the observation time alone: replacing an imported estimate with a
+    // measured instant changes no value, and it is the whole point of the estimate's being labelled.
+    if (Object.keys(patch).length === 0 && options.tObserved === undefined) {
+      throw new BenchError('invalid', 'nothing to correct', {
+        hint: `pass --values '{"y":3.5}', or --at <instant> to replace an estimated time`,
+      })
     }
 
     // Validate the merged result against the declaration this point was recorded with, not the
@@ -748,16 +765,22 @@ export class Workspace {
     const currentShape = this.current.shapes.get(
       this.current.datasets.get(found.dataset)?.shape ?? '',
     )
-    const observation = currentShape ? resolveObservation(currentShape, merged) : undefined
+    const observation = currentShape
+      ? resolveObservation(currentShape, merged, options.tObserved)
+      : undefined
     const written = observation?.field
       ? { ...patch, [observation.field.name]: observation.values[observation.field.name]! }
       : patch
+    // The instant moves when the shape designates a field (its own rule) or when the caller names
+    // one for a row that has none. Otherwise it is left alone: an edit to a value must not restamp
+    // the time the row already had, estimated or not.
+    const movesTime = currentShape?.time_field !== undefined || options.tObserved !== undefined
 
     const event = makeEvent('point_corrected', this.handle.session, {
       dataset: found.dataset,
       supersedes: id,
       values: written,
-      ...(currentShape?.time_field === undefined ? {} : { t_observed: observation!.tObserved }),
+      ...(movesTime ? { t_observed: observation!.tObserved } : {}),
       ...(reason === undefined ? {} : { reason }),
       // A correction made now belongs to the version that is current now: an older version keeps
       // reading as it did, which is the point of keeping the old one at all.
@@ -769,7 +792,8 @@ export class Workspace {
       dataset: found.dataset,
       values: written,
       now: observation?.values ?? merged,
-      ...(currentShape?.time_field === undefined ? {} : { tObserved: observation!.tObserved }),
+      ...(movesTime ? { tObserved: observation!.tObserved } : {}),
+      estimated: this.findPoint(id)?.point.tEstimated === true,
     }
   }
 

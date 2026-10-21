@@ -97,6 +97,14 @@ export interface PointRecorded extends EventBase {
   /** The time the value refers to. Distinct from `at`, when the point was recorded. */
   t_observed: IsoTime
   /**
+   * The time is an estimate, not something the row measured: the file had no clock, and the caller
+   * chose the file's row order. The instant is still never invented silently — it is labelled here,
+   * ordered by the row it came from, and replaceable by a correction that carries a real instant.
+   * Absent means the row's time is an observation, which is what every event written before this
+   * existed is.
+   */
+  t_estimated?: true
+  /**
    * The dataset version this row belongs to. Absent means version 1: projects written before
    * versions existed have exactly one, and reading them back as anything else would invent history.
    */
@@ -113,10 +121,18 @@ export interface PointCorrected extends EventBase {
   values: Record<string, PointValue>
   reason?: string
   /**
-   * The canonical observation time after the correction, when the shape designates a field. Absent
-   * for shapes with no designation and for events written before this existed.
+   * The canonical observation time after the correction, when the shape designates a field, or when
+   * the correction replaces an estimated time with a measured one. Absent means the instant did not
+   * move — and for a shape with no designation, that it is not being restamped by every edit.
    */
   t_observed?: IsoTime
+  /**
+   * The row's time is still an estimate after this correction. Written when a re-read of an untimed
+   * file keeps the row's estimated instant, so a correction that only moves values cannot quietly
+   * turn an estimate into something that reads as measured. A correction carrying `t_observed` and
+   * no marker is the replacement: the time is now an observation.
+   */
+  t_estimated?: true
   /** The version this change belongs to, so an older version still reads as it did. */
   version?: number
 }
@@ -160,6 +176,11 @@ export interface ImportCompleted extends EventBase {
   mapping?: Record<string, string>
   /** Source columns the importer explicitly left out because the shape had no field for them. */
   ignored_columns?: string[]
+  /**
+   * The file had no time column and the caller chose the row order, so every row this version
+   * brought carries `t_estimated`. Said once here as well, because it is a fact about the version.
+   */
+  time_estimated?: true
 }
 
 export interface AnalysisRun extends EventBase {

@@ -9,6 +9,11 @@ export interface Point {
   values: Record<string, PointValue>
   /** The time the value refers to. */
   tObserved: IsoTime
+  /**
+   * That time is an estimate from the file's row order, not an observation (see
+   * `PointRecorded.t_estimated`). A correction carrying a real instant clears it.
+   */
+  tEstimated?: true
   recordedAt: IsoTime
   /**
    * The dataset version this row belongs to. Every point has one: rows written before versions were
@@ -166,6 +171,7 @@ function applyRecorded(
     status: 'active',
     corrections: [],
     ...(event.note === undefined ? {} : { note: event.note }),
+    ...(event.t_estimated === true ? { tEstimated: true } : {}),
   }
   fold.points.set(event.id, point)
   return point
@@ -182,6 +188,12 @@ function applyCorrected(fold: PointFold, event: Extract<BenchEvent, { type: 'poi
   // A designated time field can move the observation instant. The event carries the canonical value
   // so the fold never has to guess which declaration was current when the correction was written.
   if (event.t_observed !== undefined) target.tObserved = event.t_observed
+  // An estimate survives a correction that only moves values — and ends with one that carries a
+  // measured instant. A correction that says neither touches the time and says nothing about it.
+  if (event.t_observed !== undefined || event.t_estimated === true) {
+    if (event.t_estimated === true) target.tEstimated = true
+    else delete target.tEstimated
+  }
   target.corrections.push(event.id)
   // The log is append-only, so events can be replayed out of order; keep the latest instant.
   if (target.correctedAt === undefined || event.at > target.correctedAt) target.correctedAt = event.at

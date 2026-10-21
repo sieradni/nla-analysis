@@ -29,6 +29,8 @@ export interface DiffRow {
 /** A row plus the point it came from, when it came from the parent's log. */
 export interface ParentRow extends DiffRow {
   id: string
+  /** The parent's time is an import's estimate; the row it pairs with does not become one. */
+  estimated?: true
 }
 
 export interface RowDiff {
@@ -36,8 +38,18 @@ export interface RowDiff {
   removed: number
   changed: number
   addedRows: DiffRow[]
-  /** `before` is the parent's row, `after` the incoming one; `id` is the point to supersede. */
-  changedRows: { id: string; t: string; before: Record<string, PointValue>; after: Record<string, PointValue> }[]
+  /**
+   * `before` is the parent's row, `after` the incoming one; `id` is the point to supersede, and
+   * `estimated` says the time it already carries is an estimate — a re-read must not turn a
+   * measured instant into one, nor an estimate into something that reads as measured.
+   */
+  changedRows: {
+    id: string
+    t: string
+    before: Record<string, PointValue>
+    after: Record<string, PointValue>
+    estimated?: true
+  }[]
   /** Rows the parent has that the file does not; `id` is the point to withdraw. */
   removedRows: ParentRow[]
 }
@@ -95,7 +107,13 @@ export function diffRows(parent: ParentRow[], child: DiffRow[], fields: string[]
       const before = unmatchedParents.shift()!
       const after = unmatchedChildren.shift()!
       result.changed += 1
-      result.changedRows.push({ id: before.id, t, before: before.values, after: after.values })
+      result.changedRows.push({
+        id: before.id,
+        t,
+        before: before.values,
+        after: after.values,
+        ...(before.estimated === true ? { estimated: true as const } : {}),
+      })
     }
     for (const row of unmatchedChildren) {
       result.added += 1
@@ -107,6 +125,47 @@ export function diffRows(parent: ParentRow[], child: DiffRow[], fields: string[]
     }
   }
 
+  return result
+}
+
+/**
+ * Compare a parent version with a file that has no clock, pairing rows by their position.
+ *
+ * An untimed file has nothing to identify a row by: its instants are estimates from the row order,
+ * so matching them by instant would report every row leaving and every row arriving — the reading
+ * this exists to replace. Order is therefore the identity here, and the consequences are said out
+ * loud rather than hidden: a row whose values moved is a change against the row in its place, a
+ * file with more rows has that many added, one with fewer has that many removed. If the file was
+ * re-sorted, the values no longer line up and every row it disturbed reads as changed — which is
+ * the honest answer to "these are the same positions with different readings".
+ *
+ * `changedRows[].t` is the incoming row's instant. A caller re-reading an untimed file keeps the
+ * parent's instant for the row (the plan's own are fresh estimates), so it writes no `t_observed`.
+ */
+export function diffRowsByOrder(parent: ParentRow[], child: DiffRow[], fields: string[]): RowDiff {
+  const result: RowDiff = { added: 0, removed: 0, changed: 0, addedRows: [], changedRows: [], removedRows: [] }
+  const shared = Math.min(parent.length, child.length)
+  for (let index = 0; index < shared; index += 1) {
+    const before = parent[index]!
+    const after = child[index]!
+    if (valueKey(before.values, fields) === valueKey(after.values, fields)) continue
+    result.changed += 1
+    result.changedRows.push({
+      id: before.id,
+      t: after.t,
+      before: before.values,
+      after: after.values,
+      ...(before.estimated === true ? { estimated: true as const } : {}),
+    })
+  }
+  for (const row of child.slice(shared)) {
+    result.added += 1
+    result.addedRows.push({ t: row.t, values: row.values })
+  }
+  for (const row of parent.slice(shared)) {
+    result.removed += 1
+    result.removedRows.push(row)
+  }
   return result
 }
 

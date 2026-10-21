@@ -16,6 +16,7 @@ export interface ImportCommandOptions {
   dataset?: string
   map?: string[]
   time?: string
+  'estimate-time'?: boolean
   'ignore-unmapped'?: string[]
   force?: boolean
   'dry-run'?: boolean
@@ -39,6 +40,19 @@ function versionSentence(plan: {
 }): string {
   if (plan.parent === null) return `first version of ${plan.dataset} · ${plan.rows} row(s)`
   return `replaces version ${plan.parent} · ${diffCounts(plan.diff)}`
+}
+
+/**
+ * Where the times come from, in one line, in both the plan and the result. An estimated file says
+ * so here and on every row it writes: the sheet states it before the click, and `bench list` reads
+ * it back afterwards.
+ */
+function timeLine(plan: { timeColumn: string | null; estimated: boolean; rows: number }): string {
+  if (plan.timeColumn !== null) return `t_observed <= ${plan.timeColumn}`
+  const rows = `${plan.rows} row(s)`
+  return `t_observed estimated from the file's row order (${rows}, ${
+    plan.rows === 1 ? 'its time is' : 'their times are'
+  } an estimate, correctable)`
 }
 
 export async function runImportCommand(
@@ -79,6 +93,7 @@ export async function runImportCommand(
       ...(options.dataset === undefined ? {} : { dataset: options.dataset }),
       mapping,
       ...(options.time === undefined ? {} : { time: options.time }),
+      ...(options['estimate-time'] === true ? { estimate: true } : {}),
       ...(ignoreColumns.length === 0 ? {} : { ignoreColumns }),
       ...(options.force === true ? { force: true } : {}),
       ...(format === undefined ? {} : { format: format as 'csv' | 'tsv' | 'jsonl' }),
@@ -98,6 +113,7 @@ export async function runImportCommand(
     // the JSON shape it had before this check existed.
     ...(plan.ignoredColumns.length === 0 ? {} : { ignoredColumns: plan.ignoredColumns }),
     timeColumn: plan.timeColumn,
+    estimated: plan.estimated,
     sourceHash: plan.sourceHash,
     raggedRows: plan.raggedRows,
     comments: plan.comments,
@@ -117,7 +133,7 @@ export async function runImportCommand(
       for (const [field, column] of Object.entries(plan.mapping)) {
         process.stdout.write(`  ${field} <= ${column}\n`)
       }
-      if (plan.timeColumn) process.stdout.write(`  t_observed <= ${plan.timeColumn}\n`)
+      process.stdout.write(`  ${timeLine(plan)}\n`)
       if (plan.ignoredColumns.length > 0) {
         process.stdout.write(`  ignored ${plan.ignoredColumns.join(', ')} (no shape field)\n`)
       }
@@ -150,7 +166,7 @@ export async function runImportCommand(
     for (const [field, column] of Object.entries(plan.mapping)) {
       process.stdout.write(`  ${field} <= ${column}\n`)
     }
-    if (plan.timeColumn) process.stdout.write(`  t_observed <= ${plan.timeColumn}\n`)
+    process.stdout.write(`  ${timeLine(plan)}\n`)
     if (plan.ignoredColumns.length > 0) {
       process.stdout.write(`  ignored ${plan.ignoredColumns.join(', ')} (no shape field)\n`)
     }

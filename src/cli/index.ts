@@ -77,6 +77,7 @@ const OPTIONS = {
   format: { type: 'string' },
   map: { type: 'string', multiple: true },
   time: { type: 'string' },
+  'estimate-time': { type: 'boolean' },
   'ignore-unmapped': { type: 'string', multiple: true },
   force: { type: 'boolean' },
   empty: { type: 'boolean' },
@@ -110,7 +111,8 @@ Usage
                                         append a field as the shape's next version
   bench shape designate <id> --time-field <name>
                                         make one instant field the observation time
-  bench  correct <id> --values '{"y":3}'  supersede a point (never overwrites)
+  bench  correct <id> [--values '{"y":3}'] [--at <iso>]
+                                        supersede a point (never overwrites)
   bench retract <id> [--reason text]    withdraw a point from analysis
   bench restore <id>                    bring a withdrawn point back, as the same record
   bench list [--dataset id] [--json]    list active points
@@ -152,6 +154,12 @@ Options for add
   --param <name=value>       recipe parameter, repeatable (numbers and booleans inferred)
   --chart <path>             where to write the rendered artifact
 
+Options for correct
+  --values '{"y":3}'          field values to supersede; can be left out when only the
+                             observation time changes
+  --at <iso time>            a measured instant, replacing a time an import estimated; must
+                             agree with a shape's designated time field when it has one
+
 Options for view new / add
   --dataset <id>             which dataset the panel reads
   --recipe <name>            make the panel an analysis, not just a plot
@@ -179,8 +187,10 @@ Options for init
 
 Options for import
   --map <field=column>       map a shape field to a column with a different name, repeatable
-  --time <column>            read the observation time from a column (required: a row is its
-                             instant, so a file without one is refused rather than stamped now)
+  --time <column>            read the observation time from a column (a row is its instant; a
+                             file whose clock the importer cannot find is refused, not stamped)
+  --estimate-time            the file has no clock: use its row order, and mark every row's time
+                             estimated so it reads as an estimate and can be corrected later
   --format csv|tsv|jsonl     override detection from the file extension
   --ignore-unmapped <column>  leave out an undeclared column, repeatable; required for every
                              column the shape has no field for
@@ -499,6 +509,7 @@ async function main(): Promise<void> {
               data: points.map((point) => ({
                 id: point.id,
                 t_observed: point.tObserved,
+                ...(point.tEstimated === true ? { t_estimated: true } : {}),
                 values: point.values,
                 note: point.note,
                 tags: point.tags,
@@ -518,7 +529,10 @@ async function main(): Promise<void> {
           .map(([key, value]) => `${key}=${String(value)}`)
           .join(' ')
         const note = point.note ? `  · ${point.note}` : ''
-        process.stdout.write(`  ${point.tObserved}  ${fields}${note}\n`)
+        // A time the file only implied is said so, where the time is said: `bench list` is how a
+        // person or an agent reads a row back, and an estimate must not read as an observation.
+        const estimated = point.tEstimated === true ? ' (estimated)' : ''
+        process.stdout.write(`  ${point.tObserved}${estimated}  ${fields}${note}\n`)
       }
       if (points.length > 40) process.stdout.write(`  … ${points.length - 40} earlier point(s)\n`)
       return
@@ -1118,7 +1132,14 @@ async function main(): Promise<void> {
       const patch = collectValues(values)
       let corrected: PointCorrection
       try {
-        corrected = await workspace.correctPoint(id, patch, values.reason)
+        // `--at` moves the canonical time of a row whose shape designates no field — the door an
+        // estimated import needs. A designated shape keeps its own rule and refuses a clash.
+        corrected = await workspace.correctPoint(
+          id,
+          patch,
+          values.reason,
+          values.at === undefined ? {} : { tObserved: values.at },
+        )
       } catch (error) {
         fail(error)
       }
@@ -1140,6 +1161,7 @@ async function main(): Promise<void> {
                 values: corrected.values,
                 now: corrected.now,
                 ...(corrected.tObserved === undefined ? {} : { t_observed: corrected.tObserved }),
+                ...(corrected.estimated ? { t_estimated: true } : {}),
               },
             },
             null,
@@ -1147,8 +1169,13 @@ async function main(): Promise<void> {
           ) + '\n',
         )
       } else {
+        // A correction can be the time alone, so the values are one part of the line, not the line.
+        const parts = [
+          summary,
+          corrected.tObserved === undefined ? '' : `at ${corrected.tObserved}`,
+        ].filter((part) => part !== '')
         process.stdout.write(
-          `corrected ${id}  ${summary}${corrected.tObserved === undefined ? '' : `  at ${corrected.tObserved}`}  (original record preserved)\n`,
+          `corrected ${id}  ${parts.join('  ')}  (original record preserved)\n`,
         )
       }
       return

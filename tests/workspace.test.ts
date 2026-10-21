@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { initProject } from '../src/core/project.ts'
+import { commitImport, planImport } from '../src/core/import.ts'
 import { BenchError, Workspace } from '../src/core/workspace.ts'
 
 /**
@@ -162,6 +163,84 @@ describe('Workspace', () => {
     const after = await readFile(join(project, 'data', 'events.jsonl'), 'utf8')
     expect(after.startsWith(before)).toBe(true)
     expect(after.trimEnd().split('\n').at(-1)).toContain('point_corrected')
+  })
+
+  it('replaces an imported estimate with a measured time, and keeps it when only values move', async () => {
+    const dir = join(root, 'estimate')
+    await initProject(dir, 'estimate')
+    const workspace = await Workspace.open(dir)
+    const file = join(dir, 'rows.csv')
+    await writeFile(file, 'x,y\n1,2\n3,4\n', 'utf8')
+    await commitImport(
+      workspace,
+      await planImport(workspace, file, {
+        mapping: { x: 'x', y: 'y' },
+        estimate: true,
+        estimateFrom: '2026-04-01T00:00:00Z',
+      }),
+    )
+    const first = workspace.dataset('main').points[0]!
+    expect(first.tEstimated).toBe(true)
+
+    // A value edit is not evidence about the time: the estimate stays, and the instant does not move.
+    const valuesOnly = await workspace.correctPoint(first.id, { y: 2.5 })
+    expect(valuesOnly).toMatchObject({ estimated: true })
+    expect(valuesOnly.tObserved).toBeUndefined()
+    expect(workspace.findPoint(first.id)?.point.tObserved).toBe('2026-04-01T00:00:00.000Z')
+
+    // The time alone: a measured instant replaces the estimate, and the marker goes with it.
+    const replaced = await workspace.correctPoint(first.id, {}, undefined, {
+      tObserved: '2026-04-02T09:30:00+02:00',
+    })
+    expect(replaced).toMatchObject({ tObserved: '2026-04-02T07:30:00.000Z', estimated: false })
+    const after = workspace.findPoint(first.id)!.point
+    expect(after.tObserved).toBe('2026-04-02T07:30:00.000Z')
+    expect(after.tEstimated).toBeUndefined()
+    expect(after.values.y).toBe(2.5)
+    const last = workspace.allEvents.at(-1)!
+    expect(last).toMatchObject({ type: 'point_corrected', t_observed: '2026-04-02T07:30:00.000Z' })
+    expect('t_estimated' in last).toBe(false)
+
+    // The marker is in the log, so the reader that did not write it agrees.
+    const reopened = await Workspace.open(dir)
+    expect(reopened.findPoint(first.id)?.point.tObserved).toBe('2026-04-02T07:30:00.000Z')
+    expect(reopened.findPoint(first.id)?.point.tEstimated).toBeUndefined()
+    // The other row was never touched, so it is still what its file made it: an estimate.
+    expect(reopened.dataset('main').points.find((point) => point.values.x === 3)!.tEstimated).toBe(true)
+
+    // A correction with nothing in it is still refused: the estimate is replaced, not erased.
+    await expect(workspace.correctPoint(first.id, {})).rejects.toThrow(/nothing to correct/)
+  })
+
+  it('keeps a designated time field the authority when a correction also names an instant', async () => {
+    const dir = join(root, 'designated')
+    await initProject(dir, 'designated', undefined, {
+      id: 'visit.v1',
+      fields: [
+        { name: 'date', type: 'instant' },
+        { name: 'value', type: 'number' },
+      ],
+      time_field: 'date',
+    })
+    const workspace = await Workspace.open(dir)
+    const recorded = await workspace.recordPoint({ values: { date: '2026-01-01T00:00:00Z', value: 1 } })
+
+    // Agreeing is not a contradiction: the field still decides, and the instant is its own.
+    const agreeing = await workspace.correctPoint(recorded.event.id, { value: 2 }, undefined, {
+      tObserved: '2026-01-01T00:00:00Z',
+    })
+    expect(agreeing.tObserved).toBe('2026-01-01T00:00:00.000Z')
+    expect(agreeing.estimated).toBe(false)
+
+    // Disagreeing is refused in the same words `add --at` uses, and nothing is appended.
+    const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+    const failure = await workspace
+      .correctPoint(recorded.event.id, { value: 3 }, undefined, { tObserved: '2026-02-02T00:00:00Z' })
+      .then(() => null)
+      .catch((error: unknown) => error)
+    expect((failure as BenchError).kind).toBe('invalid')
+    expect((failure as BenchError).message).toContain('--at says 2026-02-02T00:00:00.000Z')
+    expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
   })
 
   it('refuses to correct a withdrawn point, and writes nothing', async () => {

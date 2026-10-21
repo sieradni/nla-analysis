@@ -68,6 +68,19 @@ export function renderState(config: StateConfig, state: ProjectState, options?: 
       )
     }
     lines.push('')
+    // A time the importer estimated is not an observation, and every later reading of those instants
+    // depends on knowing it. The brief says how many rows carry one, and how to replace it.
+    let estimatedLine = false
+    for (const dataset of datasets) {
+      const activeRows = dataset.points.filter((point) => point.status === 'active')
+      const estimated = activeRows.filter((point) => point.tEstimated === true).length
+      if (estimated === 0) continue
+      estimatedLine = true
+      lines.push(
+        `- \`${dataset.id}\` — ${estimated} of ${activeRows.length} active point(s) have an estimated time (row order stood in for a clock; \`bench correct <id> --at <instant>\` replaces one)`,
+      )
+    }
+    if (estimatedLine) lines.push('')
     for (const dataset of datasets) {
       lines.push(`- \`${dataset.id}\` — ${shapeSummary(state.shapes.get(dataset.shape))}`)
     }

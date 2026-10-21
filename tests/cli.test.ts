@@ -1119,6 +1119,67 @@ describe('bench import, as executed', () => {
     })
   })
 
+  it('imports an untimed file as a labelled estimate when told, and a measured time replaces it', async () => {
+    await withProject('import-estimate', async (dir) => {
+      await writeFile(
+        join(dir, 'readings.csv'),
+        'temp_c,volts\n21.4,3.301\n21.9,3.355\n',
+        'utf8',
+      )
+      const map = ['--map', 'x=temp_c', '--map', 'y=volts']
+      const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+
+      // The plan says where the times come from before anything is written, and the refusal is gone
+      // only because the row order was named out loud.
+      const planned = await bench(['--project', dir, 'import', 'readings.csv', ...map, '--estimate-time', '--dry-run'])
+      expect(planned.code).toBe(0)
+      expect(planned.stdout).toContain("t_observed estimated from the file's row order")
+      expect(planned.stdout).toContain('2 row(s)')
+      expect(planned.stdout).toContain('2 row(s), their times are an estimate, correctable')
+      expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
+
+      const written = await bench(['--project', dir, 'import', 'readings.csv', ...map, '--estimate-time', '--json'])
+      expect(written.code).toBe(0)
+      expect(JSON.parse(written.stdout).data).toMatchObject({
+        timeColumn: null,
+        estimated: true,
+        version: 1,
+      })
+
+      // Every row says so, in the text a person reads and in the JSON an agent reads.
+      const listed = await bench(['--project', dir, 'list', '--json'])
+      const rows = (JSON.parse(listed.stdout) as { data: { id: string; t_observed: string; t_estimated?: true }[] })
+        .data
+      expect(rows.map((point) => point.t_estimated)).toEqual([true, true])
+      expect((await bench(['--project', dir, 'list'])).stdout).toContain('(estimated)')
+
+      // Replacing the estimate is a correction that carries a time and no values.
+      const replaced = await bench([
+        '--project', dir, 'correct', rows[0]!.id, '--at', '2026-02-01T09:00:00Z', '--json',
+      ])
+      expect(replaced.code).toBe(0)
+      expect(JSON.parse(replaced.stdout).data).toMatchObject({ t_observed: '2026-02-01T09:00:00.000Z' })
+      expect(JSON.parse(replaced.stdout).data.t_estimated).toBeUndefined()
+
+      const after = (JSON.parse((await bench(['--project', dir, 'list', '--json'])).stdout) as {
+        data: { t_observed: string; t_estimated?: true }[]
+      }).data
+      expect(after[0]).toMatchObject({ t_observed: '2026-02-01T09:00:00.000Z' })
+      expect(after[0]!.t_estimated).toBeUndefined()
+      expect(after[1]!.t_estimated).toBe(true)
+      // One row is measured now and one is not, and the text list says which is which.
+      const text = (await bench(['--project', dir, 'list'])).stdout
+      expect(text.split('\n').filter((line) => /estimated/.test(line))).toHaveLength(1)
+
+      // The estimate is the log's, so it survives a fresh read by a reader that wrote nothing.
+      await bench(['--project', dir, 'state'])
+      expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toContain('t_estimated')
+      expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain(
+        '1 of 2 active point(s) have an estimated time',
+      )
+    })
+  })
+
   it('reads a time column that is not named like one when told, and diffs the next file against it', async () => {
     await withProject('import-named-time', async (dir) => {
       await writeFile(

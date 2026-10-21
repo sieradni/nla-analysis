@@ -16,9 +16,10 @@ import { makeEvent } from './events.ts'
 import type { BenchEvent, PointValue, Shape } from './events.ts'
 import { validateValues } from './shapes.ts'
 import { resolveImportColumns, suggestTimeColumn } from './import-columns.ts'
+import { canonicalInstant } from './observation.ts'
 import { coerce, parseDelimited, parseJsonl } from './table.ts'
 import type { Table } from './table.ts'
-import { diffRows, type RowDiff } from './versions.ts'
+import { diffRows, diffRowsByOrder, type RowDiff } from './versions.ts'
 import type { Workspace } from './workspace.ts'
 
 export type ImportFormat = 'csv' | 'tsv' | 'jsonl'
@@ -52,6 +53,12 @@ export interface ImportPreview extends TablePreview {
   suggested: Record<string, string>
   /** The column that looks like the observation time, in the file's spelling, or null. */
   suggestedTime: string | null
+  /**
+   * The field the shape designates as its observation time, when it does. The sheet says so instead
+   * of offering a choice: the declaration is the authority, and a picker beside it would ask a
+   * question whose answer is already fixed.
+   */
+  timeField?: string
   /** These exact bytes were imported into this dataset before. */
   duplicate: boolean
   /** The version this import would create, and the versions already there. */
@@ -74,6 +81,14 @@ export interface ImportRequest {
    * and dropping it without a decision is data loss. This is per invocation on purpose.
    */
   ignoreColumns?: string[]
+  /** Use the file's row order instead of a time column; every row's instant is then an estimate. */
+  estimate?: boolean
+  /**
+   * The instant an estimated row order is counted from: row 1 is this, each row one millisecond
+   * later. Absent means now. Callers pass it when they need the same plan twice (a preview and the
+   * write, or a test), never to make an estimate look measured.
+   */
+  estimateFrom?: string
   force?: boolean
   /** Overrides the guess from the filename. */
   format?: ImportFormat
@@ -89,8 +104,10 @@ export interface ImportPlan {
   mapping: Record<string, string>
   /** Source columns the caller named to leave out; empty when every column was used. */
   ignoredColumns: string[]
-  /** Every column a row's identity comes from; an untimed file never reaches a plan. */
-  timeColumn: string
+  /** The column a row's identity comes from; null when the file has none and the order is used. */
+  timeColumn: string | null
+  /** Every row's instant is an estimate from its position, and every row written says so. */
+  estimated: boolean
   sourceHash: string
   raggedRows: number
   comments: number
@@ -190,7 +207,8 @@ export async function previewImport(workspace: Workspace, file: string): Promise
     shape: dataset.shape,
     fields: shape.fields,
     suggested,
-    suggestedTime: suggestTimeColumn(loaded.table.columns),
+    suggestedTime: suggestTimeColumn(loaded.table.columns, loaded.table.rows),
+    ...(shape.time_field === undefined ? {} : { timeField: shape.time_field }),
     duplicate: workspace.allEvents.some(
       (event) => event.type === 'import_completed' && event.hash === hash && event.dataset === datasetId,
     ),
@@ -230,11 +248,14 @@ export async function planImport(
   const loaded = await load(file, request.format)
   const { table, text, format } = loaded
 
-  const { mapping, timeColumn, ignoredColumns, timeField, designatedColumn } = resolveImportColumns(
-    shape,
-    table.columns,
-    request,
-  )
+  const { mapping, timeColumn, estimated, ignoredColumns, timeField, designatedColumn } =
+    resolveImportColumns(shape, table.columns, request, table.rows)
+  // An estimated row order is counted from one instant, so the rows are ordered and distinct on a
+  // time axis while still being labelled as what they are. The anchor is the plan's, so a preview
+  // and the write that follows it cannot hand out two different sets of instants.
+  const anchor = estimated
+    ? canonicalInstant(request.estimateFrom ?? new Date().toISOString(), 'the estimate')
+    : null
 
   const errors: string[] = []
   const warnings: string[] = []
@@ -251,7 +272,19 @@ export async function planImport(
       if (value !== null) values[field.name] = value
     }
 
-    const raw = row[timeColumn] ?? ''
+    if (anchor !== null) {
+      // Nothing in the file says when this happened. The estimate is the file's order, one
+      // millisecond per row, and `validateValues` still sees the row's own values.
+      const validation = validateValues(shape, values)
+      if (validation.errors.length > 0) {
+        errors.push(`${where}: ${validation.errors.join('; ')}`)
+        return
+      }
+      for (const warning of validation.warnings) warnings.push(`${where}: ${warning}`)
+      prepared.push({ values, t: new Date(Date.parse(anchor) + index).toISOString() })
+      return
+    }
+    const raw = row[timeColumn!] ?? ''
     const milliseconds = Date.parse(raw)
     if (raw === '' || Number.isNaN(milliseconds)) {
       errors.push(`${where}: "${raw}" is not a parseable time`)
@@ -311,16 +344,34 @@ export async function planImport(
   // to remove, and a row the parent had is still the parent's even if it was corrected afterwards.
   const target = targetVersion(workspace, datasetId)
   const fields = Object.keys(Object.fromEntries(mapping))
-  const parentRows =
-    target.parent === null
-      ? []
-      : activeRowsOfVersion(workspace.state, datasetId, target.parent).map((point) => ({
-          id: point.id,
-          t: point.tObserved,
-          values: point.values,
-        }))
+  const parentPoints =
+    target.parent === null ? [] : activeRowsOfVersion(workspace.state, datasetId, target.parent)
+  const parentRows = parentPoints.map((point) => ({
+    id: point.id,
+    t: point.tObserved,
+    values: point.values,
+    ...(point.tEstimated === true ? { estimated: true as const } : {}),
+  }))
+  // A file with no clock is matched by the order its rows were recorded in, which is the order the
+  // previous import wrote them. Reading that from the instants would mispair as soon as one row's
+  // time had been corrected to a real instant and moved in the sorted list.
+  const parentByOrder = [...parentPoints]
+    .sort((left, right) =>
+      left.recordedAt === right.recordedAt
+        ? left.id.localeCompare(right.id)
+        : left.recordedAt.localeCompare(right.recordedAt),
+    )
+    .map((point) => ({
+      id: point.id,
+      t: point.tObserved,
+      values: point.values,
+      ...(point.tEstimated === true ? { estimated: true as const } : {}),
+    }))
   const incoming = prepared.map((row) => ({ t: row.t, values: row.values }))
-  const diff = diffRows(parentRows, incoming, fields)
+  // A file with no clock identifies its rows by position, not by an instant it does not have.
+  const diff = estimated
+    ? diffRowsByOrder(parentByOrder, incoming, fields)
+    : diffRows(parentRows, incoming, fields)
   if (target.parent !== null && diff.added === 0 && diff.removed === 0 && diff.changed === 0 && request.force !== true) {
     throw new BenchError(
       'invalid',
@@ -339,6 +390,7 @@ export async function planImport(
     mapping: Object.fromEntries(mapping),
     ignoredColumns,
     timeColumn,
+    estimated,
     sourceHash: hash,
     raggedRows: table.raggedRows,
     comments: table.comments ?? 0,
@@ -414,6 +466,7 @@ export async function commitImport(
         shape: plan.shape,
         values: row.values,
         t_observed: row.t,
+        ...(plan.estimated ? { t_estimated: true as const } : {}),
         version: plan.version,
         tags: ['import'],
       }),
@@ -428,8 +481,13 @@ export async function commitImport(
         supersedes: row.id,
         values: row.after,
         // A re-read that moves the designated field moves the instant with it. Without this the
-        // correction would change `values.date` and leave the old `t_observed` behind.
+        // correction would change `values.date` and leave the old `t_observed` behind. An estimated
+        // re-read keeps the parent row's own instant — the row is identified by its place, not by a
+        // new number — and says the time is still only an estimate.
         ...(designatesTime ? { t_observed: row.t } : {}),
+        // A row whose time was already an estimate keeps saying so; a measured instant stays
+        // measured, because re-reading an untimed file is not evidence against the time it had.
+        ...(row.estimated === true ? { t_estimated: true as const } : {}),
         reason: `re-read from ${source} (version ${plan.version})`,
         version: plan.version,
       }),
@@ -454,6 +512,7 @@ export async function commitImport(
       columns: plan.columns,
       mapping: plan.mapping,
       ...(plan.ignoredColumns.length === 0 ? {} : { ignored_columns: plan.ignoredColumns }),
+      ...(plan.estimated ? { time_estimated: true as const } : {}),
     }),
   )
   await workspace.appendAll(events)

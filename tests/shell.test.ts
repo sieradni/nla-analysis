@@ -585,7 +585,7 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     ).rejects.toThrow(/already imported/)
   })
 
-  it('refuses an untimed file through the window door, and reads a named time column when given one', async () => {
+  it('refuses an untimed file through the window door unless the row order is chosen, and finds a clock by its values', async () => {
     const api = await shell()
     const dir = await scratchProject()
 
@@ -600,7 +600,8 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     )
     expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
 
-    // A column named `taken_at` is not one of the names bench guesses, so the sheet has to say it.
+    // A column named `taken_at` is not one of the names bench lists, but its values are ISO instants:
+    // the found clock is stated before the click, rather than a file with a clock being estimated.
     // Four rows the fixture already has, plus one new reading: the diff is about that one row.
     const file = join(dir, 'taken-at.csv')
     await writeFile(
@@ -614,7 +615,8 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
       'utf8',
     )
     const preview = (await api.importPreview!(dir, file)) as Window
-    expect(preview.suggestedTime).toBeNull()
+    expect(preview.suggestedTime).toBe('taken_at')
+    // Naming it explicitly is the same answer, not a contradiction.
     const planned = (await api.importPlan!(dir, file, { x: 'x', y: 'y' }, { time: 'taken_at' })) as Window
     expect(planned).toMatchObject({ version: 3, parent: 2, diff: { added: 1, removed: 10, changed: 0 } })
 
