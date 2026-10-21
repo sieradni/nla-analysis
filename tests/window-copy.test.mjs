@@ -11,8 +11,28 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import * as copy from '../app/renderer/copy.js'
+import { resolveObservation } from '../src/core/observation.ts'
 
 const renderer = join(dirname(fileURLToPath(import.meta.url)), '..', 'app', 'renderer')
+
+/**
+ * The instant the window must read back: drawn from an independent formatter (Intl) on the machine's
+ * own clock, so this file states the rule without assuming which timezone runs it. A window that
+ * printed UTC would fail every one of these assertions wherever the reader is not at UTC.
+ */
+function onTheClock(iso) {
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(iso))
+}
+
+const OBSERVED = '2026-10-19T06:00:00.000Z'
+const OBSERVED_TEXT = onTheClock(OBSERVED)
 const POINT_ID = '01M58Y41VF83K6TQ8XWWK9VN0S'
 const ULID = /\b01[0-9A-HJKMNP-TV-Z]{24}\b/
 const EVENT_NAMES = [
@@ -77,13 +97,13 @@ describe('the hover readout', () => {
   })
 
   it('adds the observation time only when time is not an axis', () => {
-    const timed = copy.tooltipLines({ x: 1, y: 2, tObserved: '2026-10-19T06:00:00.000Z' }, panel)
-    expect(timed.join(' ')).toContain('Observed 19 Oct 2026, 06:00')
+    const timed = copy.tooltipLines({ x: 1, y: 2, tObserved: OBSERVED }, panel)
+    expect(timed.join(' ')).toContain('Observed ' + OBSERVED_TEXT)
     const timeAxis = {
       ...panel,
       chart: { ...panel.chart, x: { label: 'date', format: 'time' } },
     }
-    const onAxis = copy.tooltipLines({ x: 1, y: 2, tObserved: '2026-10-19T06:00:00.000Z' }, timeAxis)
+    const onAxis = copy.tooltipLines({ x: 1, y: 2, tObserved: OBSERVED }, timeAxis)
     expect(onAxis.join(' ')).not.toContain('Observed')
   })
 })
@@ -184,12 +204,12 @@ describe('a point\u2019s menu', () => {
         { name: 'y', type: 'number', unit: '°C' },
       ],
       values: { x: 3, y: 8.09 },
-      tObserved: '2026-10-19T06:00:00.000Z',
+      tObserved: OBSERVED,
       corrections: 0,
       recipePanels: [],
     }
     const text = copy.copiedDetails(detail)
-    expect(text).toBe('x 3 · y 8.09 °C · observed 19 Oct 2026, 06:00 · record ' + POINT_ID)
+    expect(text).toBe('x 3 · y 8.09 °C · observed ' + OBSERVED_TEXT + ' · record ' + POINT_ID)
     // The values and the time are the sentence; the id is appended, once, so another session can
     // find the record. Everything a person would read comes first.
     expect(text.match(ULID)).toHaveLength(1)
@@ -198,17 +218,133 @@ describe('a point\u2019s menu', () => {
     expect(text).not.toContain('point_')
     // A nil count is not a fact worth copying, and a missing value is not a zero.
     expect(copy.copiedDetails({ ...detail, fields: [{ name: 'y', type: 'number', unit: '°C' }], values: { y: null } })).toBe(
-      'observed 19 Oct 2026, 06:00 · record ' + POINT_ID,
+      'observed ' + OBSERVED_TEXT + ' · record ' + POINT_ID,
     )
     // A designated time field is said once, as "observed", not repeated as a value.
     const timed = copy.copiedDetails({
       ...detail,
       timeField: 'taken_at',
       fields: [{ name: 'taken_at', type: 'instant' }, ...detail.fields],
-      values: { taken_at: '2026-10-19T06:00:00.000Z', x: 3, y: 8.09 },
+      values: { taken_at: OBSERVED, x: 3, y: 8.09 },
     })
-    expect(timed).toBe('x 3 · y 8.09 °C · observed 19 Oct 2026, 06:00 · record ' + POINT_ID)
+    expect(timed).toBe('x 3 · y 8.09 °C · observed ' + OBSERVED_TEXT + ' · record ' + POINT_ID)
     expect(copy.copiedDetails(null)).toBe('')
+  })
+})
+
+describe('a time a person enters', () => {
+  const shape = {
+    id: 'log.v2',
+    version: 2,
+    fields: [
+      { name: 'app', type: 'number' },
+      { name: 'date', type: 'instant' },
+    ],
+    time_field: 'date',
+  }
+  const when = '2026-10-19T16:30:00.000Z'
+
+  it('reads an instant on the reader\u2019s clock, and only there', () => {
+    expect(copy.formatInstant(OBSERVED)).toBe(OBSERVED_TEXT)
+    expect(copy.formatDay(OBSERVED)).toBe(OBSERVED_TEXT.split(',')[0])
+    // A UTC formatter agrees with the local one only for a reader who is at UTC. Where the two
+    // differ, the window must say the time the reader's own clock says.
+    if (new Date(OBSERVED).getTimezoneOffset() !== 0) {
+      expect(copy.formatInstant(OBSERVED)).not.toBe('19 Oct 2026, 06:00')
+    }
+    expect(copy.formatInstant('')).toBe('')
+    expect(copy.formatInstant('not a time')).toBe('')
+  })
+
+  it('shows a date and a time in the control, not a timestamp to type', () => {
+    // The control's value is the same moment on the wall clock, to the minute it edits: what a
+    // date/time input needs, which is why the UTC string cannot be handed to it.
+    const date = new Date(when)
+    const pad = (part) => String(part).padStart(2, '0')
+    expect(copy.instantInputValue(when)).toBe(
+      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T` +
+        `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+    )
+    expect(copy.instantInputValue(when)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
+    expect(copy.instantInputValue('')).toBe('')
+    expect(copy.instantInputValue('not a time')).toBe('')
+  })
+
+  it('stores the moment pressed, as UTC, and reads it back as the same wall clock', () => {
+    // `typed` is what the control holds: a local date and time, no offset, no syntax to remember.
+    const typed = '2026-10-19T09:30'
+    const canonical = copy.instantFromInput(typed)
+    expect(canonical).toBe(new Date(typed).toISOString())
+    expect(canonical.endsWith('Z')).toBe(true)
+    // The digits are the reader's clock, so the stored instant is that clock read locally: the
+    // difference from the same digits read as UTC is exactly the reader's offset. `getTimezoneOffset`
+    // is minutes west of UTC, so a reader at UTC-7 pressed a moment seven hours later than those
+    // digits read as UTC.
+    const offsetMinutes = new Date(typed).getTimezoneOffset()
+    expect(Date.parse(canonical) - Date.parse(typed + 'Z')).toBe(offsetMinutes * 60000)
+    const decided = resolveObservation(shape, { app: 1, date: canonical })
+    expect(decided.tObserved).toBe(canonical)
+    expect(copy.formatInstant(decided.tObserved)).toBe(onTheClock(decided.tObserved))
+    expect(copy.instantInputValue(decided.tObserved)).toBe(typed)
+  })
+
+  it('leaves the clock exactly as the log had it when the edit was another field', () => {
+    // The control shows whole minutes; the log holds seconds and milliseconds. A correction that
+    // changes a number must not move the time by the part the control cannot show.
+    const stored = '2026-10-19T16:30:31.123Z'
+    const shown = copy.instantInputValue(stored)
+    expect(copy.instantFromInput(shown, stored)).toBe(stored)
+    expect(copy.instantInputValue(stored)).toBe(shown)
+    // A different minute is a different time, and is written as the person set it.
+    const later = copy.instantInputValue(new Date(Date.parse(stored) + 60000).toISOString())
+    const moved = copy.instantFromInput(later, stored)
+    expect(moved).not.toBe(stored)
+    expect(copy.instantInputValue(moved)).toBe(later)
+    // A value the control could not have produced is passed through, so the core refuses it in its
+    // own words rather than the window inventing one.
+    expect(copy.instantFromInput('21/10/2026 5 am')).toBe('21/10/2026 5 am')
+    expect(copy.instantFromInput('')).toBe('')
+  })
+
+  it('says the observation time once, as a time', () => {
+    const fields = [
+      { name: 'date', type: 'instant' },
+      { name: 'y', type: 'number', unit: '\u00b0C' },
+    ]
+    const values = { date: when, y: 2 }
+    // The designated field is the observation time, so the strip's values leave it to "observed".
+    expect(copy.describeValues(values, panel, fields, 'date')).toBe('y 2 \u00b0C')
+    const row = copy.status.correctionRow({
+      values,
+      panel,
+      observed: when,
+      corrections: 0,
+      stalePanels: 0,
+      fields,
+      timeField: 'date',
+    })
+    expect(row).toBe('y 2 \u00b0C \u00b7 observed ' + onTheClock(when))
+    // Never the ISO string the log holds, in the strip or in the editing sentence.
+    expect(row).not.toMatch(/\d{4}-\d{2}-\d{2}T/)
+    expect(copy.status.editing({ values, panel, fields, timeField: 'date' })).toBe(
+      'Editing y 2 \u00b0C \u00b7 Escape cancels',
+    )
+    // An instant that is not the observation time is still read as a time.
+    expect(
+      copy.describeValues(
+        { tape_at: when },
+        panel,
+        [{ name: 'tape_at', type: 'instant' }],
+      ),
+    ).toBe('tape_at ' + onTheClock(when))
+  })
+
+  it('says so when a correction moved the time', () => {
+    expect(copy.status.corrected({ active: 14, stalePanels: 0, observed: when })).toBe(
+      'Corrected \u00b7 observed ' + onTheClock(when) + ' \u00b7 14 points in this tab',
+    )
+    expect(copy.status.corrected({ active: 14, stalePanels: 0 })).toBe('Corrected \u00b7 14 points in this tab')
+    expectPlain(copy.status.corrected({ active: 14, stalePanels: 0, observed: when }), 'corrected time')
   })
 })
 

@@ -258,11 +258,22 @@ function timeTicks(min: number, max: number, target = 5): number[] {
   return out
 }
 
+function padTwo(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+/**
+ * A tick on a clock, in the reader's own timezone.
+ *
+ * The log stores UTC, but a tick is read beside a mark and beside the hover: the same instant must
+ * not read as two different times on one screen, so the axis uses the same clock the readouts do.
+ */
 function formatTime(value: number, range: number): string {
-  const iso = new Date(value).toISOString()
-  if (range < 2 * DAY) return iso.slice(0, 16).replace('T', ' ')
-  if (range < 90 * DAY) return iso.slice(0, 10)
-  return iso.slice(0, 7)
+  const date = new Date(value)
+  const day = `${date.getFullYear()}-${padTwo(date.getMonth() + 1)}-${padTwo(date.getDate())}`
+  if (range < 2 * DAY) return `${day} ${padTwo(date.getHours())}:${padTwo(date.getMinutes())}`
+  if (range < 90 * DAY) return day
+  return `${date.getFullYear()}-${padTwo(date.getMonth() + 1)}`
 }
 
 function axisTicks(axis: Axis, min: number, max: number): number[] {

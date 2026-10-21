@@ -334,6 +334,72 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('14 active points')
   })
 
+  it('moves a designated observation time through the door the time control uses', async () => {
+    const api = await shell()
+    const parent = await mkdtemp(join(tmpdir(), 'bench-shell-time-'))
+    scratch.push(parent)
+
+    // A shape that designates its own instant field: the case the entry bar draws a date/time
+    // control for, and the only case where a correction can move the observation time at all.
+    const created = (await api.createProject!(parent, 'timed', {
+      id: 'log.v1',
+      fields: [
+        { name: 'app', type: 'number' },
+        { name: 'date', type: 'instant' },
+      ],
+      time_field: 'date',
+    })) as Window
+    const dir = created.dir
+    await api.writeView!(dir, { name: 'over time', dataset: 'main', xField: 'date', yField: 'app' })
+
+    // What the control sends: the instant it holds, canonical UTC. The core decides the observation
+    // time from the designated field, so the field and `t_observed` cannot disagree (ADR 0014).
+    const recorded = (await api.recordPoint!(dir, {
+      values: { app: 1, date: '2026-10-19T16:30:00.000Z' },
+    })) as Window
+    expect(recorded.tObserved).toBe('2026-10-19T16:30:00.000Z')
+    const opened = (await api.openView!(dir, 'over time')) as Window
+    expect(opened.view.panels[0].chart.x.format).toBe('time')
+
+    const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+    const moved = (await api.correctPoint!(
+      dir,
+      recorded.id,
+      { date: '2026-10-21T16:30:00.000Z' },
+      'over time',
+    )) as Window
+    expect(moved.values).toEqual({ app: 1, date: '2026-10-21T16:30:00.000Z' })
+    const appended = (await readFile(join(dir, 'data', 'events.jsonl'), 'utf8'))
+      .slice(before.length)
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(appended.map((event: Window) => event.type)).toEqual(['point_corrected'])
+    expect(appended[0].t_observed).toBe('2026-10-21T16:30:00.000Z')
+
+    // The strip opens on the log's own instant, and a correction that leaves it alone does not move
+    // it: the control shows whole minutes while the log holds seconds and milliseconds.
+    const detail = (await api.point!(dir, recorded.id, 'over time')) as Window
+    expect(detail.values.date).toBe('2026-10-21T16:30:00.000Z')
+    expect(detail.timeField).toBe('date')
+    const kept = (await api.correctPoint!(dir, recorded.id, { app: 9 }, 'over time')) as Window
+    expect(kept.values).toEqual({ app: 9, date: '2026-10-21T16:30:00.000Z' })
+
+    // A time the control could not have produced is refused, and nothing is written. The refusal
+    // names the field first, which is what the control marks and focuses.
+    const beforeRefusal = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+    let refusal: Window | null = null
+    try {
+      await api.correctPoint!(dir, recorded.id, { date: '21/10/2026 5 am' }, 'over time')
+    } catch (error) {
+      refusal = error as Window
+    }
+    expect(refusal?.problems).toEqual([
+      'field "date" carries the observation time, but "21/10/2026 5 am" is not a parseable instant',
+    ])
+    expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(beforeRefusal)
+  })
+
   it('undoes and redoes a correction by writing the earlier and later values', async () => {
     const api = await shell()
     const dir = await scratchProject()

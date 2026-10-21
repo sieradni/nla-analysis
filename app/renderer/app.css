@@ -958,6 +958,18 @@ button {
   border-color: var(--accent);
 }
 
+/* A date and a time, side by side in the browser's own control: wide enough for both segments on a
+   row with the other fields, rather than a box that hides half of what it is asking for. */
+.entry-field-time input {
+  width: 176px;
+}
+
+/* The one press that fills a time field. Compact, because it sits inside a row of fields. */
+.entry-now {
+  padding: 4px var(--s2);
+  font-size: var(--text-sm);
+}
+
 .entry-field.invalid span {
   color: var(--danger);
 }

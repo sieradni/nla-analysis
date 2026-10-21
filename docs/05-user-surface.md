@@ -9,7 +9,10 @@ correcting and importing in both directions; U13, U17, U18 and U21 are partly bu
 formats, the rail labels, the deduplicated facts and the **Refresh** action — and the roadmap row for
 each names what is left. **Recorded 2026-10-21:** a new need, **U29**, was added to this list by the
 user — a date/time field can be filled with the current moment instead of only accepting a typed
-timestamp. It is not built. Everything a person reads is composed by one
+timestamp. **Built 2026-10-21:** U29, with the clock it depends on — an `instant` field is a date/time
+control with a **Now** button in both the entry bar and the correction strip, and every time the window
+reads (hover, strip, status, clipboard, rail, time-axis ticks) is on the reader's own clock, where it
+had been UTC. Everything a person reads is composed by one
 module, `app/renderer/copy.js`; the rest of the list is still open and the roadmap row says so. The
 work list is [03-roadmap.md](03-roadmap.md) §6, keyed by the same `U` numbers. The principle is
 [ADR 0015](adr/0015-user-surface.md).
@@ -306,10 +309,16 @@ is often not now. A blank time is refused with its field marked, never filled si
 asked for it; a shape with no designated time keeps being stamped at save, and that time is then shown
 and correctable (U11). The control is the same one the correction row uses.
 
-**Done when:** a point on a designated-instant shape is recorded with one press and no typed
-timestamp; what is stored is the moment pressed; a typed ISO string still records the same way; an
-empty field is refused and its field marked; the button and the field are reachable with the keyboard
-alone; frames at 100/125/150% show the control on one line with the other fields.
+**Built 2026-10-21.** The control is the browser's own date and time input (one line, three segments,
+no syntax), the same control in both rows, and the moment it holds is stored as canonical UTC. The
+blank case is the core's refusal, reused: the field is marked and focused. **Recorded is Now then
+Add** — two presses, not one — because a field prefilled with the paint time would record an
+observation time nobody pressed; requirements §7 puts that rule above the shorter interaction. A
+correction that edits another value keeps the instant exactly, seconds and milliseconds included.
+Evidence: roadmap U29, `tests/window-copy.test.mjs`, and a headless Chromium run against the real
+renderer modules (30 checks, both rows). Still open: frames at 100/125/150% (no window was opened;
+review is advisory), and at a narrow window the field group wraps while the control itself stays on
+one line (U20).
 
 ---
 

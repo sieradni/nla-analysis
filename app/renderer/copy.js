@@ -43,22 +43,84 @@ export function formatValue(value) {
   return parts.join('.')
 }
 
-/** `19 Oct 2026`: a calendar day, for a list where the time of day is noise. */
+/** Two digits, so a date and a time read the same in every row. */
+function padTwo(value) {
+  return String(value).padStart(2, '0')
+}
+
+/** `19 Oct 2026`: the reader's calendar day, for a list where the time of day is noise. */
 export function formatDay(iso) {
   var full = formatInstant(iso)
   return full === '' ? '' : full.split(',')[0]
 }
 
-/** `19 Oct 2026, 06:00`. A time a person can compare at a glance, not an ISO string. */
+/**
+ * `19 Oct 2026, 06:00`, on the reader's own clock.
+ *
+ * Every time a person reads in the window comes through here or `formatDay`, so there is one answer
+ * to "what time was that". The log stores UTC, but the reader does not live there: shown in UTC, a
+ * point recorded at 05:10 reads as 12:10, which is a different observation from the one made.
+ */
 export function formatInstant(iso) {
   if (typeof iso !== 'string' || iso === '') return ''
   var date = new Date(iso)
   if (isNaN(date.getTime())) return ''
-  var day = String(date.getUTCDate()).padStart(2, '0')
-  var month = MONTHS[date.getUTCMonth()]
-  var hours = String(date.getUTCHours()).padStart(2, '0')
-  var minutes = String(date.getUTCMinutes()).padStart(2, '0')
-  return day + ' ' + month + ' ' + date.getUTCFullYear() + ', ' + hours + ':' + minutes
+  return (
+    padTwo(date.getDate()) +
+    ' ' +
+    MONTHS[date.getMonth()] +
+    ' ' +
+    date.getFullYear() +
+    ', ' +
+    padTwo(date.getHours()) +
+    ':' +
+    padTwo(date.getMinutes())
+  )
+}
+
+/**
+ * The value a date/time control shows for an instant: the same moment on the reader's clock, to the
+ * minute the control edits. `2026-10-19T06:00:00.000Z` is `2026-10-18T23:00` in California.
+ */
+export function instantInputValue(iso) {
+  if (typeof iso !== 'string' || iso === '') return ''
+  var date = new Date(iso)
+  if (isNaN(date.getTime())) return ''
+  return (
+    date.getFullYear() +
+    '-' +
+    padTwo(date.getMonth() + 1) +
+    '-' +
+    padTwo(date.getDate()) +
+    'T' +
+    padTwo(date.getHours()) +
+    ':' +
+    padTwo(date.getMinutes())
+  )
+}
+
+/**
+ * A date/time control's value as the instant it names, in canonical UTC — the other direction of
+ * `instantInputValue`, so what a person pressed is what the log stores and what reads back to them.
+ *
+ * `unchanged` is the instant the field was filled from. A correction that edits another field leaves
+ * the clock alone, and that must not move it: the control shows whole minutes while the log holds
+ * seconds and milliseconds, so the same minute returns the original instant exactly. A value the
+ * control could not have produced is passed through as text, and the core refuses it in its own words.
+ */
+export function instantFromInput(text, unchanged) {
+  var raw = text === undefined || text === null ? '' : String(text).trim()
+  if (raw === '') return ''
+  var milliseconds = Date.parse(raw)
+  if (isNaN(milliseconds)) return raw
+  if (typeof unchanged === 'string' && unchanged !== '') {
+    var prior = Date.parse(unchanged)
+    // Whole minutes: the precision the control shows, and the precision a person edits.
+    if (!isNaN(prior) && Math.floor(prior / 60000) === Math.floor(milliseconds / 60000)) {
+      return new Date(prior).toISOString()
+    }
+  }
+  return new Date(milliseconds).toISOString()
 }
 
 /** A field's name and unit, as the axis spec spells them: `temperature (°C)`. */
@@ -110,18 +172,34 @@ export function copiedDetails(point) {
   return parts.join(' · ')
 }
 
-/** `x 6.5 · y 16.4`: the values of one record, in the panel's own words. */
-export function describeValues(values, panel) {
+/**
+ * `x 6.5 · y 16.4`: the values of one record, in the panel's own words.
+ *
+ * `fields` is the shape's declaration, so an instant is read as a time rather than as the ISO string
+ * the log happens to hold. A designated observation field is left out: it is said once, as
+ * `observed …`, by whoever owns the sentence.
+ */
+export function describeValues(values, panel, fields, timeField) {
   if (!values) return ''
   return Object.keys(values)
     .filter(function (name) {
+      if (name === timeField) return false
       return values[name] !== undefined && values[name] !== null && values[name] !== ''
     })
     .map(function (name) {
       var value = values[name]
       var spec = fieldSpec(panel, name)
+      var field = (fields || []).find(function (candidate) {
+        return candidate.name === name
+      })
       var shown =
-        typeof value === 'number' ? formatValue(value) : typeof value === 'string' ? value : String(value)
+        typeof value === 'number'
+          ? formatValue(value)
+          : field && field.type === 'instant'
+            ? formatInstant(String(value))
+            : typeof value === 'string'
+              ? value
+              : String(value)
       return spec.label + ' ' + shown + (spec.unit ? ' ' + spec.unit : '')
     })
     .join(' · ')
@@ -416,6 +494,9 @@ export var labels = {
   saveCorrection: 'Save correction',
   addPoint: 'Add point',
   cancel: 'Cancel',
+  // A moment is not a syntax to type: one press fills the field with the time it is now.
+  now: 'Now',
+  nowTitle: 'Fill this field with the current time',
 }
 
 /** Put the shell's own labels on the controls, so the HTML file is not a second copy of them. */
@@ -459,7 +540,16 @@ export var status = {
     return text
   },
   corrected: function (change) {
-    return 'Corrected · ' + plural(change.active, 'point') + ' in this tab' + outOfDate(change.stalePanels)
+    // A correction that moved the observation time says so: the time is the one change a person
+    // cannot see in the values they just typed.
+    return (
+      'Corrected' +
+      (change.observed ? ' · observed ' + formatInstant(change.observed) : '') +
+      ' · ' +
+      plural(change.active, 'point') +
+      ' in this tab' +
+      outOfDate(change.stalePanels)
+    )
   },
   correctionUndone: function (change) {
     return 'Correction undone · ' + plural(change.active, 'point') + ' in this tab' + outOfDate(change.stalePanels)
@@ -484,11 +574,17 @@ export var status = {
     return 'Still saving — try again in a moment.'
   },
   editing: function (change) {
-    return 'Editing ' + describeValues(change.values, change.panel) + ' · Escape cancels'
+    return (
+      'Editing ' +
+      describeValues(change.values, change.panel, change.fields, change.timeField) +
+      ' · Escape cancels'
+    )
   },
   correctionRow: function (change) {
-    var text = describeValues(change.values, change.panel)
-    if (change.observed) text += ' · observed ' + formatInstant(change.observed)
+    var text = describeValues(change.values, change.panel, change.fields, change.timeField)
+    if (change.observed) {
+      text += (text === '' ? '' : ' · ') + 'observed ' + formatInstant(change.observed)
+    }
     if (change.corrections > 0) text += ' · ' + plural(change.corrections, 'correction') + ' already'
     if (change.stalePanels > 0) text += ' · an analysis panel will need to run again'
     return text

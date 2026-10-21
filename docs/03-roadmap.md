@@ -18,6 +18,12 @@ project's `views/.trash/`, read when a project opens (U7) — and two gaps were 
 guessed at: the acts inside a reopened tab do not cross the process (the bar is empty, and the window
 does not yet say so), and a date/time field is still the one value a person has to hand-type (**U29**).
 
+**Recorded 2026-10-21 (second pass):** U29 is built, and with it the clock every readout uses — the
+window was formatting instants in UTC while the reader is not there, so a point taken at 05:10 read as
+12:10. The control, the local formatter and the time axis are one slice; what that does not reach is
+named in the U11 row (an estimate is not yet a thing the log can hold, and a shape that designates no
+time field still has no door to its canonical instant).
+
 **Direction 2026-10-21 — reviews are advisory.** The UI review loop is on hold: a change is done when
 the code is green, the states behave and the work is as good as it can be, not when a frame is
 approved. The user reports what is wrong from actual use, and each report becomes a row here. No pass
@@ -50,10 +56,16 @@ missing, and what would closing it look like".
   from its own menu and brought back as the same record, a correction reversed, and an import undone as
   a new version that holds the rows it replaced. Tab management, the versions panel, the import
   wording, display labels, tab undo and the resizable rail are not built. §6 is the list.
+- **Time is a control, not a syntax (2026-10-21).** An `instant` field is a date/time control with a
+  **Now** button in the entry bar and in the correction strip, which are one builder; the moment a
+  person presses is stored as canonical UTC, and every time the window shows — hover, strip, status,
+  clipboard, rail day, and the axis ticks of a time drawing — is read on the reader's clock. Two
+  refusals were already right and are reused: a blank designated instant is refused and its field
+  marked, and a value the core cannot parse is refused in the core's own words (U29; U11's
+  designated-field half. Replacing an *estimated* time still waits on U9, and on a way to move the
+  canonical time of a shape that designates nothing).
 - **Not built:** the rows below — tab/project management, the versions panel, entry extras, the
-  shape flow, a resizable rail, the rest of the user-surface pass, and the delivery items. A date/time
-  field is still a plain text input, so recording a point on a shape that designates its own time means
-  hand-typing an ISO timestamp and being refused if the clock is mistyped; that is U29.
+  shape flow, a resizable rail, the rest of the user-surface pass, and the delivery items.
 
 ## Verified on this tree (2026-10-19)
 
@@ -120,6 +132,7 @@ limit of each:
 | hover tooltip: values only | chart hover | **done 2026-10-20** | `copy.tooltipLines` composes the readout: values with the axis label and unit, the time only when it is not an axis, and no id, dataset, shape, recipe or version. `app-interaction.png` reads `x 3 · y 8.09`; `tests/window-copy.test.mjs`, and `pnpm app:capture` refuses log vocabulary in the hover |
 | wheel zoom, keyboard pan, hover ring | chart | done | `app-interaction.png` |
 | add a point from the entry bar | entry bar | done | `app-entry.png`; measured 22.2–25.8 ms median (2026-10-19) |
+| **fill an instant field with the current moment; read every time on the reader's clock** | entry bar, correction strip, `copy.js`, `chart.ts` | **done 2026-10-21** | `input[type=datetime-local]` + **Now** from the one field builder both rows use; the pressed moment is stored as canonical UTC and reads back locally (before this, a point taken at 05:10 read `12:10` on a UTC-7 machine). A blank time is refused by the core and marked; a correction that leaves the clock alone keeps it to the millisecond. Time-axis ticks use the same clock. Evidence: U29's row; `tests/window-copy.test.mjs`, `tests/chart.test.ts`, and a 30-check Chromium run against the real modules |
 | undo the last point (`Ctrl+Z` in an empty bar) | entry bar | done | `app-undo.png`; the same button names whichever act is later — the last added point, removal or correction — and the status offers the matching redo (U4/U5/U6); a closed tab is reopened by the status's own **Undo tab close** or `Ctrl+Shift+T`, outside that history (U7) |
 | correct a point by clicking its mark | chart selection | done | `app-corrected.png` |
 | import CSV/TSV/JSONL with a mapping sheet and a version diff | `Import…` | done | `app-import.png`, `app-version-diff.png` |
@@ -276,10 +289,10 @@ U14 and U22 landed on 2026-10-20 through `app/renderer/copy.js`; **U2, U5 and U6
 point menu and the restore event; **U7's close half** landed on 2026-10-21 — a closed tab is one
 `Ctrl+Shift+T` away, and `bench view rm`, rename and duplicate are what is left of it; U4 now covers
 add, remove, correct and import in both directions; U13, U17, U18 and U21 are partly built; the rest is
-not started, and nothing here is waiting on a decision. **U29** is new on 2026-10-21: a date/time field
-can be filled with the current moment instead of only accepting a typed timestamp. **U30** plans the
-sentence a tab reopened after a relaunch should say about its empty undo. Review no longer gates any
-of it (direction 2026-10-21).
+not started, and nothing here is waiting on a decision. **U29 is done** (2026-10-21): a date/time field
+is a control with a **Now** button, and every time the window reads is on the reader's clock. **U30**
+plans the sentence a tab reopened after a relaunch should say about its empty undo. Review no longer
+gates any of it (direction 2026-10-21).
 
 ### 6.1 A point, and what hovering one says
 
@@ -306,8 +319,8 @@ of it (direction 2026-10-21).
 | **U8** | Time column is a stated guess | S | `Time: taken_at — change` above the preview; plans immediately; Change opens the full choice; no picker homework |
 | **U9** | Untimed files import with a labelled estimate | M | `No time column — use the file order (estimated)`; rows carry the estimate; diff says so; a real time can replace it; a file *with* a clock never falls back |
 | **U10** | Import summary in plain language | S | **done 2026-10-20** — the sheet reads `5 rows · 5 columns · 2 comment lines skipped · replaces the 14 rows here now`; the plan reads `5 rows · 5 added, 14 removed, none changed · 14 rows not in this file will be withdrawn, not deleted`; the button says `Import 5 rows`. No version number, no `+1 −2 ~1`, no dataset or shape id anywhere in the sheet. Evidence: `copy.importSummary`/`importPlan`/`importButton`, `tests/window-copy.test.mjs`, capture assertions and `assertPlainSurface('the import sheet')` |
-| **U11** | Correct the observation time from the window | S–M | a date/time input in the correction row; an estimated time can be replaced; the mark moves on a time axis; status says what changed |
-| **U29** | A date/time field can be filled with the current moment | S | **recorded 2026-10-21 as a need, not built** — the entry bar draws every field as a plain text input, so a shape that designates an `instant` field as its observation time makes "record this, now" a hand-typed ISO timestamp, refused if the clock is mistyped; a shape with no designated time is stamped with the moment silently, so the same act means two different things depending on the shape. An `instant` field gets a date/time control with a **Now** button that fills the current local instant, shown in local time before the save and stored as canonical UTC; a typed ISO string still works, a blank value is refused and marked rather than stamped, and U11's correction row uses the same control so an estimated time can be replaced with the moment something happened. Done when: a point on a designated-instant shape is recorded with one press and no typed timestamp; the saved value is the instant pressed; the control is reachable keyboard-only; frames at 100/125/150% |
+| **U11** | Correct the observation time from the window | S–M | **partial 2026-10-21** — the correction row draws the same date/time control as the entry bar, opened on the log's own instant; editing it writes a `point_corrected` whose designated field the core re-derives `t_observed` from, the tab is rebuilt so the mark moves on a time axis, and the status reads `Corrected · observed <local time> · n points in this tab`. A correction that edits another field leaves the clock exactly as the log had it, to the millisecond, because the control shows whole minutes and remembers the instant it was filled from. Undo of a time correction comes free: the act stores both sides, and the earlier time is written back as another correction. **Not done:** replacing an *estimated* time — U9 has not built the estimate, and `Workspace.correctPoint` has no way to move `t_observed` for a shape that designates no time field (the field is the only door), so that half is a core change, not a wording change. Also unexercised in a real window (see U29) |
+| **U29** | A date/time field can be filled with the current moment | S | **done 2026-10-21** — an `instant` field is `input[type=datetime-local]` plus a **Now** button, built by the one `buildEntryFields` that draws both the entry bar and the correction strip, so the two cannot drift. **Now** fills the current local wall clock; the moment pressed is stored as canonical UTC (`instantFromInput`), and the same instant reads back on the reader's clock (`instantFromValue`/`formatInstant`). A typed value still works inside the control. A blank field is refused by the core and its field marked and focused, never stamped — so recording is **Now then Add**, two presses, deliberately: a defaulted instant would record a time nobody observed (requirements §7: "a blank time is refused rather than stamped silently"). The control is a native button and input, both keyboard reachable, and `title`/`aria-label` say what Now does. Evidence: `app/renderer/entry.js` (`buildEntryFields`, `coerceValue`, `fieldValueMap`), `app/renderer/copy.js` (`instantInputValue`, `instantFromInput`, `formatInstant`, `formatDay`), `tests/window-copy.test.mjs` (a local wall clock ↔ canonical UTC round trip through the core's own observation decision; the untouched-clock case keeps milliseconds; the strip says the time once and never as ISO; the status names a moved time), `tests/chart.test.ts` (time ticks are on the reader's clock), `tests/shell.test.ts` "moves a designated observation time through the door the time control uses" (the bundled core moves `t_observed` with the field, leaves it alone when another value is corrected, and refuses an unparseable time with the field named and a byte-identical log). Exercised headlessly in Chromium against the real modules — 30 checks across the entry bar and the correction strip on a UTC-7 machine, all passing: the control's type, Now's value, the stored UTC instant, the refusal marking/focus, the correction prefill, an untouched clock kept byte for byte, and a moved time written and said. **Not** frame-verified at 100/125/150%: the window was not opened (direction 2026-10-21), so that clause is open, and at a narrow window the field group wraps even though the control itself stays on one line (U20's territory) |
 
 ### 6.4 Explanation: badges, captions, numbers
 

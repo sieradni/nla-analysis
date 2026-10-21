@@ -79,6 +79,16 @@ describe('time axis', () => {
     expect(svg.match(/<circle[^>]*data-point-id="p1"/g)).toHaveLength(1)
     expect(svg).toContain('2026-10-19')
     expect(svg).not.toContain('1.76e')
+
+    // The ticks are on the reader's clock — the one the hover, the strip and the entry control use.
+    // Read as local times, the nearest tick is within an hour of the observation; a UTC axis would
+    // sit a timezone away from the mark it labels.
+    const labels = [...svg.matchAll(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2})/g)].map((match) => match[1]!)
+    expect(labels.length).toBeGreaterThan(2)
+    const nearest = Math.min(
+      ...labels.map((label) => Math.abs(Date.parse(label.replace(' ', 'T')) - at)),
+    )
+    expect(nearest).toBeLessThanOrEqual(60 * 60 * 1000)
   })
 })
 

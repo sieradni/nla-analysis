@@ -5,6 +5,8 @@ import {
   actTitle,
   copiedDetails,
   idleActTitle,
+  instantFromInput,
+  instantInputValue,
   labels,
   panelEvidence,
   panelFacts,
@@ -85,8 +87,12 @@ function wordsFor(next, direction) {
  * Typed text to a point value. The window does not get a second opinion about what a number is: a
  * value it cannot parse is passed through as text, and the shape's own validation refuses it with
  * the message the CLI would give. That is why the same typo reads the same in both places.
+ *
+ * An instant is the one value that is not typed: the control shows the reader's clock and the log
+ * stores canonical UTC, so this is where the two meet. `unchanged` is the instant the field was
+ * filled from, which a correction that did not touch the clock hands back untouched.
  */
-export function coerceValue(field, text) {
+export function coerceValue(field, text, unchanged) {
   if (field.type === 'number' || field.type === 'integer') {
     var parsed = Number(text)
     return Number.isFinite(parsed) ? parsed : text
@@ -96,6 +102,7 @@ export function coerceValue(field, text) {
     if (text.toLowerCase() === 'false') return false
     return text
   }
+  if (field.type === 'instant') return instantFromInput(text, unchanged)
   return text
 }
 
@@ -111,7 +118,7 @@ export function fieldValueMap() {
     var text = input.value.trim()
     if (text === '') return
     var field = { name: input.dataset.field, type: input.dataset.type }
-    values[field.name] = coerceValue(field, text)
+    values[field.name] = coerceValue(field, text, input.dataset.canonical)
   })
   return values
 }
@@ -133,10 +140,14 @@ export function buildEntryFields(entry, prefill, mode) {
   state.entryKey = key
   ui.entryFields.textContent = ''
   entry.fields.forEach(function (field) {
-    var label = node('label', 'entry-field')
+    // A moment gets a date and a time, not a syntax to learn. Every other field is typed, and an
+    // instant is still typeable *inside* the control — the browser's own segments, on the reader's
+    // clock — so a transcribed observation and a pressed one arrive the same way.
+    var instant = field.type === 'instant'
+    var label = node('label', 'entry-field' + (instant ? ' entry-field-time' : ''))
     label.appendChild(node('span', null, field.name))
     var input = document.createElement('input')
-    input.type = 'text'
+    input.type = instant ? 'datetime-local' : 'text'
     input.autocomplete = 'off'
     input.spellcheck = false
     input.dataset.field = field.name
@@ -145,9 +156,30 @@ export function buildEntryFields(entry, prefill, mode) {
     if (field.type === 'number' || field.type === 'integer') input.setAttribute('inputmode', 'decimal')
     // A correction starts from the point's own values, so the common edit is one number changed.
     if (prefill && prefill[field.name] !== undefined && prefill[field.name] !== null) {
-      input.value = String(prefill[field.name])
+      if (instant) {
+        // The log's instant as the reader's wall clock, and the original kept beside it: saving a
+        // correction that left the clock alone must return the instant exactly as it was.
+        input.value = instantInputValue(String(prefill[field.name]))
+        input.dataset.canonical = String(prefill[field.name])
+      } else {
+        input.value = String(prefill[field.name])
+      }
     }
     label.appendChild(input)
+    if (instant) {
+      // "This happened just now" is the common case, and it is one press rather than a typed clock.
+      var now = node('button', 'ghost entry-now', labels.now)
+      now.type = 'button'
+      now.title = labels.nowTitle
+      now.setAttribute('aria-label', labels.nowTitle)
+      now.addEventListener('click', function () {
+        input.value = instantInputValue(new Date().toISOString())
+        // A fresh moment was chosen here, so there is no earlier value to preserve.
+        delete input.dataset.canonical
+        input.focus()
+      })
+      label.appendChild(now)
+    }
     ui.entryFields.appendChild(label)
   })
 }
@@ -274,9 +306,15 @@ export function renderEntry() {
         'note',
         copyStatus.correctionRow({
           values: correction.values,
+          // The panel the record was selected in, so the strip carries the same labels and units the
+          // hover does. Absent after a repaint that replaced the drawing, and then it falls back to
+          // the field's own name.
+          panel: state.selection ? state.view.panels[state.selection.index] : undefined,
           observed: correction.tObserved,
           corrections: correction.corrections,
           stalePanels: correction.recipePanels.length,
+          fields: correction.fields,
+          timeField: correction.timeField,
         }),
       ),
     )
@@ -540,7 +578,12 @@ export async function selectPoint(id, index) {
     state.timing = null
     state.status = {
       kind: 'ok',
-      text: copyStatus.editing({ values: detail.values, panel: state.view.panels[index] }),
+      text: copyStatus.editing({
+        values: detail.values,
+        panel: state.view.panels[index],
+        fields: detail.fields,
+        timeField: detail.timeField,
+      }),
       problems: [],
     }
     state.busy = false
@@ -574,6 +617,16 @@ export function endEditFor(id) {
   state.selection = null
 }
 
+/**
+ * The canonical instant a correction left in a designated field, or undefined when the core's
+ * answer does not carry one. The window says the time only when it has the time.
+ */
+function correctedTime(corrected, timeField) {
+  var values = (corrected && corrected.values) || {}
+  var value = values[timeField]
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
 /** Put the bar back to adding, and take the ring off. */
 export function closeCorrection() {
   if (state.selection) {
@@ -595,6 +648,11 @@ export async function submitCorrection() {
   var correction = state.correction
   var before = correction.values
   var values = fieldValueMap()
+  // Did this edit move the observation time? Re-derived from the shape's designated field by the
+  // core, so the answer is the log's, not the strip's.
+  var moved =
+    correction.timeField !== undefined &&
+    String(correction.values[correction.timeField]) !== String(values[correction.timeField])
   var ended = false
   state.busy = true
   renderEntry()
@@ -613,9 +671,12 @@ export async function submitCorrection() {
     renderTabs()
     renderView(captureRestore())
     var stale = corrected.view.kept
+    // The new instant, said only when it is one: a status that reads `observed undefined` is worse
+    // than a status that says only what happened.
+    var movedTo = moved ? correctedTime(corrected, correction.timeField) : undefined
     setStatus(
       stale.length > 0 ? 'error' : 'ok',
-      copyStatus.corrected({ active: corrected.active, stalePanels: stale.length }),
+      copyStatus.corrected({ active: corrected.active, stalePanels: stale.length, observed: movedTo }),
     )
     focusFirstField()
   } catch (error) {

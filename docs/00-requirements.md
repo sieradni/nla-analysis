@@ -276,8 +276,10 @@ itself. The empty first tab and the empty project offer **Add a point**, **Creat
 - Auto-advance, `Tab`/`Shift+Tab`, `Ctrl+Z`, `Esc` to amend the last point, timestamp editable inline.
 - An `instant` field is filled from a date/time control with a **Now** button, not only by typing an ISO
   string: **Now** fills the current local instant, shown in local time and stored as canonical UTC, and
-  a blank time is refused rather than stamped silently. **Recorded 2026-10-21 as a need, not built**
-  (roadmap U29).
+  a blank time is refused rather than stamped silently. **Built 2026-10-21** (roadmap U29): the field
+  is a native date/time control in the entry bar and the correction strip, and every time the window
+  reads is on the reader's clock. Recording is **Now then Add**, not a single press: a field prefilled
+  with the paint time would record an observation time nobody pressed, which the sentence above forbids.
 - Paste TSV from Excel with preview + confirm (this is the format people actually have).
 - Stream mode: one text box, one line per point, commit on blur — for transcribing notebooks.
 - Optimistic append; derivation in a worker.
