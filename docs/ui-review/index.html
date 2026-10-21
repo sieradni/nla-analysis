@@ -72,7 +72,7 @@
       <img src="app-entry.png" alt="bench window after a point was typed into the entry bar" />
     </figure>
     <figure>
-      <figcaption>undo (Ctrl+Z): a retraction, and the panels are current again — app-undo.png</figcaption>
+      <figcaption>undo (Ctrl+Z): a retraction, the panels are current again, and the status offers <b>Redo added point</b> — app-undo.png</figcaption>
       <img src="app-undo.png" alt="bench window after undo retracted the point" />
     </figure>
     <figure>
@@ -86,6 +86,10 @@
     <figure>
       <figcaption>a point corrected by selecting it: y 2.55 → 24.5, and the fitted panel is stale — app-corrected.png</figcaption>
       <img src="app-corrected.png" alt="bench window after a point was corrected from the selected mark" />
+    </figure>
+    <figure>
+      <figcaption>the correction undone: the value is back to 2.55, the bar says <b>Correction undone</b>, and the status offers <b>Redo correction</b> — app-correction-undo.png</figcaption>
+      <img src="app-correction-undo.png" alt="bench window after the last correction was undone" />
     </figure>
     <figure>
       <figcaption>a point's own menu: take its details, correct it, or remove it — opened by right-click, or by Shift+F10 on a selected mark — app-point-menu.png</figcaption>
@@ -138,6 +142,10 @@
     <figure>
       <figcaption>importing a messy CSV: x ← temp_c, y ← volts, previewed before anything is written — app-import.png</figcaption>
       <img src="app-import.png" alt="bench window showing the import dialog with a mapped preview of a CSV" />
+    </figure>
+    <figure>
+      <figcaption>the import undone: the rows from before it are back, the status says <b>Restored the data from before the import</b>, and it offers <b>Reapply import</b> — app-import-undone.png</figcaption>
+      <img src="app-import-undone.png" alt="bench window after an import was undone, with the earlier rows restored and a redo button beside the status" />
     </figure>
     <figure>
       <figcaption>a file with no clock: the sheet plans nothing until a time column is chosen, and Import refuses without appending — app-import-untimed.png</figcaption>

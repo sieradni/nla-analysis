@@ -219,18 +219,25 @@ describe('the entry bar', () => {
     const said = [
       copy.status.saved({ active: 15, warnings: ['field `temprature` is not in the shape'], reread: true }),
       copy.status.corrected({ active: 15, stalePanels: 1 }),
+      copy.status.correctionUndone({ active: 15, stalePanels: 1 }),
+      copy.status.importUndone({ active: 14 }),
+      copy.status.importReapplied({ active: 5 }),
       copy.status.removed({ active: 14 }),
       copy.status.restored({ active: 15 }),
       copy.status.copied(),
       copy.status.stillSaving(),
       copy.status.editing({ values, panel }),
       copy.status.correctionRow({ values, observed: '2026-10-19T06:00:00.000Z', corrections: 0, stalePanels: 0 }),
-      copy.status.undoLabel({ kind: 'removal' }),
-      copy.status.undoLabel({ kind: 'point' }),
-      copy.status.undoLabel(null),
-      copy.status.undoTitle({ kind: 'removal' }),
-      copy.status.undoTitle({ kind: 'point' }),
-      copy.status.undoTitle(null),
+      copy.actTitle('undo', copy.labels.actRemoval),
+      copy.actTitle('undo', copy.labels.actPoint),
+      copy.actTitle('undo', copy.labels.actCorrection),
+      copy.actTitle('undo', copy.labels.actImport),
+      copy.actTitle('redo', copy.labels.actRemovalRedo),
+      copy.actTitle('redo', copy.labels.actPointRedo),
+      copy.actTitle('redo', copy.labels.actCorrectionRedo),
+      copy.actTitle('redo', copy.labels.actImportRedo),
+      copy.idleActTitle('undo'),
+      copy.idleActTitle('redo'),
       copy.status.readoutTitle(),
       copy.status.idleHint(),
       copy.status.rereadTab(),
@@ -277,6 +284,7 @@ describe('a refusal', () => {
     'shape "xy.v1" is not the latest version',
     'dataset "main" has no version 2',
     'nothing to retract; `bench list` shows active points',
+    `point "${POINT_ID}" has been withdrawn`,
   ]
 
   it('says the consequence, never the handle the core used', () => {
@@ -294,6 +302,9 @@ describe('a refusal', () => {
     expect(copy.refusal(core[2])).toBe('That point is still in the data')
     expect(copy.refusal(core[3])).toBe('That dataset has no points yet')
     expect(copy.refusal(core[4])).toBe('That dataset is not in the project')
+    // A withdrawn row is not a retraction refused and not a number to fix: it is a record that is no
+    // longer there, which is why the strip ends instead of asking for the Save again.
+    expect(copy.refusal(core[12])).toBe('That point has been withdrawn')
     expect(copy.refusal('nothing to retract; `bench list` shows active points')).toBe('Nothing to retract')
     // A field name is the person's own word, so it stays; only the shape it was checked against goes.
     expect(copy.refusal(core[6])).toBe('Field "x" expects a finite number, got "seven"')
@@ -301,12 +312,41 @@ describe('a refusal', () => {
     expect(copy.refusal('')).toBe('That point was not saved.')
   })
 
-  it('labels the one undo with the act it would reverse', () => {
-    expect(copy.status.undoLabel({ kind: 'removal' })).toBe('Undo removal')
-    expect(copy.status.undoLabel({ kind: 'point' })).toBe('Undo added point')
-    expect(copy.status.undoLabel(null)).toBe('Undo')
-    expect(copy.status.undoTitle({ kind: 'removal' })).toContain('removed')
-    expect(copy.status.undoTitle(null)).toContain('Nothing to undo')
+  it('names the act each direction would repeat, in the words the table pairs with it', () => {
+    // The labels and phrases are this file's; `entry.js`'s one table pairs them with a kind and an
+    // effect. These are the pieces that table reads, so a fifth act cannot grow a second set of words.
+    expect(copy.labels.undoPoint).toBe('Undo added point')
+    expect(copy.labels.undoRemoval).toBe('Undo removal')
+    expect(copy.labels.undoCorrection).toBe('Undo correction')
+    expect(copy.labels.undoImport).toBe('Undo import')
+    expect(copy.labels.redoPoint).toBe('Redo added point')
+    expect(copy.labels.redoRemoval).toBe('Redo removal')
+    expect(copy.labels.redoCorrection).toBe('Redo correction')
+    expect(copy.labels.redoImport).toBe('Reapply import')
+    expect(copy.labels.undo).toBe('Undo')
+    expect(copy.labels.redo).toBe('Redo')
+
+    expect(copy.actTitle('undo', copy.labels.actRemoval)).toBe(
+      'Undo the last point removed here (Ctrl+Z in an empty field)',
+    )
+    expect(copy.actTitle('undo', copy.labels.actCorrection)).toContain('correction')
+    expect(copy.actTitle('undo', copy.labels.actImport)).toContain('import')
+    // The other direction names the same act in its own grammar, so the buttons read as a pair.
+    expect(copy.actTitle('redo', copy.labels.actCorrectionRedo)).toBe(
+      'Redo the correction made here (Ctrl+Shift+Z or Ctrl+Y in an empty field)',
+    )
+    expect(copy.actTitle('redo', copy.labels.actImportRedo)).toContain('import')
+    expect(copy.idleActTitle('undo')).toBe('Nothing to undo yet (Ctrl+Z in an empty field)')
+    expect(copy.idleActTitle('redo')).toBe('Nothing to redo yet')
+    // A correction that is undone says so, and still names the panel that needs rerunning.
+    expect(copy.status.correctionUndone({ active: 15, stalePanels: 1 })).toBe(
+      'Correction undone · 15 points in this tab · 1 analysis panel is out of date until it is run again',
+    )
+    // An import's undo names the consequence, not a version number: the log keeps those.
+    expect(copy.status.importUndone({ active: 14 })).toBe(
+      'Restored the data from before the import · 14 points in this tab',
+    )
+    expect(copy.status.importReapplied({ active: 5 })).toBe('Reapplied the import · 5 points in this tab')
   })
 })
 
@@ -400,5 +440,9 @@ describe('the renderer cannot put log vocabulary back', () => {
     for (const event of EVENT_NAMES) {
       expect(source).not.toMatch(new RegExp(`['"\`]${event}['"\`]`))
     }
+    // Words never branch on which kind of act they describe: the one table in entry.js does that,
+    // and copy.js should not grow a second list of kinds behind it.
+    expect(source).not.toMatch(/\bnext\.kind\b|\bentry\.kind\b/)
+    expect(source).not.toMatch(/kind === '(point|removal|correction|import)'/)
   })
 })

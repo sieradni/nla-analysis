@@ -7,7 +7,7 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 
 | working | specified, not built |
 |---|---|
-| `init`, `add`, `correct`, `retract`, `restore`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `dataset list\|versions\|diff`, `shape extend`, `shape designate`, `view list\|show\|new\|add\|save\|render` | `dataset replace\|show\|export`, `shape list\|validate`, `annotate`, `add --stdin`, `view create\|open`, `recipe show` |
+| `init`, `add`, `correct`, `retract`, `restore`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `dataset list\|versions\|diff\|restore`, `shape extend`, `shape designate`, `view list\|show\|new\|add\|save\|render` | `dataset replace\|show\|export`, `shape list\|validate`, `annotate`, `add --stdin`, `view create\|open`, `recipe show` |
 
 Available recipes: `fit` (curve, band, verdict) and `drift` (does the relationship change over time).
 
@@ -215,6 +215,7 @@ exist, which analyses are stale, what the last decisions were, and what is unres
 | `bench dataset list` | id, shape, version, active/recorded rows, time span |
 | `bench dataset versions <id>` | every version, the diff that created it, and its row count now |
 | `bench dataset diff <id> [v1] [v2]` | row-level `+n −n ~n` between two versions (default: the newest pair) |
+| `bench dataset restore <id> <version>` | make an older version current again, as a new version with a parent and a diff; `--empty` restores the empty dataset before version 1 |
 | `bench dataset show <id>` | shape, fields, units, provenance chain. **Not built.** |
 | `bench dataset replace <id> --from <file>` | new version + diff vs parent. **Not built**; import into a populated dataset is the replace surface. |
 | `bench dataset export <id> [--version] --format csv\|parquet` | analysis-ready copy. **Not built.** |
@@ -222,6 +223,12 @@ exist, which analyses are stale, what the last decisions were, and what is unres
 Replacing never destroys: `bench import` into a populated dataset appends `dataset_version_created`
 with a parent and a diff, and marks dependent analyses stale. There is deliberately no `dataset
 replace` command to duplicate that path ([ADR 0012](adr/0012-dataset-versions.md)).
+
+Undoing an import is the same mechanism in the other direction: `bench dataset restore <id> <version>`
+appends a new version holding that older version's rows, with a parent and a diff. Nothing is deleted
+and the version it replaced still reads as it did; `--empty` is the one case with no older version to
+name, and restores the empty dataset before version 1. The window's undo of an import calls this same
+path, so the CLI and the bar cannot disagree about what came back.
 
 ### Shapes
 

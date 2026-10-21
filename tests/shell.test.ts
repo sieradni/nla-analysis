@@ -113,6 +113,30 @@ describe.skipIf(!built)('bundled core, as the desktop shell loads it', () => {
     await expect(api.openView!(fixture, 'not a tab')).rejects.toThrow(/no view named/)
   })
 
+  it('hands the window a refusal it can classify, with the kind the core chose', async () => {
+    const api = await shell()
+    // The envelope the IPC handler sends. Built by the bundle, so this is the function the shell
+    // calls rather than a copy of its field list — a hand-written list lost the kind, and every
+    // failed undo was then offered again for ever.
+    let missing: Window | null = null
+    try {
+      await api.openView!(fixture, 'not a tab')
+    } catch (error) {
+      missing = api.refusalOf!(error) as Window
+    }
+    expect(missing).toMatchObject({ ok: false, error: { kind: 'missing' } })
+    expect(missing!.error.message).toMatch(/no view named/)
+    expect(missing!.error.problems).toEqual([])
+    expect(typeof missing!.error.hint).toBe('string')
+
+    // A failure the core did not classify keeps a null kind: a locked file or a dropped call is
+    // worth retrying, and calling it permanent would hide a control that still works.
+    expect(api.refusalOf!(new Error('EBUSY: resource busy or locked'))).toEqual({
+      ok: false,
+      error: { kind: null, message: 'EBUSY: resource busy or locked', hint: null, problems: [] },
+    })
+  })
+
   it('lists projects without opening one', async () => {
     const api = await shell()
     const listed = (await api.projects!()) as { projects: unknown[] }
@@ -251,11 +275,17 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('14 active points')
 
     // A second undo holding the *old* removal is refused rather than reversing the newer one: the
-    // window's stale button cannot undo somebody else's act.
+    // window's stale button cannot undo somebody else's act. The refusal says so in a way the
+    // window can act on: `invalid` is why the act is dropped instead of offered again.
     const again2 = (await api.retractPoint!(dir, target.id)) as Window
-    await expect(api.restorePoint!(dir, target.id, removed.retraction)).rejects.toThrow(
-      /no longer the one in force/,
-    )
+    let stale: Window | null = null
+    try {
+      await api.restorePoint!(dir, target.id, removed.retraction)
+    } catch (error) {
+      stale = api.refusalOf!(error) as Window
+    }
+    expect(stale!.error.message).toMatch(/no longer the one in force/)
+    expect(stale!.error.kind).toBe('invalid')
     // The removal that is in force still comes back, whether it is named or left to the core.
     expect(((await api.restorePoint!(dir, target.id, again2.retraction)) as Window).active).toBe(14)
     await expect(api.restorePoint!(dir, target.id)).rejects.toThrow(/is not retracted/)
@@ -302,6 +332,107 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     expect(corrected.view.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
 
     expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('14 active points')
+  })
+
+  it('undoes and redoes a correction by writing the earlier and later values', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const opened = (await api.openView!(dir, 'drift over time')) as Window
+    const drawing = opened.drawings[1]
+    const drawn = { id: drawing.ids.split('\n')[0], x: drawing.xs[0], y: drawing.ys[0] }
+    const detail = (await api.point!(dir, drawn.id, 'drift over time')) as Window
+    const before = detail.values
+    const beforeLog = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+
+    // Save a correction, then the two acts the bar's history performs: undo writes the values the
+    // strip read before the save, and redo writes the corrected ones back. Each is a new event.
+    const corrected = (await api.correctPoint!(
+      dir,
+      drawn.id,
+      { ...before, y: drawn.y + 5 },
+      'drift over time',
+    )) as Window
+    const undone = (await api.correctPoint!(dir, drawn.id, before, 'drift over time')) as Window
+    const redone = (await api.correctPoint!(
+      dir,
+      drawn.id,
+      corrected.values,
+      'drift over time',
+    )) as Window
+
+    expect(undone.values).toEqual(before)
+    expect(redone.values).toEqual(corrected.values)
+
+    const appended = (await readFile(join(dir, 'data', 'events.jsonl'), 'utf8'))
+      .slice(beforeLog.length)
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    // Three corrections, not one rewritten event: the log can still say what the point has held.
+    expect(appended.map((event: Window) => event.type)).toEqual([
+      'point_corrected',
+      'point_corrected',
+      'point_corrected',
+    ])
+    expect(appended.map((event: Window) => event.supersedes)).toEqual([
+      drawn.id,
+      drawn.id,
+      drawn.id,
+    ])
+    expect(appended[1].values).toEqual(before)
+    expect(appended[2].values).toEqual(corrected.values)
+
+    const again = (await api.point!(dir, drawn.id, 'drift over time')) as Window
+    expect(again.values).toEqual(corrected.values)
+    expect(again.corrections).toBe(3)
+
+    const refreshed = (await api.refreshView!(dir, 'drift over time')) as Window
+    expect(refreshed.entry.active).toBe(14)
+    expect(refreshed.view.panels[1].n).toBe(14)
+  })
+
+  it('restores a version through the window door, and redraws the tab it replaced', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const opened = (await api.openView!(dir, 'drift over time')) as Window
+    expect(opened.view.panels[1].n).toBe(14)
+
+    // An import into a dataset with rows: version 3 replaces version 2 with two rows.
+    const file = join(dir, 'two-rows.csv')
+    await writeFile(
+      file,
+      'timestamp,x,y\n2026-01-05T09:00:00Z,21.4,3.301\n2026-01-05T09:05:00Z,21.9,3.355\n',
+      'utf8',
+    )
+    const imported = (await api.importFile!(dir, file, { x: 'x', y: 'y' }, {
+      time: 'timestamp',
+      viewName: 'drift over time',
+    })) as Window
+    expect(imported).toMatchObject({ version: 3, parent: 2, rows: 2, active: 2 })
+
+    // Undo of the import: version 2 becomes current again, as version 4, and the tab is rebuilt
+    // from those rows — a recipe panel is kept and reported stale, not left looking current.
+    const restored = (await api.restoreVersion!(dir, 'main', 2, 'drift over time')) as Window
+    expect(restored).toMatchObject({ version: 4, parent: 3, restoredFrom: 2, rows: 14, active: 14 })
+    expect(restored.diff).toEqual({ added: 14, removed: 2, changed: 0 })
+    expect(restored.view.view.panels[1].n).toBe(14)
+    expect(restored.view.statuses.map((status: Window) => status.state)).toEqual(['stale', 'current'])
+
+    const records = (await readFile(join(dir, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((event: Window) => event.type === 'dataset_version_created' && event.version === 4)
+    expect(records).toHaveLength(1)
+    expect(records[0].parent).toBe(3)
+    expect(records[0].source).toBe('restored from version 2')
+    expect(records[0].diff).toEqual({ added: 14, removed: 2, changed: 0 })
+
+    // Redo: the imported version comes back, as version 5.
+    const redone = (await api.restoreVersion!(dir, 'main', 3, 'drift over time')) as Window
+    expect(redone).toMatchObject({ version: 5, parent: 4, restoredFrom: 3, rows: 2, active: 2 })
+    expect(redone.view.view.panels[1].n).toBe(2)
+    expect(await readFile(join(dir, 'STATE.md'), 'utf8')).toContain('2 active points')
   })
 
   it('imports a messy file through the window door: preview, map, then one append', async () => {
@@ -928,6 +1059,31 @@ describe.skipIf(!built)('the bundled core, with the CLI writing beside it', () =
     // The tab's fingerprint was taken against the full log, so reopening it is not a stale tab.
     const shown = JSON.parse(await bench(dir, ['view', 'show', 'drift over time', '--json'])) as Window
     expect(shown.data.status[1].state).toBe('current')
+  })
+
+  it('refuses a correction onto a withdrawn row, with the kind the bar ends the edit on', async () => {
+    const api = await shell()
+    const dir = await scratchProject()
+    const opened = (await api.openView!(dir, 'drift over time')) as Window
+    const drawn = opened.drawings[1]
+    const id = drawn.ids.split('\n')[0]
+
+    // The row is withdrawn after the tab drawing it was taken from — the same state the window is in
+    // when an import, or an undo, takes away the point the strip is editing.
+    await api.retractPoint!(dir, id, 'withdrawn under the strip')
+    const before = await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')
+
+    let refusal: Window | null = null
+    try {
+      await api.correctPoint!(dir, id, { y: 1 }, 'drift over time')
+    } catch (error) {
+      refusal = api.refusalOf!(error) as Window
+    }
+
+    // The kind crosses the door the window branches on: `missing` is what ends the edit rather than
+    // leaving a Save that can only be refused again.
+    expect(refusal).toMatchObject({ ok: false, error: { kind: 'missing' } })
+    expect(await readFile(join(dir, 'data', 'events.jsonl'), 'utf8')).toBe(before)
   })
 
   it('does not undo a point the CLI retracted while the window still held it', async () => {

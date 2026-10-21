@@ -2,8 +2,8 @@
 import { state, ui, node, bridge, call, showFailure } from './state.js'
 import { renderTabs } from './rail.js'
 import { renderView, captureRestore } from './panels.js'
-import { renderEntry, setStatus, focusFirstField } from './entry.js'
-import { resetTabHistory } from './history.js'
+import { renderEntry, endEditFor, setStatus, focusFirstField } from './entry.js'
+import { noteImport, reconcileImport } from './history.js'
 import {
   importButton,
   importPlan as importPlanText,
@@ -280,13 +280,20 @@ export async function submitImport(event) {
       }),
     )
     ui.importDialog.close()
+    // An import replaces the data under the tab without leaving it: the drawing is refreshed like any
+    // other write, and only the acts it touched leave the history. Everything else the person did
+    // here stays undoable, in order, so undoing the import gives the earlier acts their turn back.
     if (imported.view) {
       state.opened = imported.view
       state.view = imported.view.view
+    }
+    reconcileImport(imported)
+    // An import that withdrew or rewrote the row being edited ends that edit, for the same reason it
+    // ends the acts about that row: the strip has nothing left to save to.
+    ;(imported.touched || []).forEach(endEditFor)
+    noteImport(imported.dataset, imported.version, imported.parent)
+    if (imported.view) {
       if (state.projectEntry && imported.view.entry) state.projectEntry.active = imported.view.entry.active
-      // An import can withdraw a row this tab still remembered a removal of. The acts belong to the
-      // data they were made against, so the history goes with it.
-      resetTabHistory()
       renderTabs()
       renderView(captureRestore())
     } else {
@@ -316,6 +323,10 @@ export async function submitImport(event) {
   } finally {
     state.importBusy = false
     state.busy = false
+    // The bar was drawn while the write was in flight, and `busy` disabled its undo. Clearing the
+    // flag is not enough: the button stays disabled until something redraws it, which after an
+    // import is nothing at all — the act it offers would be there but unclickable.
+    renderEntry()
   }
 }
 

@@ -40,6 +40,7 @@ import {
   type ShapeFieldInput,
 } from './shapes.ts'
 import { resolveObservation } from './observation.ts'
+import { diffRows } from './versions.ts'
 
 // Re-exported so existing callers (the CLI, the tests) keep importing the refusal from the seam that
 // raises it; the definition lives in errors.ts so modules that are not the write path can use it too.
@@ -111,6 +112,20 @@ export interface PointRestoration {
   active: number
 }
 
+export interface VersionRestore {
+  event: BenchEvent
+  dataset: string
+  /** The new version this restore wrote. */
+  version: number
+  /** The version it replaced: the one that was current before the restore. */
+  parent: number
+  /** The older version whose rows were restored; null means the empty dataset before version 1. */
+  restoredFrom: number | null
+  rows: number
+  diff: { added: number; removed: number; changed: number }
+  active: number
+}
+
 export interface AnalysisRequest {
   recipe: string
   params: Record<string, unknown>
@@ -128,6 +143,13 @@ export interface AnalysisOutcome {
   params: Record<string, unknown>
   artifactRef: string
   verdictChanged?: boolean
+}
+
+/** Two value maps hold the same row when every key is present on both sides with the same value. */
+function sameValues(left: Record<string, PointValue>, right: Record<string, PointValue>): boolean {
+  const keys = Object.keys(left)
+  if (keys.length !== Object.keys(right).length) return false
+  return keys.every((key) => Object.hasOwn(right, key) && left[key] === right[key])
 }
 
 export class Workspace {
@@ -376,6 +398,177 @@ export class Workspace {
     return activeRowsOfVersion(this.current, datasetId, version)
   }
 
+  /**
+   * Make an older version current again, as a *new* version. This is the inverse of an import.
+   *
+   * Nothing is deleted and no past version changes: the new version's rows are the old version's
+   * rows, brought back by the same acts a person would perform by hand — a retraction for a row the
+   * newer version added, a restore for a row it withdrew, a correction for a row it changed. Those
+   * acts name the new version, so folding any earlier version still reads exactly as it did. The
+   * `dataset_version_created` record is what makes the restore a version rather than a pile of edits;
+   * it names the version it restored and carries the diff against the one it replaced.
+   *
+   * `version` is an older version of this dataset. `null` means the empty dataset before version 1,
+   * which is the only thing there is to restore when the first import created version 1.
+   */
+  async restoreVersion(datasetId: string, version: number | null): Promise<VersionRestore> {
+    await this.freshen()
+    const dataset = this.current.datasets.get(datasetId)
+    if (!dataset) throw new BenchError('missing', `no dataset "${datasetId}"`)
+    const current = dataset.version
+    const known = dataset.versions.map((record) => record.version)
+    if (known.length === 0) {
+      throw new BenchError('missing', `dataset "${datasetId}" has no versions`, {
+        hint: 'nothing has been imported or recorded in a version',
+      })
+    }
+    if (version === null) {
+      // "No rows" is only an older state when there is exactly one version to go back beyond. On a
+      // dataset that has moved on, naming no version would wipe rows nobody asked to lose.
+      if (current !== 1) {
+        throw new BenchError('invalid', 'only the first version can be restored to an empty dataset', {
+          hint: `name an older version: ${known.join(', ')}`,
+        })
+      }
+    } else {
+      if (!known.includes(version)) {
+        throw new BenchError('missing', `dataset "${datasetId}" has no version ${version}`, {
+          hint: `versions: ${known.join(', ')}`,
+        })
+      }
+      if (version >= current) {
+        throw new BenchError('invalid', `version ${version} is not older than the current version ${current}`, {
+          hint: 'name the version the data should go back to',
+        })
+      }
+    }
+
+    const targetRows = version === null ? [] : this.rowsOfVersion(datasetId, version)
+    const currentRows = activePoints(this.current, datasetId)
+    const shape = this.shapeOf(datasetId)
+    const fields = shape.fields.map((field) => field.name)
+    const next = current + 1
+    const from = version === null ? 'the empty dataset before version 1' : `version ${version}`
+    const diff = diffRows(
+      currentRows.map((point) => ({ id: point.id, t: point.tObserved, values: point.values })),
+      targetRows.map((point) => ({ t: point.tObserved, values: point.values })),
+      fields,
+    )
+
+    const events: BenchEvent[] = [
+      makeEvent('dataset_version_created', this.handle.session, {
+        dataset: datasetId,
+        version: next,
+        source: `restored from ${from}`,
+        hash: '',
+        rows: targetRows.length,
+        parent: current,
+        diff: { added: diff.added, removed: diff.removed, changed: diff.changed },
+      }),
+    ]
+
+    // Rows the version being replaced added: they leave, exactly as an import's new rows do.
+    const wanted = new Set(targetRows.map((point) => point.id))
+    for (const point of currentRows) {
+      if (wanted.has(point.id)) continue
+      events.push(
+        makeEvent('point_retracted', this.handle.session, {
+          dataset: datasetId,
+          supersedes: point.id,
+          reason: `not in ${from}; restored`,
+          version: next,
+        }),
+      )
+    }
+
+    const byId = new Map(dataset.points.map((point) => [point.id, point]))
+    for (const row of targetRows) {
+      const now = byId.get(row.id)
+      // Defensive: a version's rows are points the log recorded, so every one has a fold entry. A
+      // missing one would be a log problem, and recording the row is the honest repair.
+      if (!now) {
+        events.push(
+          makeEvent('point_recorded', this.handle.session, {
+            dataset: datasetId,
+            shape: row.shape,
+            values: { ...row.values },
+            t_observed: row.tObserved,
+            version: next,
+          }),
+        )
+        continue
+      }
+
+      // A correction merges values; it cannot unset a field. A field this row gained after the
+      // restored version was current would survive the merge and the new version would not hold the
+      // row it claims to. So that row is recorded afresh with exactly the older version's values.
+      const gained = Object.keys(now.values).filter((key) => !Object.hasOwn(row.values, key))
+      const unableToMoveTime = now.tObserved !== row.tObserved && shape.time_field === undefined
+      if (gained.length > 0 || unableToMoveTime) {
+        if (now.status === 'active') {
+          events.push(
+            makeEvent('point_retracted', this.handle.session, {
+              dataset: datasetId,
+              supersedes: now.id,
+              reason: `replaced by ${from}; restored`,
+              version: next,
+            }),
+          )
+        }
+        events.push(
+          makeEvent('point_recorded', this.handle.session, {
+            dataset: datasetId,
+            shape: row.shape,
+            values: { ...row.values },
+            t_observed: row.tObserved,
+            version: next,
+          }),
+        )
+        continue
+      }
+
+      if (now.status === 'retracted') {
+        if (now.retractedBy === undefined) {
+          throw new BenchError('invariant', `point "${row.id}" is retracted but names no retraction`, {
+            hint: 'the log was written by something other than bench; `bench check` reports the rest',
+          })
+        }
+        events.push(
+          makeEvent('point_restored', this.handle.session, {
+            dataset: datasetId,
+            restores: now.retractedBy,
+            version: next,
+          }),
+        )
+      }
+      if (!sameValues(now.values, row.values) || now.tObserved !== row.tObserved) {
+        events.push(
+          makeEvent('point_corrected', this.handle.session, {
+            dataset: datasetId,
+            supersedes: row.id,
+            values: { ...row.values },
+            ...(shape.time_field === undefined ? {} : { t_observed: row.tObserved }),
+            reason: `restored from ${from}`,
+            version: next,
+          }),
+        )
+      }
+    }
+
+    const event = events[0]!
+    await this.append(events)
+    return {
+      event,
+      dataset: datasetId,
+      version: next,
+      parent: current,
+      restoredFrom: version,
+      rows: targetRows.length,
+      diff: { added: diff.added, removed: diff.removed, changed: diff.changed },
+      active: activePoints(this.current, datasetId).length,
+    }
+  }
+
   findPoint(id: string): { dataset: string; point: Point } | undefined {
     for (const dataset of this.current.datasets.values()) {
       const point = dataset.points.find((candidate) => candidate.id === id)
@@ -523,6 +716,15 @@ export class Workspace {
     await this.freshen()
     const found = this.findPoint(id)
     if (!found) throw new BenchError('missing', `no point with id "${id}"`)
+    // A correction changes the row a dataset is read from. A withdrawn row is not one of those: the
+    // fold would merge the values into a point nothing shows, and a later restore would come back
+    // with numbers nobody chose. `missing`, not `invalid`, because the record is not in the data and
+    // retrying the same call cannot succeed — the window ends the edit on that kind.
+    if (found.point.status === 'retracted') {
+      throw new BenchError('missing', `point "${id}" has been withdrawn`, {
+        hint: 'undo the removal to edit it again',
+      })
+    }
     if (Object.keys(patch).length === 0) {
       throw new BenchError('invalid', 'nothing to correct', { hint: `pass --values '{"y":3.5}'` })
     }

@@ -148,6 +148,10 @@ the data on disk.
   version with a parent and prints the diff (`+120 −3 ~8 rows`). A separate `bench dataset replace`
   command is not built; the importer is the replace surface
   ([ADR 0011](adr/0011-import-door.md), [ADR 0012](adr/0012-dataset-versions.md)).
+- **Restore** is the inverse: `bench dataset restore <id> <version>` appends a version holding an
+  older version's rows, with a parent and a diff, so undoing an import never deletes one. The rows
+  come back by ordinary retraction, restore and correction events; the first version's undo is the
+  empty dataset before it. The window's undo of an import calls the same path.
 - **Add point** → a point event in the current version, not a new version. Both are cheap and both are
   recorded.
 - Analyses pin `(dataset, version)`: the `analysis_run` records the version it read alongside hashes of
@@ -252,10 +256,11 @@ from this tab, and `Esc` cancels a correction ([plan](02-implementation-plan.md)
 **Undo and redo (decided 2026-10-20, [ADR 0015](adr/0015-user-surface.md)):** one history covers add,
 remove, correct, tab create/delete and import; `Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`; visible buttons
 naming the action. A removed point is restored by `point_restored` — the same record, not a lookalike
-([ADR 0016](adr/0016-point-restore.md)) — and **that part is built**: remove from a point's menu,
-undo from the status line or the keyboard, redo to remove it again. The rest of the history (a
-correction's undo, tab create/delete, an import's restore version) is not built yet (roadmap U4).
-Text fields keep their own undo while focused.
+([ADR 0016](adr/0016-point-restore.md)). **Built so far:** add, remove and correct are undoable and
+redoable in both directions, with the bar naming the act and the status offering its redo; undoing a
+correction writes the earlier values as a new correction rather than rewriting one, and undoing an
+import writes a new version holding the replaced version's rows. What is still not built is tab
+create/delete (roadmap U7). Text fields keep their own undo while focused.
 
 **Buttons, not commands (decided 2026-10-20):** every action a person needs is reachable from the
 window. A CLI command may appear only inside a collapsed "for agents" detail, never as the only way

@@ -155,11 +155,16 @@ app/                the desktop shell (ADR 0005): Electron main + preload + rend
                     IPC facade over them. main.js is the window, the IPC surface and the boot
                     switch; harness/ holds capture, measure and smoke, which drive that window.
 app/renderer/       the viewport, split by concern. app.js is wiring and the open-view lifecycle
-                    only; state.js owns shared state and the core call; copy.js owns every word
-                    a person reads (ADR 0015) and no other module composes a sentence;
+                    only; state.js owns shared state, the core call and `showView`, the one seam
+                    by which the open view changes and the one caller of `resetTabHistory`;
+                    copy.js owns every word a person reads (ADR 0015) and no other module
+                    composes a sentence, including the phrases an act's label and tooltip are
+                    built from;
                     rail.js owns projects/tabs/folder; panels.js owns the panel mount and statuses;
-                    entry.js owns typing, correction and the bar's undo actions; history.js owns
-                    the tab's undo/redo stacks and what each would reverse; tabs.js owns the tab
+                    entry.js owns typing, correction and the one table of act kinds (label,
+                    tooltip, undo and redo function) that both dispatch and the bar read;
+                    history.js owns the tab's undo/redo stacks, the refusal policy, what each
+                    act would reverse, and which acts an import's own report ends; tabs.js owns the tab
                     sheet; projects.js owns the project sheet; import.js owns the import sheet;
                     navigation.js holds the few shell actions that cross a module.
                     Remaining window work lands here: resizable/collapsible rail in rail.js, the

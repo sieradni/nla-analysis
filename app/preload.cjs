@@ -29,15 +29,19 @@ contextBridge.exposeInMainWorld('bench', {
   writeView: (dir, draft) => ipcRenderer.invoke('bench:writeView', dir, draft),
   createProject: (parent, name, shape) =>
     ipcRenderer.invoke('bench:createProject', parent, name, shape),
-  // Writing: append one point, correct one point, remove one, bring a removed one back, write a tab,
-  // rebuild a tab from the current data. Nothing that takes a log event, a file path or a raw
-  // command, so the window cannot write anything else.
+  // Writing: append one point, correct one point, remove one, bring a removed one back, restore a
+  // version, write a tab, rebuild a tab from the current data. Nothing that takes a log event, a file
+  // path or a raw command, so the window cannot write anything else.
   recordPoint: (dir, draft, viewName) => ipcRenderer.invoke('bench:recordPoint', dir, draft, viewName),
   correctPoint: (dir, id, values, viewName) =>
     ipcRenderer.invoke('bench:correctPoint', dir, id, values, viewName),
   retractPoint: (dir, id, reason) => ipcRenderer.invoke('bench:retractPoint', dir, id, reason),
   restorePoint: (dir, id, retraction) =>
     ipcRenderer.invoke('bench:restorePoint', dir, id, retraction),
+  // An older version becomes current again as a new version; `version` null is the empty dataset
+  // before version 1, which is what undoing the first import restores.
+  restoreVersion: (dir, dataset, version, viewName) =>
+    ipcRenderer.invoke('bench:restoreVersion', dir, dataset, version, viewName),
   // The clipboard is the one thing a person asks the window to send outside the project. Copying is
   // a write to the system clipboard, not to the project, so it does not go through `Workspace`.
   copyText: (text) => ipcRenderer.invoke('bench:copyText', text),

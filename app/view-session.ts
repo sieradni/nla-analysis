@@ -423,6 +423,45 @@ export async function correctPoint(
   }
 }
 
+export interface RestoredVersion {
+  dataset: string
+  /** The new version the restore wrote, and the one it replaced. */
+  version: number
+  parent: number
+  /** The older version whose rows came back; null means the empty dataset before version 1. */
+  restoredFrom: number | null
+  rows: number
+  diff: { added: number; removed: number; changed: number }
+  active: number
+  /** The tab, rebuilt and redrawn; null when the window had no tab to rebuild. */
+  view: RefreshedView | null
+}
+
+/**
+ * Make an older version current again, through the same core call the CLI uses. The tab is rebuilt
+ * rather than patched: rows came back, left, or changed, so every panel's input fingerprint moved.
+ */
+export async function restoreVersion(
+  dir: string,
+  dataset: string,
+  version: number | null,
+  viewName?: string,
+): Promise<RestoredVersion> {
+  const workspace = await workspaceFor(dir)
+  const restored = await workspace.restoreVersion(dataset, version)
+  await workspace.writeStateBrief()
+  return {
+    dataset: restored.dataset,
+    version: restored.version,
+    parent: restored.parent,
+    restoredFrom: restored.restoredFrom,
+    rows: restored.rows,
+    diff: restored.diff,
+    active: restored.active,
+    view: viewName === undefined ? null : await refreshView(dir, viewName, { draw: true }),
+  }
+}
+
 export interface RefreshedView {
   view: ViewFile
   statuses: PanelStatus[]

@@ -76,6 +76,34 @@ async function accessibilityImages() {
     }))
 }
 
+/**
+ * Click a mark by record id with real pointer events, in whichever panel draws it, and wait for the
+ * strip it opens. Returns the id it clicked, or null: a mark that is not drawn is not selectable, and
+ * saying so beats a silent miss.
+ */
+async function selectMarkById(id) {
+  const clicked = await window.webContents.executeJavaScript(`(() => {
+    for (const host of document.querySelectorAll('.panel-chart')) {
+      const marks = (host.__benchChart && host.__benchChart.marks()) || []
+      const mark = marks.find((candidate) => candidate.id === ${JSON.stringify(id)})
+      if (!mark) continue
+      const at = { clientX: mark.x, clientY: mark.y }
+      for (const type of ['pointerdown', 'pointerup']) {
+        host.dispatchEvent(
+          new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, button: 0, ...at }),
+        )
+      }
+      return mark.id
+    }
+    return null
+  })()`)
+  for (let waited = 0; clicked && waited < 40; waited += 1) {
+    if (JSON.parse(await entryState()).correcting) break
+    await sleep(100)
+  }
+  return clicked
+}
+
 export async function capture() {
   // The renderer's own errors, so a script that throws says why instead of just "failed to execute".
   // Content-Security-Policy violations are counted rather than printed: the core's chart markup sets
@@ -375,6 +403,21 @@ let cspViolations = 0
     await new Promise((done) => setTimeout(done, 300))
     console.log('[bench] entry ' + JSON.stringify(timing))
     console.log('[bench] entry-state ' + (await entryState()))
+    // The bar's one button, before it is pressed: the label and the tooltip are two fields of the
+    // same table row, so this is where the pairing can be checked.
+    const appendOffered = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const button = document.getElementById('entry-undo')
+        return JSON.stringify({ label: button.textContent, title: button.title, disabled: button.disabled })
+      })()`),
+    )
+    console.log('[bench] undo-offered ' + JSON.stringify(appendOffered))
+    if (appendOffered.disabled || appendOffered.label !== 'Undo added point') {
+      throw new Error('the bar does not offer the point it just recorded: ' + JSON.stringify(appendOffered))
+    }
+    if (appendOffered.title !== 'Undo the last point added here (Ctrl+Z in an empty field)') {
+      throw new Error('the point tooltip does not name the act: ' + appendOffered.title)
+    }
     // The evidence line under the drawing is DOM the window updates on the keystroke path: the new
     // point has to reach it without a redraw, and without touching the SVG.
     const evidenceAfter = await window.webContents.executeJavaScript(
@@ -402,6 +445,69 @@ let cspViolations = 0
     await assertPlainSurface('after undo')
     await writeFile(join(captureDir, 'app-undo.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
+
+    const tailEvent = async () => {
+      const lines = (await readFile(join(writableDir, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n')
+      return JSON.parse(lines[lines.length - 1])
+    }
+
+    // Redo of undoing an added point: the status offers it, the keyboard does it, and the same record
+    // comes back — a restore naming the retraction the undo wrote, not a second point with new values.
+    const undoOffered = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const action = document.querySelector('#entry-status .status-action')
+        const undo = document.getElementById('entry-undo')
+        return JSON.stringify({
+          status: document.getElementById('entry-status').textContent,
+          redo: action ? action.textContent : null,
+          redoTitle: action ? action.title : null,
+          undo: undo.textContent,
+          undoTitle: undo.title,
+        })
+      })()`),
+    )
+    console.log('[bench] undo-added ' + JSON.stringify(undoOffered))
+    if (undoOffered.redo !== 'Redo added point') {
+      throw new Error('undo of an added point offers no redo: ' + JSON.stringify(undoOffered))
+    }
+    // The button and its tooltip come from the same table row, so the pair cannot drift apart.
+    if (
+      undoOffered.redoTitle !==
+      'Redo the point added here (Ctrl+Shift+Z or Ctrl+Y in an empty field)'
+    ) {
+      throw new Error('the redo tooltip does not name the act it would repeat: ' + undoOffered.redoTitle)
+    }
+    pressKey('Z', ['control', 'shift'])
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Restored/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const restoredAfterUndo = JSON.parse(await entryState())
+    const restoreEvent = await tailEvent()
+    console.log(
+      '[bench] redo-added ' +
+        JSON.stringify({
+          status: restoredAfterUndo.status,
+          readout: restoredAfterUndo.readout,
+          event: restoreEvent.type,
+        }),
+    )
+    if (!/^Restored/.test(restoredAfterUndo.status || '')) {
+      throw new Error('redo of undoing an added point reported nothing: ' + restoredAfterUndo.status)
+    }
+    if (restoreEvent.type !== 'point_restored') {
+      throw new Error('redo did not restore the record it had withdrawn: ' + restoreEvent.type)
+    }
+    // Undo it once more, so the steps below start from the count they were written against. This is
+    // the cycle a person actually performs: add, take it back, put it back, take it back again.
+    pressKey('Z', ['control'])
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Removed/.test(state.status || '')) break
+      await sleep(100)
+    }
+    await assertPlainSurface('after redoing an added point')
 
     // A refusal, typed the way a person types a typo. The assertion that matters is not on screen:
     // the text has to still be in the field afterwards. A rejection that also loses the number just
@@ -548,6 +654,96 @@ let cspViolations = 0
     await assertPlainSurface('after a correction')
     await writeFile(join(captureDir, 'app-corrected.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
+
+    // The correction is the newest act, and the bar's one button says so. Undo writes the values the
+    // strip read before the save; redo writes the corrected ones back. Both are corrections in the
+    // log, so a month from now it can still say every number this point has held.
+    const afterCorrection = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => {
+        const button = document.getElementById('entry-undo')
+        return JSON.stringify({ label: button.textContent, title: button.title, disabled: button.disabled })
+      })()`),
+    )
+    console.log('[bench] correction-undo ' + JSON.stringify(afterCorrection))
+    if (afterCorrection.disabled || afterCorrection.label !== 'Undo correction') {
+      throw new Error(
+        'the bar does not offer the correction it just recorded: ' + JSON.stringify(afterCorrection),
+      )
+    }
+    if (afterCorrection.title !== 'Undo the last correction made here (Ctrl+Z in an empty field)') {
+      throw new Error('the correction tooltip does not name the act: ' + afterCorrection.title)
+    }
+    await focusField(0)
+    pressKey('Z', ['control'])
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Correction undone/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const undoneCorrection = JSON.parse(await entryState())
+    const undoneEvent = await tailEvent()
+    console.log(
+      '[bench] correction-undone ' +
+        JSON.stringify({
+          status: undoneCorrection.status,
+          event: undoneEvent.type,
+          values: undoneEvent.values,
+          was: strip.typed,
+        }),
+    )
+    if (!/^Correction undone/.test(undoneCorrection.status || '')) {
+      throw new Error('undoing a correction reported nothing: ' + undoneCorrection.status)
+    }
+    if (!/out of date/.test(undoneCorrection.status || '')) {
+      throw new Error('undoing a correction did not say the analysis panel needs rerunning')
+    }
+    if (undoneEvent.type !== 'point_corrected' || undoneEvent.supersedes !== selected) {
+      throw new Error('undoing a correction did not record the earlier values: ' + JSON.stringify(undoneEvent))
+    }
+    if (Number(undoneEvent.values.y) !== Number(strip.typed.y)) {
+      throw new Error('the undone correction did not restore the value the strip read: ' + JSON.stringify(undoneEvent.values))
+    }
+    // The sentence grew a panel warning and a redo button; the row must still fit rather than clip
+    // either of them.
+    const statusFit = await window.webContents.executeJavaScript(`(() => {
+      const row = document.getElementById('entry-status')
+      return row.scrollWidth - Math.round(row.getBoundingClientRect().width)
+    })()`)
+    console.log('[bench] correction-status-overflow ' + statusFit + 'px')
+    if (statusFit > 1) throw new Error(`the status row with its redo button overflows by ${statusFit}px`)
+    const redoCorrection = JSON.parse(
+      await window.webContents.executeJavaScript(
+        "(() => { const button = document.querySelector('#entry-status .status-action'); return JSON.stringify({ label: button ? button.textContent : null, title: button ? button.title : null }) })()",
+      ),
+    )
+    if (redoCorrection.label !== 'Redo correction') {
+      throw new Error('an undone correction offers no redo: ' + redoCorrection.label)
+    }
+    if (redoCorrection.title !== 'Redo the correction made here (Ctrl+Shift+Z or Ctrl+Y in an empty field)') {
+      throw new Error('the redo tooltip does not name the correction: ' + redoCorrection.title)
+    }
+    await writeFile(join(captureDir, 'app-correction-undo.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+    await assertPlainSurface('after undoing a correction')
+
+    pressKey('Z', ['control', 'shift'])
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Corrected/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const redoneCorrection = JSON.parse(await entryState())
+    const redoneEvent = await tailEvent()
+    console.log(
+      '[bench] correction-redone ' +
+        JSON.stringify({ status: redoneCorrection.status, event: redoneEvent.type, values: redoneEvent.values }),
+    )
+    if (!/^Corrected/.test(redoneCorrection.status || '')) {
+      throw new Error('redoing a correction reported nothing: ' + redoneCorrection.status)
+    }
+    if (redoneEvent.type !== 'point_corrected' || Number(redoneEvent.values.y) !== 24.5) {
+      throw new Error('redo did not write the corrected value back: ' + JSON.stringify(redoneEvent))
+    }
 
     // The notice's action is a button, not a command: refresh redraws what the core can redraw and
     // says plainly what it could not (a recipe panel needs its analysis run again).
@@ -737,6 +933,7 @@ let cspViolations = 0
       const beside = document.querySelector('#entry-status .status-action')
       return JSON.stringify({
         label: button && !button.disabled ? button.textContent : null,
+        title: button ? button.title : null,
         beside: beside ? beside.textContent : null,
         focus: document.activeElement ? String(document.activeElement.className || '') : '',
         menu: Boolean(document.querySelector('.point-menu')),
@@ -748,6 +945,7 @@ let cspViolations = 0
         JSON.stringify({
           status: removedState.status,
           undo: undoState.label,
+          undoTitle: undoState.title,
           beside: undoState.beside,
           focus: undoState.focus,
           marks: { before: beforeRemove, after: removedMarks },
@@ -758,6 +956,9 @@ let cspViolations = 0
     if (!/^Removed/.test(removedState.status || '')) throw new Error('Removing a point reported nothing')
     if (undoState.label !== 'Undo removal') {
       throw new Error('the one undo does not name the removal it would reverse: ' + undoState.label)
+    }
+    if (undoState.title !== 'Undo the last point removed here (Ctrl+Z in an empty field)') {
+      throw new Error('the removal tooltip does not name the act: ' + undoState.title)
     }
     // The act came from the drawing, and the repaint that followed it must leave the keyboard there
     // rather than putting it in the entry bar or on the document body.
@@ -799,12 +1000,15 @@ let cspViolations = 0
     if (restoredMarks !== beforeRemove) throw new Error(`the mark did not come back (${restoredMarks})`)
     // Redo is the other direction of the same history, and it is the only button beside the status:
     // two undo buttons for one act was the thing this replaced.
-    const redoButton = await window.webContents.executeJavaScript(`(() => {
+    const redoButton = JSON.parse(await window.webContents.executeJavaScript(`(() => {
       const button = document.querySelector('#entry-status .status-action')
-      return button ? button.textContent : null
-    })()`)
-    if (redoButton !== 'Redo removal') {
-      throw new Error('undo of a removal offers no Redo button: ' + redoButton)
+      return JSON.stringify({ label: button ? button.textContent : null, title: button ? button.title : null })
+    })()`))
+    if (redoButton.label !== 'Redo removal') {
+      throw new Error('undo of a removal offers no Redo button: ' + redoButton.label)
+    }
+    if (redoButton.title !== 'Redo the point removed here (Ctrl+Shift+Z or Ctrl+Y in an empty field)') {
+      throw new Error('the redo tooltip does not name the removal: ' + redoButton.title)
     }
     if (restoration.type !== 'point_restored' || restoration.restores !== retraction.id) {
       throw new Error('undo did not record a restore of that retraction: ' + JSON.stringify(restoration))
@@ -2126,6 +2330,537 @@ let cspViolations = 0
     await assertPlainSurface('a tab drawn from two versions')
     await writeFile(join(captureDir, 'app-mixed-versions.png'), (await window.webContents.capturePage()).toPNG())
     frames += 1
+
+    // Undoing an import from the window. Its own copy of the fixture keeps the version numbers in the
+    // frames above as they were. The sheet is the same door a person uses, and the undo is a real
+    // Ctrl+Z: the version that was replaced becomes current again *as a new version*, never a
+    // deletion, and redo restores the imported one the same way.
+    const undoImportProject = join(dirname(writableDir), 'undo-import')
+    await cp(startupDir, undoImportProject, { recursive: true })
+    const undoImportFile = join(dirname(undoImportProject), 'two-rows.csv')
+    await writeFile(
+      undoImportFile,
+      'timestamp,x,y\n2026-01-05T09:00:00Z,21.4,3.301\n2026-01-05T09:05:00Z,21.9,3.355\n',
+      'utf8',
+    )
+    setNextStartup(undoImportProject)
+    setNextPickedFile(undoImportFile)
+    window.webContents.reload()
+    await new Promise((done) => ipcMain.once('bench:ready', done))
+    if (!(await focusWindowForInput())) {
+      throw new Error('the window never took focus for the import-undo frame')
+    }
+    await sleep(700)
+
+    const beforeUndoImport = JSON.parse(await entryState())
+    await window.webContents.executeJavaScript("document.getElementById('import-open').click()")
+    for (let waited = 0; waited < 60; waited += 1) {
+      const ready = await window.webContents.executeJavaScript(
+        "(() => { const d = document.getElementById('import-dialog'); return d.open && !document.getElementById('import-apply').disabled })()",
+      )
+      if (ready) break
+      await sleep(100)
+    }
+    await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
+    for (let waited = 0; waited < 100; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Imported 2 rows/.test(state.status || '')) break
+      const failed = await window.webContents.executeJavaScript(
+        "(() => { const e = document.getElementById('import-error'); return e.hidden ? null : e.textContent })()",
+      )
+      if (failed) throw new Error('the import for the undo frame was refused: ' + failed)
+      await sleep(100)
+    }
+    await sleep(500)
+
+    // The version record is the first event of a write, not the last: a restore ends with the row
+    // events that brought the rows back. Read the newest version record, whichever write it was.
+    const lastVersionEvent = async () => {
+      const events = (await readFile(join(undoImportProject, 'data', 'events.jsonl'), 'utf8'))
+        .trimEnd()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      return events.filter((event) => event.type === 'dataset_version_created').at(-1)
+    }
+    const importedForUndo = JSON.parse(await entryState())
+    const importedVersion = await lastVersionEvent()
+    const importUndo = JSON.parse(
+      await window.webContents.executeJavaScript(
+        "(() => { const button = document.getElementById('entry-undo'); return JSON.stringify({ label: button.textContent, title: button.title }) })()",
+      ),
+    )
+    const importUndoLabel = importUndo.label
+    console.log(
+      '[bench] import-undo-ready ' +
+        JSON.stringify({
+          status: importedForUndo.status,
+          readout: importedForUndo.readout,
+          before: beforeUndoImport.readout,
+          undo: importUndoLabel,
+          undoTitle: importUndo.title,
+          version: {
+            version: importedVersion.version,
+            parent: importedVersion.parent,
+            rows: importedVersion.rows,
+          },
+        }),
+    )
+    if (!/^Imported 2 rows/.test(importedForUndo.status || '')) {
+      throw new Error('the window did not report the import it just made: ' + importedForUndo.status)
+    }
+    if (!/n = 2/.test(importedForUndo.readout || '')) {
+      throw new Error('the imported tab does not read n = 2: ' + importedForUndo.readout)
+    }
+    if (importUndoLabel !== 'Undo import') {
+      throw new Error('the bar does not offer the import it just recorded: ' + importUndoLabel)
+    }
+    if (importUndo.title !== 'Undo the last import (Ctrl+Z in an empty field)') {
+      throw new Error('the import tooltip does not name the act: ' + importUndo.title)
+    }
+    if (importedVersion.version !== 3 || importedVersion.parent !== 2) {
+      throw new Error('the import did not write version 3 over 2: ' + JSON.stringify(importedVersion))
+    }
+
+    // Ctrl+Z in an empty field: version 2's rows come back as version 4, not as three hundred edits
+    // without a version record.
+    await focusField(0)
+    pressKey('Z', ['control'])
+    for (let waited = 0; waited < 100; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Restored the data from before the import/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const undoneImport = JSON.parse(await entryState())
+    const restoredVersion = await lastVersionEvent()
+    const redoImport = JSON.parse(
+      await window.webContents.executeJavaScript(
+        "(() => { const button = document.querySelector('#entry-status .status-action'); return JSON.stringify({ label: button ? button.textContent : null, title: button ? button.title : null }) })()",
+      ),
+    )
+    const redoImportLabel = redoImport.label
+    console.log(
+      '[bench] import-undone ' +
+        JSON.stringify({
+          status: undoneImport.status,
+          readout: undoneImport.readout,
+          redo: redoImportLabel,
+          redoTitle: redoImport.title,
+          version: {
+            version: restoredVersion.version,
+            parent: restoredVersion.parent,
+            rows: restoredVersion.rows,
+            source: restoredVersion.source,
+            diff: restoredVersion.diff,
+          },
+        }),
+    )
+    if (!/^Restored the data from before the import/.test(undoneImport.status || '')) {
+      throw new Error('undoing the import reported nothing: ' + undoneImport.status)
+    }
+    if (!/n = 14/.test(undoneImport.readout || '')) {
+      throw new Error('undoing the import did not bring the rows back: ' + undoneImport.readout)
+    }
+    if (redoImportLabel !== 'Reapply import') {
+      throw new Error('undoing the import offers no redo: ' + redoImportLabel)
+    }
+    if (redoImport.title !== 'Redo the import that was undone (Ctrl+Shift+Z or Ctrl+Y in an empty field)') {
+      throw new Error('the redo tooltip does not name the import: ' + redoImport.title)
+    }
+    if (
+      restoredVersion.type !== 'dataset_version_created' ||
+      restoredVersion.version !== 4 ||
+      restoredVersion.parent !== 3 ||
+      restoredVersion.rows !== 14 ||
+      restoredVersion.source !== 'restored from version 2'
+    ) {
+      throw new Error('undoing the import did not restore version 2 as version 4: ' + JSON.stringify(restoredVersion))
+    }
+    if (JSON.stringify(restoredVersion.diff) !== JSON.stringify({ added: 14, removed: 2, changed: 0 })) {
+      throw new Error('the restore recorded a diff that does not match the rows: ' + JSON.stringify(restoredVersion.diff))
+    }
+    await writeFile(join(captureDir, 'app-import-undone.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+    await assertPlainSurface('after undoing an import')
+
+    // Redo by keyboard: the imported version returns, again as a new version.
+    pressKey('Z', ['control', 'shift'])
+    for (let waited = 0; waited < 100; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Reapplied the import/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const redoneImport = JSON.parse(await entryState())
+    const reopenedVersion = await lastVersionEvent()
+    console.log(
+      '[bench] import-redone ' +
+        JSON.stringify({
+          status: redoneImport.status,
+          readout: redoneImport.readout,
+          version: {
+            version: reopenedVersion.version,
+            parent: reopenedVersion.parent,
+            rows: reopenedVersion.rows,
+            source: reopenedVersion.source,
+          },
+        }),
+    )
+    if (!/^Reapplied the import/.test(redoneImport.status || '')) {
+      throw new Error('redoing the import reported nothing: ' + redoneImport.status)
+    }
+    if (!/n = 2/.test(redoneImport.readout || '')) {
+      throw new Error('redoing the import did not reapply its rows: ' + redoneImport.readout)
+    }
+    if (
+      reopenedVersion.type !== 'dataset_version_created' ||
+      reopenedVersion.version !== 5 ||
+      reopenedVersion.parent !== 4 ||
+      reopenedVersion.rows !== 2 ||
+      reopenedVersion.source !== 'restored from version 3'
+    ) {
+      throw new Error('redoing the import did not restore version 3 as version 5: ' + JSON.stringify(reopenedVersion))
+    }
+
+    // And once more in the other direction, so the stack is proved to cycle rather than work once.
+    await focusField(0)
+    pressKey('Z', ['control'])
+    for (let waited = 0; waited < 100; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (/^Restored the data from before the import/.test(state.status || '')) break
+      await sleep(100)
+    }
+    const secondUndo = await lastVersionEvent()
+    if (secondUndo.version !== 6 || secondUndo.rows !== 14) {
+      throw new Error('the second undo did not restore the older rows again: ' + JSON.stringify(secondUndo))
+    }
+    await assertPlainSurface('after redoing an import')
+
+    // A refusal that can never succeed must stop being offered. The watcher is stopped for this
+    // probe on purpose: a watched reload clears the tab's history, which is what usually hides this
+    // case, and clearing it would hide the decision being checked. What is left is the situation the
+    // classification exists for — the record moved after the window drew it — driven by the real
+    // key, the real handler and the real IPC envelope.
+    await enterPoint(22.4, 3.7)
+    const offeredUndo = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => JSON.stringify({
+        label: document.getElementById('entry-undo').textContent,
+        enabled: !document.getElementById('entry-undo').disabled,
+      }))()`),
+    )
+    if (offeredUndo.enabled !== true || offeredUndo.label !== 'Undo added point') {
+      throw new Error('the probe point left no undo to refuse: ' + JSON.stringify(offeredUndo))
+    }
+    await window.webContents.executeJavaScript(
+      `window.bench.watch(${JSON.stringify(undoImportProject)}, null)`,
+    )
+    const probePoint = (await readFile(join(undoImportProject, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.type === 'point_recorded')
+      .at(-1)
+    const moved = await window.webContents.executeJavaScript(
+      `window.bench.retractPoint(${JSON.stringify(undoImportProject)}, ${JSON.stringify(probePoint.id)})`,
+    )
+    if (!moved || moved.ok !== true) {
+      throw new Error('the probe could not move the record under the window: ' + JSON.stringify(moved))
+    }
+    const eventCount = async () =>
+      (await readFile(join(undoImportProject, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n').length
+    const eventsBeforeUndo = await eventCount()
+    await focusField(0)
+    pressKey('Z', ['control'])
+    for (let waited = 0; waited < 60; waited += 1) {
+      const state = JSON.parse(await entryState())
+      if (state.status && /already been removed/.test(state.status)) break
+      await sleep(100)
+    }
+    const refusedUndo = JSON.parse(
+      await window.webContents.executeJavaScript(`(() => JSON.stringify({
+        status: document.getElementById('entry-status').textContent,
+        label: document.getElementById('entry-undo').textContent,
+        enabled: !document.getElementById('entry-undo').disabled,
+      }))()`),
+    )
+    const eventsAfterUndo = await eventCount()
+    console.log(
+      '[bench] refused-undo ' +
+        JSON.stringify({ ...refusedUndo, eventsWritten: eventsAfterUndo - eventsBeforeUndo }),
+    )
+    if (!/^That point has already been removed$/.test(refusedUndo.status)) {
+      throw new Error('undoing a record another writer withdrew did not say so: ' + refusedUndo.status)
+    }
+    if (refusedUndo.enabled !== false || refusedUndo.label !== 'Undo') {
+      throw new Error('an act that can never succeed is still offered: ' + JSON.stringify(refusedUndo))
+    }
+    if (eventsAfterUndo !== eventsBeforeUndo) {
+      throw new Error('an undo the core refused wrote an event anyway')
+    }
+
+    // An import ends only the acts it touched. Two sequences, both driven by the real keys: a point
+    // whose row the file already holds must stay undoable across the import, and a point the file
+    // leaves out must be dropped rather than offered and then refused.
+    const keepsProject = join(dirname(writableDir), 'import-keeps')
+    await cp(startupDir, keepsProject, { recursive: true })
+    setNextStartup(keepsProject)
+    window.webContents.reload()
+    await new Promise((done) => ipcMain.once('bench:ready', done))
+    if (!(await focusWindowForInput())) {
+      throw new Error('the window never took focus for the import-reconciliation frames')
+    }
+    await sleep(700)
+
+    const logCount = async (project) =>
+      (await readFile(join(project, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n').length
+    const lastLoggedEvent = async (project) => {
+      const lines = (await readFile(join(project, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n')
+      return JSON.parse(lines[lines.length - 1])
+    }
+    const barUndo = async () =>
+      JSON.parse(
+        await window.webContents.executeJavaScript(`(() => {
+          const button = document.getElementById('entry-undo')
+          return JSON.stringify({ label: button.textContent, disabled: button.disabled })
+        })()`),
+      )
+    const waitStatus = async (pattern, what) => {
+      for (let waited = 0; waited < 120; waited += 1) {
+        const state = JSON.parse(await entryState())
+        if (pattern.test(state.status || '')) return state
+        await sleep(100)
+      }
+      throw new Error(what + ' never reported: ' + (await entryState()))
+    }
+    const importThroughSheet = async (file, expected, what) => {
+      setNextPickedFile(file)
+      await window.webContents.executeJavaScript("document.getElementById('import-open').click()")
+      for (let waited = 0; waited < 80; waited += 1) {
+        const ready = await window.webContents.executeJavaScript(
+          "(() => { const d = document.getElementById('import-dialog'); return d.open && !document.getElementById('import-apply').disabled })()",
+        )
+        if (ready) break
+        await sleep(100)
+      }
+      await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
+      for (let waited = 0; waited < 120; waited += 1) {
+        const state = JSON.parse(await entryState())
+        if (expected.test(state.status || '')) {
+          // The status is written before the write settles, and the bar is redrawn in its `finally`;
+          // reading the button here would see the disabled state of the call that just finished.
+          for (let settled = 0; settled < 40; settled += 1) {
+            if (!(await barUndo()).disabled) return state
+            await sleep(50)
+          }
+          return state
+        }
+        const failed = await window.webContents.executeJavaScript(
+          "(() => { const e = document.getElementById('import-error'); return e.hidden ? null : e.textContent })()",
+        )
+        if (failed) throw new Error(what + ' was refused: ' + failed)
+        await sleep(100)
+      }
+      throw new Error(what + ' never reported: ' + (await entryState()))
+    }
+    const rowsOf = (rows) =>
+      'timestamp,x,y\n' +
+      rows.map((row) => `${row.t_observed},${row.values.x},${row.values.y}`).join('\n') +
+      '\n'
+
+    // The rows the project already has, read through the other door: the file below repeats every one
+    // of them, so the import has nothing to withdraw or rewrite.
+    const baseRows = JSON.parse(await readCli(['list', '--json'], keepsProject)).data
+    await enterPoint(4.2, 9.1)
+    const typedPoint = (await readFile(join(keepsProject, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.type === 'point_recorded')
+      .at(-1)
+    const keepsFile = join(dirname(keepsProject), 'keeps.csv')
+    await writeFile(
+      keepsFile,
+      rowsOf([
+        ...baseRows,
+        { t_observed: typedPoint.t_observed, values: typedPoint.values },
+        { t_observed: '2026-10-20T23:59:58.000Z', values: { x: 5.5, y: 6.6 } },
+      ]),
+      'utf8',
+    )
+    const importedKeeps = await importThroughSheet(keepsFile, /^Imported 16 rows/, 'the import of the kept rows')
+    const keptOffered = await barUndo()
+    console.log(
+      '[bench] import-keeps ' +
+        JSON.stringify({ status: importedKeeps.status, readout: importedKeeps.readout, undo: keptOffered }),
+    )
+    if (keptOffered.disabled || keptOffered.label !== 'Undo import') {
+      throw new Error('the import did not become the newest act: ' + JSON.stringify(keptOffered))
+    }
+
+    await focusField(0)
+    pressKey('Z', ['control'])
+    const afterKeepsUndo = await waitStatus(/^Restored the data from before the import/, 'undoing the kept import')
+    const earlierAct = await barUndo()
+    console.log(
+      '[bench] import-keeps-undone ' +
+        JSON.stringify({ status: afterKeepsUndo.status, readout: afterKeepsUndo.readout, undo: earlierAct }),
+    )
+    if (earlierAct.disabled || earlierAct.label !== 'Undo added point') {
+      throw new Error('undoing the import lost the typing recorded before it: ' + JSON.stringify(earlierAct))
+    }
+
+    // The earlier act still means what it meant: the version the import replaced held that record
+    // unchanged, so withdrawing it now is the same undo the person would have had without the import.
+    pressKey('Z', ['control'])
+    const afterTypedUndo = await waitStatus(/^Removed/, 'undoing the point recorded before the import')
+    const typedRetraction = await lastLoggedEvent(keepsProject)
+    console.log(
+      '[bench] import-keeps-point-undone ' +
+        JSON.stringify({ status: afterTypedUndo.status, readout: afterTypedUndo.readout, event: typedRetraction.type }),
+    )
+    if (typedRetraction.type !== 'point_retracted' || typedRetraction.supersedes !== typedPoint.id) {
+      throw new Error('the earlier typing did not withdraw its own record: ' + JSON.stringify(typedRetraction))
+    }
+    if (!/n = 14/.test(afterTypedUndo.readout || '')) {
+      throw new Error('the tab did not go back to the rows the fixture had: ' + afterTypedUndo.readout)
+    }
+
+    // Now the other half: a file that leaves the typed point out. The import withdraws that record,
+    // so the typing is dropped from the history — not offered and then refused.
+    await enterPoint(3.3, 7.7)
+
+    // The row is selected before the import: the strip is the tab's other memory of a record, and an
+    // import that withdraws the row must end that edit as well as the history entry about it.
+    const typedDrops = (await readFile(join(keepsProject, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.type === 'point_recorded')
+      .at(-1)
+    if (!(await selectMarkById(typedDrops.id))) {
+      throw new Error('the typed point is not a mark to select')
+    }
+    const stripBeforeDrops = JSON.parse(await entryState())
+    console.log(
+      '[bench] import-drops-strip ' +
+        JSON.stringify({ correcting: stripBeforeDrops.correcting, status: stripBeforeDrops.status }),
+    )
+    if (!stripBeforeDrops.correcting || !/^Editing /.test(stripBeforeDrops.status || '')) {
+      throw new Error('selecting the typed point did not open its strip: ' + JSON.stringify(stripBeforeDrops))
+    }
+    const dropsFile = join(dirname(keepsProject), 'drops.csv')
+    await writeFile(dropsFile, rowsOf(baseRows), 'utf8')
+    const importedDrops = await importThroughSheet(dropsFile, /^Imported 14 rows/, 'the import that withdraws the point')
+    console.log('[bench] import-drops ' + JSON.stringify({ status: importedDrops.status, readout: importedDrops.readout }))
+
+    // The strip ends with the row, so the Save key has nothing left to save to: the bar is adding
+    // again, and Enter writes no correction for a record the version withdrew.
+    const stripAfterDrops = JSON.parse(await entryState())
+    const eventsBeforeSave = await logCount(keepsProject)
+    await focusField(0)
+    pressEnter()
+    await sleep(600)
+    const eventsAfterSave = await logCount(keepsProject)
+    const correctionsAfter = (await readFile(join(keepsProject, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.type === 'point_corrected' && event.supersedes === typedDrops.id)
+    console.log(
+      '[bench] import-drops-save ' +
+        JSON.stringify({
+          correcting: stripAfterDrops.correcting,
+          status: stripAfterDrops.status,
+          eventsWritten: eventsAfterSave - eventsBeforeSave,
+          corrections: correctionsAfter.length,
+        }),
+    )
+    if (stripAfterDrops.correcting) {
+      throw new Error('the strip outlived the row it was editing: ' + JSON.stringify(stripAfterDrops))
+    }
+    if (eventsAfterSave !== eventsBeforeSave || correctionsAfter.length !== 0) {
+      throw new Error('a Save after the row was withdrawn wrote an event')
+    }
+
+    await focusField(0)
+    pressKey('Z', ['control'])
+    const afterDropsUndo = await waitStatus(/^Restored the data from before the import/, 'undoing the withdrawing import')
+    const eventsBeforeIdle = await logCount(keepsProject)
+    const idleUndo = await barUndo()
+    await focusField(0)
+    pressKey('Z', ['control'])
+    await sleep(500)
+    const eventsAfterIdle = await logCount(keepsProject)
+    console.log(
+      '[bench] import-drops-undone ' +
+        JSON.stringify({
+          status: afterDropsUndo.status,
+          readout: afterDropsUndo.readout,
+          undo: idleUndo,
+          eventsWritten: eventsAfterIdle - eventsBeforeIdle,
+        }),
+    )
+    if (idleUndo.disabled !== true || idleUndo.label !== 'Undo') {
+      throw new Error('the typing the import withdrew is still offered: ' + JSON.stringify(idleUndo))
+    }
+    if (eventsAfterIdle !== eventsBeforeIdle) {
+      throw new Error('an act the import ended wrote an event after all')
+    }
+    // The other route to the same state: a strip open on a point whose own add is what Ctrl+Z takes
+    // back. The strip ends with the record here too, so the Save key cannot land on a row the log no
+    // longer holds.
+    const undoStripProject = join(dirname(writableDir), 'undo-strip')
+    await cp(startupDir, undoStripProject, { recursive: true })
+    setNextStartup(undoStripProject)
+    window.webContents.reload()
+    await new Promise((done) => ipcMain.once('bench:ready', done))
+    if (!(await focusWindowForInput())) {
+      throw new Error('the window never took focus for the undo-strip frame')
+    }
+    await sleep(700)
+
+    await enterPoint(8.1, 2.4)
+    const addedUnderStrip = (await readFile(join(undoStripProject, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.type === 'point_recorded')
+      .at(-1)
+    if (!(await selectMarkById(addedUnderStrip.id))) {
+      throw new Error('the point just added is not a mark to select')
+    }
+    const stripBeforeUndo = JSON.parse(await entryState())
+    if (!stripBeforeUndo.correcting) {
+      throw new Error('selecting the added point opened no strip: ' + JSON.stringify(stripBeforeUndo))
+    }
+    // Ctrl+Z is the history's only while the fields hold nothing: a text field owns its own undo, and
+    // clearing them is what puts the same keys back on the point history.
+    await window.webContents.executeJavaScript(`(() => {
+      document.querySelectorAll('#entry-fields input').forEach((input) => { input.value = '' })
+      return true
+    })()`)
+    await focusField(0)
+    pressKey('Z', ['control'])
+    const afterUndoAdd = await waitStatus(/^Removed/, 'undoing the added point under its strip')
+    const stripAfterUndo = JSON.parse(await entryState())
+    const eventsBeforeEnter = await logCount(undoStripProject)
+    pressEnter()
+    await sleep(600)
+    const eventsAfterEnter = await logCount(undoStripProject)
+    console.log(
+      '[bench] undo-strip ' +
+        JSON.stringify({
+          opened: stripBeforeUndo.correcting,
+          status: afterUndoAdd.status,
+          correcting: stripAfterUndo.correcting,
+          eventsWritten: eventsAfterEnter - eventsBeforeEnter,
+        }),
+    )
+    if (stripAfterUndo.correcting) {
+      throw new Error('the strip outlived the point its own undo withdrew')
+    }
+    if (eventsAfterEnter !== eventsBeforeEnter) {
+      throw new Error('a Save after the undo withdrew the row wrote an event')
+    }
+
   }
 
   if (cspViolations > 0) console.log(`[bench] csp-inline-style-blocked=${cspViolations}`)

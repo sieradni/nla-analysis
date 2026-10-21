@@ -13,6 +13,7 @@ import {
   type PointRestoration,
   type PointRetraction,
   type RecordedPoint,
+  type VersionRestore,
 } from '../core/workspace.ts'
 import type { PointValue } from '../core/events.ts'
 import { renderChart } from '../core/chart.ts'
@@ -78,6 +79,7 @@ const OPTIONS = {
   time: { type: 'string' },
   'ignore-unmapped': { type: 'string', multiple: true },
   force: { type: 'boolean' },
+  empty: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
   out: { type: 'string' },
   project: { type: 'string' },
@@ -119,6 +121,8 @@ Usage
   bench dataset list                    datasets, with the version each is at
   bench dataset versions <id>           every version of a dataset, and what it replaced
   bench dataset diff <id> [v1] [v2]     row-level diff between two versions
+  bench dataset restore <id> <version>  make an older version current again, as a new version
+  bench dataset restore <id> --empty    restore the empty dataset before version 1
   bench import <file> [options]         bring rows in from csv, tsv, or jsonl
   bench recipes [--json]                list analysis recipes and their parameters
   bench runs [--json]                   recorded analyses, and whether they still hold
@@ -774,7 +778,62 @@ async function main(): Promise<void> {
         return
       }
 
-      die(`unknown dataset subcommand "${sub}"`, EXIT_INVALID, 'use list, versions, or diff')
+      if (sub === 'restore') {
+        let datasetId: string
+        try {
+          datasetId = workspace.resolveDataset(args[1] ?? values.dataset)
+        } catch (error) {
+          fail(error)
+        }
+        const empty = values.empty === true
+        let version: number | null = null
+        if (!empty) {
+          const raw = args[2]
+          if (raw === undefined) {
+            die('missing version number', EXIT_INVALID, `bench dataset versions ${datasetId}`)
+          }
+          const parsed = Number(raw)
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            die(`version must be a number, got "${raw}"`, EXIT_INVALID, 'versions start at 1')
+          }
+          version = parsed
+        }
+        let restored: VersionRestore
+        try {
+          restored = await workspace.restoreVersion(datasetId, version)
+        } catch (error) {
+          fail(error)
+        }
+        await workspace.writeStateBrief()
+        if (asJson) {
+          process.stdout.write(
+            JSON.stringify(
+              {
+                ok: true,
+                data: {
+                  dataset: datasetId,
+                  version: restored.version,
+                  parent: restored.parent,
+                  restoredFrom: restored.restoredFrom,
+                  rows: restored.rows,
+                  diff: restored.diff,
+                  active: restored.active,
+                },
+              },
+              null,
+              2,
+            ) + '\n',
+          )
+          return
+        }
+        process.stdout.write(
+          `restored ${version === null ? 'the empty dataset' : `version ${version}`} as version ${restored.version}` +
+            `  ${diffCounts(restored.diff)}  (${restored.rows} row(s); replaced version ${restored.parent})\n`,
+        )
+        return
+      }
+
+      die(`unknown dataset subcommand "${sub}"`, EXIT_INVALID, 'use list, versions, diff, or restore')
     }
 
     case 'chart': {

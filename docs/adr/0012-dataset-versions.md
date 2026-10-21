@@ -84,6 +84,20 @@ to browse versions in the window beyond the strip's label, and whether a *typed*
 should keep defaulting to now (it does; a single typed point is an act with a time, not a file
 claiming thousands of rows share one).
 
+## Update 2026-10-21 — the inverse of an import is a version
+
+Undoing an import does not add an event type or rewrite one. `Workspace.restoreVersion` appends a
+`dataset_version_created` naming the older version it restored and the version it replaced, then the
+ordinary row acts that bring those rows back: a `point_retracted` for a row the newer version added,
+a `point_restored` for a row it withdrew, a `point_corrected` for a row it changed. Every act names the
+new version, so folding any earlier version still reads exactly as it did, and no version is deleted.
+A field the newer version *added* to a row cannot be unset by a merging correction, so that one row is
+re-recorded with the older version's exact values (and the newer record retracted) rather than leaving
+a leftover key in a version that claims to hold the earlier one. The first version has no parent to
+return to; `null` means the empty dataset before version 1, recorded as a version with no rows. This
+is why the window's undo and the CLI's `bench dataset restore` share one call: the version number only
+moves forward, in both directions.
+
 ## Update 2026-10-20 — untimed files are labelled, not refused
 
 Item 5's refusal is narrowed by [ADR 0015](0015-user-surface.md). A file with no clock may now import

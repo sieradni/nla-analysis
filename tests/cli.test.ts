@@ -92,7 +92,7 @@ describe('bench CLI, as executed', () => {
     }
   })
 
-  it('takes a custom shape from init through a real first tab, with hints derived from its fields', async () => {
+  it('takes a custom shape from init through a real first tab, with hints derived from its fields', { timeout: CLI_TIMEOUT }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'bench-first-run-'))
     try {
       const shapeFile = join(root, 'flight.json')
@@ -214,7 +214,7 @@ describe('bench CLI, as executed', () => {
     }
   })
 
-  it('extends a declared shape and records a point in the new field', async () => {
+  it('extends a declared shape and records a point in the new field', { timeout: CLI_TIMEOUT }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'bench-extend-'))
     try {
       const shapeFile = join(root, 'flight.json')
@@ -414,7 +414,7 @@ describe('bench CLI, as executed', () => {
     }
   })
 
-  it('designates a shape\'s observation field, derives the instant from it, and refuses a contradiction', async () => {
+  it('designates a shape\'s observation field, derives the instant from it, and refuses a contradiction', { timeout: CLI_TIMEOUT }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'bench-observation-'))
     try {
       const shapeFile = join(root, 'visit.json')
@@ -544,7 +544,7 @@ describe('bench CLI, as executed', () => {
     }
   })
 
-  it('runs a whole session: init, add, correct, retract, list, check, state, chart', async () => {
+  it('runs a whole session: init, add, correct, retract, list, check, state, chart', { timeout: CLI_TIMEOUT }, async () => {
     const init = await bench(['init', project, '--name', 'cli-smoke'])
     expect(init.code).toBe(0)
     expect(init.stdout).toContain('created project')
@@ -1003,6 +1003,84 @@ describe('bench import, as executed', () => {
     })
   })
 
+  it('restores an older version as a new one, across both doors', async () => {
+    await withProject('import-restore', async (dir) => {
+      await writeFile(join(dir, 'readings.csv'), csv, 'utf8')
+      const map = ['--map', 'x=temp_c', '--map', 'y=volts', '--time', 'timestamp']
+      expect((await bench(['--project', dir, 'import', 'readings.csv', ...map])).code).toBe(0)
+      // Replace it with a corrected export: one row changed, one added, one gone.
+      await writeFile(
+        join(dir, 'readings-v2.csv'),
+        'timestamp,temp_c,volts\n' +
+          '2026-01-05T09:00:00Z,21.4,3.301\n' +
+          '2026-01-05T09:01:00Z,21.9,3.9\n' +
+          '2026-01-05T09:03:00Z,22.9,3.44\n',
+        'utf8',
+      )
+      expect((await bench(['--project', dir, 'import', 'readings-v2.csv', ...map])).code).toBe(0)
+
+      const restored = await bench(['--project', dir, 'dataset', 'restore', 'main', '1'])
+      expect(restored.code).toBe(0)
+      expect(restored.stdout).toContain('restored version 1 as version 3')
+      expect(restored.stdout).toContain('+1 −1 ~1')
+      expect(restored.stdout).toContain('(3 row(s); replaced version 2)')
+
+      // The chain is intact: version 2 still holds what the second file said, and version 3 is a
+      // new version that happens to hold version 1's rows.
+      const versions = await bench(['--project', dir, 'dataset', 'versions', 'main'])
+      expect(versions.stdout).toContain('newest v3')
+      expect(versions.stdout).toContain('v3  3 row(s) now · 3 at creation  +1 −1 ~1')
+      expect(versions.stdout).toContain('restored from version 1')
+      expect(versions.stdout).toContain('v1  3 row(s) now · 3 at creation  first version')
+
+      const listed = await bench(['--project', dir, 'list', '--json'])
+      const points = (JSON.parse(listed.stdout) as { data: { values: { y: number } }[] }).data
+      expect(points.map((point) => point.values.y)).toEqual([3.301, 3.355, 3.402])
+
+      // The CLI's own diff reads the restore against the version it replaced.
+      const diff = await bench(['--project', dir, 'dataset', 'diff', 'main', '2', '3'])
+      expect(diff.stdout).toContain('main: version 2 → 3  +1 −1 ~1  (3 row(s) in v3)')
+      // Read left to right: the newer version's value first, then the older one it was restored to.
+      expect(diff.stdout).toContain('x 21.9  y 3.9  →  x 21.9  y 3.355')
+      expect((await bench(['--project', dir, 'check'])).stdout).toContain('0 error(s)')
+
+      // Restoring the current version would write nothing; an unknown one cannot be answered.
+      const current = await bench(['--project', dir, 'dataset', 'restore', 'main', '3'])
+      expect(current.code).toBe(1)
+      expect(current.stderr).toContain('not older than the current version 3')
+      const unknown = await bench(['--project', dir, 'dataset', 'restore', 'main', '9'])
+      expect(unknown.code).toBe(2)
+      expect(unknown.stderr).toContain('has no version 9')
+    })
+  })
+
+  it('restores the empty dataset when the first import is undone', async () => {
+    await withProject('import-empty', async (dir) => {
+      await writeFile(join(dir, 'readings.csv'), csv, 'utf8')
+      const map = ['--map', 'x=temp_c', '--map', 'y=volts', '--time', 'timestamp']
+      expect((await bench(['--project', dir, 'import', 'readings.csv', ...map])).code).toBe(0)
+
+      const emptied = await bench(['--project', dir, 'dataset', 'restore', 'main', '--empty'])
+      expect(emptied.code).toBe(0)
+      expect(emptied.stdout).toContain('restored the empty dataset as version 2')
+      expect(emptied.stdout).toContain('+0 −3 ~0')
+
+      expect((await bench(['--project', dir, 'list'])).stdout).toContain('main: 0 active point(s)')
+      const versions = await bench(['--project', dir, 'dataset', 'versions', 'main'])
+      // The first version is not deleted: it is where those three rows still live.
+      expect(versions.stdout).toContain('v1  3 row(s) now · 3 at creation  first version')
+      expect(versions.stdout).toContain('v2  0 row(s) now · 0 at creation  +0 −3 ~0')
+      expect(versions.stdout).toContain('restored from the empty dataset before version 1')
+      expect((await bench(['--project', dir, 'check'])).stdout).toContain('0 error(s)')
+
+      // Redo is the same door: version 1 becomes current again, as version 3.
+      const again = await bench(['--project', dir, 'dataset', 'restore', 'main', '1'])
+      expect(again.code).toBe(0)
+      expect(again.stdout).toContain('restored version 1 as version 3')
+      expect((await bench(['--project', dir, 'list'])).stdout).toContain('main: 3 active point(s)')
+    })
+  })
+
   it('says which column is missing rather than guessing at one', async () => {
     await withProject('import-map', async (dir) => {
       await writeFile(join(dir, 'odd.csv'), 'degC,volts\n21.4,3.301\n', 'utf8')
@@ -1093,6 +1171,11 @@ const analysisReady = existsSync(interpreterCandidates(process.cwd())[0]!)
 // three CLI calls plus the recipe sat right at the 5 s default. The budget is for the runtime, not
 // for the assertions: they still fail the moment the output is wrong.
 const ANALYSIS_TIMEOUT = 20_000
+
+// The same budget for the tests that drive six or more real `bench` processes: each one pays Node's
+// start-up, and on a loaded machine the whole test sat right at the 5 s default. Raising the budget
+// does not weaken an assertion — every check still runs, and a wrong answer still fails.
+const CLI_TIMEOUT = 20_000
 
 describe.skipIf(!analysisReady)('analysis through the CLI', () => {
   it('refuses a fit and draws nothing it cannot justify', { timeout: ANALYSIS_TIMEOUT }, async () => {

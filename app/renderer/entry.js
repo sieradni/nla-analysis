@@ -2,7 +2,9 @@
  * tab file up. The history those acts come from lives in `history.js`. */
 import { state, ui, node, bridge, call } from './state.js'
 import {
+  actTitle,
   copiedDetails,
+  idleActTitle,
   labels,
   panelEvidence,
   panelFacts,
@@ -11,9 +13,13 @@ import {
 } from './copy.js'
 import {
   appendedId,
+  nextRedo,
   nextUndo,
   noteAppend,
+  noteCorrection,
+  noteImport,
   noteRemoval,
+  permanentRefusal,
   redoFailed,
   redoFinished,
   takeRedo,
@@ -23,6 +29,57 @@ import {
 } from './history.js'
 import { renderTabs } from './rail.js'
 import { renderView, captureRestore, renderMeta, renderStatuses, renderPanelLabels } from './panels.js'
+
+/*
+ * The one description of every kind of act: what the bar and the status call it, what its tooltip
+ * says, and the function that carries it out in each direction. `undoLastAction`, `redoLastAction`,
+ * the bar's button and the status's redo all read this table, so a fifth kind is one row here and
+ * nowhere else. The words are `copy.js`'s (`labels`, `actTitle`); this table only pairs them with a
+ * kind and an effect — it is the only place in the renderer where the four kinds are written down.
+ */
+var ACTS = {
+  point: {
+    undo: { label: labels.undoPoint, title: actTitle('undo', labels.actPoint), run: undoPoint },
+    redo: { label: labels.redoPoint, title: actTitle('redo', labels.actPointRedo), run: redoPoint },
+  },
+  removal: {
+    undo: { label: labels.undoRemoval, title: actTitle('undo', labels.actRemoval), run: undoRemoval },
+    redo: {
+      label: labels.redoRemoval,
+      title: actTitle('redo', labels.actRemovalRedo),
+      run: redoRemoval,
+    },
+  },
+  correction: {
+    undo: {
+      label: labels.undoCorrection,
+      title: actTitle('undo', labels.actCorrection),
+      run: undoCorrection,
+    },
+    redo: {
+      label: labels.redoCorrection,
+      title: actTitle('redo', labels.actCorrectionRedo),
+      run: redoCorrection,
+    },
+  },
+  import: {
+    undo: { label: labels.undoImport, title: actTitle('undo', labels.actImport), run: undoImport },
+    redo: { label: labels.redoImport, title: actTitle('redo', labels.actImportRedo), run: redoImport },
+  },
+}
+
+/**
+ * What the bar says for the act at the top of a stack, or the idle words when the stack is empty.
+ * One lookup, so the button and the status cannot name different acts for the same entry.
+ */
+function wordsFor(next, direction) {
+  var act = next === null ? undefined : ACTS[next.kind]
+  if (act !== undefined) return act[direction]
+  return {
+    label: direction === 'undo' ? labels.undo : labels.redo,
+    title: idleActTitle(direction),
+  }
+}
 
 /**
  * Typed text to a point value. The window does not get a second opinion about what a number is: a
@@ -135,30 +192,36 @@ export function renderStatus() {
     if (state.view && state.correction === null) {
       ui.entryStatus.appendChild(node('span', 'idle', copyStatus.idleHint()))
     }
-    return
+  } else {
+    ui.entryStatus.appendChild(node('span', null, status.text))
+    if (status.problems && status.problems.length > 0) {
+      var list = document.createElement('ul')
+      status.problems.forEach(function (problem) {
+        list.appendChild(node('li', null, problem))
+      })
+      ui.entryStatus.appendChild(list)
+    }
   }
-  ui.entryStatus.appendChild(node('span', null, status.text))
-  // A change that is one click from being undone says so with the click, not with a sentence about
-  // what a command would do (U6). The button is how a person undoes a removal.
-  if (status.action) {
-    var action = status.action
-    var button = node('button', 'ghost status-action', action.label)
+  // Redo sits beside whatever the status says, not only beside the sentence an undo just wrote: a
+  // selection or a copied detail replaces the words, and must not take the other direction away.
+  // The button names the act it would repeat, so it never asks a person to press and find out.
+  var redo = nextRedo()
+  if (redo !== null) {
+    var words = wordsFor(redo, 'redo')
+    var button = node('button', 'ghost status-action', words.label)
     button.type = 'button'
+    button.title = words.title
+    // A correction being edited is unsaved work: the other direction waits rather than throwing it
+    // away under the person's hands.
+    button.disabled = state.busy || state.correction !== null
     button.addEventListener('click', function () {
-      action.run()
+      redoLastAction()
     })
     ui.entryStatus.appendChild(button)
   }
-  if (status.problems && status.problems.length > 0) {
-    var list = document.createElement('ul')
-    status.problems.forEach(function (problem) {
-      list.appendChild(node('li', null, problem))
-    })
-    ui.entryStatus.appendChild(list)
-  }
 }
 
-export function setStatus(kind, text, problems, action) {
+export function setStatus(kind, text, problems) {
   // Problems are the core's sentences too, and they name the shape a field was checked against.
   // Run them through the same filter as the status line, at the one place every caller passes.
   state.status = {
@@ -167,7 +230,6 @@ export function setStatus(kind, text, problems, action) {
     problems: (problems || []).map(function (problem) {
       return refusal(problem)
     }),
-    action: action || null,
   }
   renderStatus()
 }
@@ -216,9 +278,10 @@ export function renderEntry() {
   // One undo, and it says which act it would reverse: the bar's last point and a removal from the
   // menu share one history, so a single button can serve both without a second one beside a status.
   var next = nextUndo()
+  var undo = wordsFor(next, 'undo')
   ui.entryUndo.disabled = state.busy || next === null
-  ui.entryUndo.textContent = copyStatus.undoLabel(next)
-  ui.entryUndo.title = copyStatus.undoTitle(next)
+  ui.entryUndo.textContent = undo.label
+  ui.entryUndo.title = undo.title
 
   if (state.timing !== null) {
     ui.entryReadout.appendChild(node('b', null, state.timing + ' ms'))
@@ -479,6 +542,25 @@ export async function selectPoint(id, index) {
   }
 }
 
+/**
+ * The record the strip is editing has left the drawing: the ring and the strip let go of it.
+ *
+ * The strip is the tab's other memory of a record — the history remembers what was done to it, the
+ * strip remembers that it is being edited — so every path that withdraws a record ends the edit:
+ * undoing the add, redoing a removal, an import that withdrew or rewrote the row, and a Save the
+ * core refused because the row had already gone. The status is the caller's; whichever act removed
+ * the record has its own sentence to write, and this one would only overwrite it.
+ */
+export function endEditFor(id) {
+  if (state.correction === null || state.correction.id !== id) return
+  if (state.selection) {
+    var handle = state.handles[state.selection.index]
+    if (handle && handle.clearSelection) handle.clearSelection()
+  }
+  state.correction = null
+  state.selection = null
+}
+
 /** Put the bar back to adding, and take the ring off. */
 export function closeCorrection() {
   if (state.selection) {
@@ -498,13 +580,18 @@ export function closeCorrection() {
  */
 export async function submitCorrection() {
   var correction = state.correction
+  var before = correction.values
   var values = fieldValueMap()
+  var ended = false
   state.busy = true
   renderEntry()
   try {
     var corrected = await call(
       bridge.correctPoint(state.project.dir, correction.id, values, state.view.name),
     )
+    // The bar's undo reverses *this* correction: the values the log held before the save, and the
+    // values it holds now, so both directions are one recorded correction apiece.
+    noteCorrection(correction.id, before, corrected.values)
     state.correction = null
     state.selection = null
     state.busy = false
@@ -520,6 +607,13 @@ export async function submitCorrection() {
     focusFirstField()
   } catch (error) {
     var firstInvalid = markProblems((error && error.problems) || [])
+    // The core refuses a correction on a withdrawn row, and says so as `missing`: that is the record
+    // the strip is aimed at being gone, not a value to retype, so the strip ends here. A validation
+    // problem keeps it open — there is a number to fix, and the fields still hold it.
+    if (error && error.kind === 'missing') {
+      endEditFor(correction.id)
+      ended = true
+    }
     setStatus(
       'error',
       refusal((error && error.message) || 'the core refused the correction'),
@@ -529,12 +623,10 @@ export async function submitCorrection() {
   } finally {
     state.busy = false
     renderEntry()
+    // The strip's inputs are gone with it, so the caret was standing in one that no longer exists.
+    // Adding a point is now what the bar does, and its first field is where the keyboard belongs.
+    if (ended) focusFirstField()
   }
-}
-
-/** An act that can never be reversed: the record it named has moved under it. */
-function permanent(error) {
-  return Boolean(error && (error.kind === 'invalid' || error.kind === 'missing'))
 }
 
 async function undoPoint(entry) {
@@ -542,8 +634,12 @@ async function undoPoint(entry) {
   renderEntry()
   try {
     var retracted = await call(
-      bridge.retractPoint(state.project.dir, entry.point.id, 'undo from the window'),
+      bridge.retractPoint(state.project.dir, entry.id, 'undo from the window'),
     )
+    // Redo of this undo is a restore, and it names this retraction so it can only reverse this act.
+    undoFinished(entry, { retraction: retracted.retraction })
+    // The point this undo withdrew may be the one the strip is editing: the strip goes with it.
+    endEditFor(entry.id)
     state.timing = null
     // A tab that was deleted on disk has nothing to rebuild; the bar's own count is enough, and the
     // `finally` below puts the bar back.
@@ -565,7 +661,7 @@ async function undoPoint(entry) {
     // A record another writer already withdrew is not undoable by this button, ever: forget the
     // entry rather than leave a control that can only refuse. This is the same rule the removal
     // history follows.
-    undoFailed(entry, !permanent(error))
+    undoFailed(entry, error)
     setStatus(
       'error',
       refusal((error && error.message) || 'the core refused the retraction'),
@@ -670,26 +766,20 @@ export async function removePoint(id) {
  * record comes back — same id, values, observation time and version — rather than a copy of it.
  */
 async function undoRemoval(entry) {
-  var removal = entry.removal
   state.busy = true
   renderEntry()
   try {
     // Name the removal this undo remembers. The core reverses that act or refuses; it never picks
     // the newest removal of the same point, which may be somebody else's later act.
-    var restored = await call(bridge.restorePoint(state.project.dir, removal.id, removal.retraction))
+    var restored = await call(bridge.restorePoint(state.project.dir, entry.id, entry.retraction))
     undoFinished(entry)
     var active = await rebuildAfterPointChange()
-    setStatus(
-      'ok',
-      copyStatus.restored({ active: active === null ? restored.active : active }),
-      [],
-      { label: labels.redoRemoval, run: redoLastAction },
-    )
+    setStatus('ok', copyStatus.restored({ active: active === null ? restored.active : active }))
   } catch (error) {
     // A removal that is no longer in force is not coming back: drop the entry, rebuild so the screen
     // agrees with the log, and say why. Any other refusal is temporary, so the act stays available.
-    undoFailed(entry, !permanent(error))
-    if (permanent(error)) {
+    undoFailed(entry, error)
+    if (permanentRefusal(error)) {
       try {
         await rebuildAfterPointChange()
       } catch (rebuildFailure) {
@@ -709,15 +799,190 @@ async function redoRemoval(entry) {
   state.busy = true
   renderEntry()
   try {
-    var removed = await call(bridge.retractPoint(state.project.dir, entry.removal.id))
+    var removed = await call(bridge.retractPoint(state.project.dir, entry.id))
     // Redo withdrew the point again, with a new removal event: undoing that undo means reversing
     // this one, not the removal the entry remembered before it.
-    redoFinished(entry, removed.retraction)
+    redoFinished(entry, { retraction: removed.retraction })
+    // A strip reopened on the restored point belongs to a row this redo has just taken away.
+    endEditFor(entry.id)
     var active = await rebuildAfterPointChange()
     setStatus('ok', copyStatus.removed({ active: active === null ? removed.active : active }))
   } catch (error) {
-    redoFailed(entry)
+    redoFailed(entry, error)
     setStatus('error', refusal(error && error.message), (error && error.problems) || [])
+  } finally {
+    state.busy = false
+    renderEntry()
+  }
+}
+
+/**
+ * Undo a correction: write the values the point held before it back into the log as another
+ * correction. Nothing is rewritten and no event is withdrawn; the newest number is the earlier one,
+ * and the correction that was undone stays in the record of what the point has held.
+ */
+async function undoCorrection(entry) {
+  if (!state.view) return
+  state.busy = true
+  renderEntry()
+  try {
+    var corrected = await call(
+      bridge.correctPoint(state.project.dir, entry.id, entry.before, state.view.name),
+    )
+    undoFinished(entry)
+    state.correction = null
+    state.selection = null
+    state.timing = null
+    state.busy = false
+    state.opened = corrected.view
+    state.view = corrected.view.view
+    renderTabs()
+    renderView(captureRestore())
+    focusFirstField()
+    setStatus(
+      'ok',
+      copyStatus.correctionUndone({
+        active: corrected.active,
+        stalePanels: corrected.view.kept.length,
+      }),
+    )
+  } catch (error) {
+    // A point another writer has withdrawn, or a shape that no longer accepts the old values, is not
+    // undoable by this button: drop the act rather than leave a control that can only refuse.
+    undoFailed(entry, error)
+    setStatus(
+      'error',
+      refusal((error && error.message) || 'the core refused the correction'),
+      (error && error.problems) || ((error && error.hint) ? [refusal(error.hint)] : []),
+    )
+  } finally {
+    state.busy = false
+    renderEntry()
+  }
+}
+
+/** Redo a correction: write the values it had changed to back into the log as a correction again. */
+async function redoCorrection(entry) {
+  if (!state.view) return
+  state.busy = true
+  renderEntry()
+  try {
+    var corrected = await call(
+      bridge.correctPoint(state.project.dir, entry.id, entry.after, state.view.name),
+    )
+    redoFinished(entry)
+    state.correction = null
+    state.selection = null
+    state.timing = null
+    state.busy = false
+    state.opened = corrected.view
+    state.view = corrected.view.view
+    renderTabs()
+    renderView(captureRestore())
+    focusFirstField()
+    setStatus(
+      'ok',
+      copyStatus.corrected({
+        active: corrected.active,
+        stalePanels: corrected.view.kept.length,
+      }),
+    )
+  } catch (error) {
+    redoFailed(entry, error)
+    setStatus(
+      'error',
+      refusal((error && error.message) || 'the core refused the correction'),
+      (error && error.problems) || [],
+    )
+  } finally {
+    state.busy = false
+    renderEntry()
+  }
+}
+
+/**
+ * Redo of undoing an added point: the same record comes back, because this is a restore naming the
+ * retraction the undo wrote. The next undo therefore withdraws it again, exactly as it did before.
+ */
+async function redoPoint(entry) {
+  if (!entry.retraction) return
+  state.busy = true
+  renderEntry()
+  try {
+    var restored = await call(bridge.restorePoint(state.project.dir, entry.id, entry.retraction))
+    redoFinished(entry, { retraction: null })
+    state.timing = null
+    var active = await rebuildAfterPointChange()
+    setStatus('ok', copyStatus.restored({ active: active === null ? restored.active : active }))
+  } catch (error) {
+    redoFailed(entry, error)
+    setStatus('error', refusal(error && error.message), (error && error.problems) || [])
+  } finally {
+    state.busy = false
+    renderEntry()
+  }
+}
+
+/**
+ * Undo an import: the version it replaced becomes current again, as a *new* version. The rows come
+ * back through retraction, restore and correction events, so nothing is deleted and every version
+ * already in the log still reads as it did.
+ */
+async function undoImport(entry) {
+  return applyImportVersion(entry, entry.restored, 'undo')
+}
+
+/** Redo an import: the version it wrote becomes current again, again as a new version. */
+async function redoImport(entry) {
+  return applyImportVersion(entry, entry.version, 'redo')
+}
+
+async function applyImportVersion(entry, version, direction) {
+  state.busy = true
+  renderEntry()
+  try {
+    var restored = await call(
+      bridge.restoreVersion(
+        state.project.dir,
+        entry.dataset,
+        version,
+        state.view ? state.view.name : undefined,
+      ),
+    )
+    if (direction === 'undo') undoFinished(entry)
+    else redoFinished(entry)
+    state.correction = null
+    state.selection = null
+    state.timing = null
+    state.busy = false
+    if (restored.view) {
+      state.opened = restored.view
+      state.view = restored.view.view
+      if (state.projectEntry && restored.view.entry) state.projectEntry.active = restored.view.entry.active
+      renderTabs()
+      renderView(captureRestore())
+    } else {
+      if (state.projectEntry) state.projectEntry.active = restored.active
+      renderEntry()
+    }
+    state.datasets.forEach(function (dataset) {
+      if (dataset.id === restored.dataset) dataset.active = restored.active
+    })
+    focusFirstField()
+    setStatus(
+      'ok',
+      direction === 'undo'
+        ? copyStatus.importUndone({ active: restored.active })
+        : copyStatus.importReapplied({ active: restored.active }),
+    )
+  } catch (error) {
+    if (direction === 'undo') undoFailed(entry, error)
+    else redoFailed(entry, error)
+    setStatus(
+      'error',
+      refusal((error && error.message) || 'the core refused the restore'),
+      (error && error.problems) || ((error && error.hint) ? [refusal(error.hint)] : []),
+    )
   } finally {
     state.busy = false
     renderEntry()
@@ -736,7 +1001,10 @@ export function undoLastAction() {
   if (state.busy) return
   var entry = takeUndo()
   if (entry === null) return
-  return entry.kind === 'removal' ? undoRemoval(entry) : undoPoint(entry)
+  // The stack only ever holds acts this table describes; an unknown kind is not guessed at, because
+  // guessing would retract a point the entry never named.
+  if (ACTS[entry.kind] === undefined) return
+  return ACTS[entry.kind].undo.run(entry)
 }
 
 /** Ctrl+Shift+Z / Ctrl+Y, and the status's own button after an undo. */
@@ -744,7 +1012,8 @@ export function redoLastAction() {
   if (state.busy) return
   var entry = takeRedo()
   if (entry === null) return
-  return redoRemoval(entry)
+  if (ACTS[entry.kind] === undefined) return
+  return ACTS[entry.kind].redo.run(entry)
 }
 
 /** The bar's controls: add, correct, undo, and the two shortcuts that act on a point. */

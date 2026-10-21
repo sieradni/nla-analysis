@@ -134,8 +134,10 @@ let missedWhileBusy = false
 
 /**
  * Refusals cross the IPC boundary as data, not as thrown errors: Electron's structured clone keeps
- * an Error's message and drops the rest, and a window that shows "point rejected" without the list
- * of problems is worse than one that shows nothing.
+ * an Error's message and drops the rest. `bench.refusalOf` builds that data in the bundle, where it
+ * is tested — including the `kind`, which is what lets the window tell a refusal that can never
+ * succeed from one worth retrying. Listing the fields here instead lost the kind, and every failed
+ * undo was offered again forever.
  *
  * The two counters above are the live-refresh handshake: a call that saves a tab makes its own
  * filesystem event, and reloading in the middle of that save would redraw a tab the window is
@@ -148,14 +150,7 @@ async function guarded(run) {
   try {
     return { ok: true, value: await run() }
   } catch (error) {
-    return {
-      ok: false,
-      error: {
-        message: error instanceof Error ? error.message : String(error),
-        hint: error?.hint ?? null,
-        problems: error?.problems ?? [],
-      },
-    }
+    return bench.refusalOf(error)
   } finally {
     windowCalls -= 1
     if (windowCalls === 0 && missedWhileBusy) {
@@ -237,8 +232,8 @@ ipcMain.handle('bench:pickFolder', async (event) => {
   return { ok: true, value: result.canceled ? null : result.filePaths[0] }
 })
 
-// The write channel. Five calls, each one a `Workspace` method: there is no generic "run this"
-// escape hatch, so the window cannot grow a write path the core has not already agreed to.
+// The write channel. Each call is one `Workspace` method: there is no generic "run this" escape
+// hatch, so the window cannot grow a write path the core has not already agreed to.
 ipcMain.handle('bench:recordPoint', (_event, dir, draft, viewName) =>
   guarded(() => bench.recordPoint(dir, draft, viewName)),
 )
@@ -251,11 +246,15 @@ ipcMain.handle('bench:retractPoint', (_event, dir, id, reason) =>
 ipcMain.handle('bench:restorePoint', (_event, dir, id, retraction) =>
   guarded(() => bench.restorePoint(dir, id, retraction)),
 )
+// Undoing an import is a version, not a deleted one: an older version's rows become a new version.
+ipcMain.handle('bench:restoreVersion', (_event, dir, dataset, version, viewName) =>
+  guarded(() => bench.restoreVersion(dir, dataset, version, viewName)),
+)
 // Copying a point's details is a clipboard write, not a project write: it neither reads nor moves the
 // log, so it deliberately does not run under `guarded` (which arms the project watcher).
 ipcMain.handle('bench:copyText', async (_event, text) => {
   if (typeof text !== 'string' || text === '') {
-    return { ok: false, error: { message: 'there was nothing to copy' } }
+    return bench.refusalOf(new Error('there was nothing to copy'))
   }
   // `await` so the answer means the clipboard holds the line, whether this Electron's clipboard is
   // synchronous or promise-based. The window reports success only after this resolves.

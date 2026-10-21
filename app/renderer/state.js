@@ -5,6 +5,7 @@
  * what the window knows and the one guarded call into `window.bench`.
  */
 import { refusal } from './copy.js'
+import { resetTabHistory } from './history.js'
 
 export const bridge = window.bench
 
@@ -47,6 +48,23 @@ export const state = {
   // The set of source columns with no shape field, so checking "ignore" is reset when a
   // mapping change gives the acknowledgement a different meaning.
   importExtraKey: null,
+}
+
+/**
+ * The window moved to a different drawing: the view, the tab it came from and the history that
+ * belongs to it change together.
+ *
+ * This is the one place the open tab changes and the one place the stacks are cleared, so every path
+ * that lands somewhere else goes through it — opening a tab, another project, a tab built from the
+ * dialog, a watched redraw of another writer's state, and the removal of a tab. `null` means nothing
+ * is open, which is a change like any other. A *refresh* of the same tab is not one of these: it
+ * writes the pair directly and keeps the history, because the acts still name points this drawing
+ * shows. An import is a refresh with a reconciliation (`history.reconcileImport`), not a view change.
+ */
+export function showView(opened) {
+  state.opened = opened === undefined ? null : opened
+  state.view = state.opened === null ? null : state.opened.view
+  resetTabHistory()
 }
 
 export function node(tag, className, text) {

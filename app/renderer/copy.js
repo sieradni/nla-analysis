@@ -362,6 +362,22 @@ export var pointMenu = {
   remove: 'Remove',
 }
 
+/**
+ * The sentence a direction of the bar's button says around one act's phrase. The phrase comes from
+ * `labels`; the table in `entry.js` pairs it with a kind, so this file keeps the words and knows no
+ * kinds. Preserved word for word from the four per-kind functions it replaced.
+ */
+export function actTitle(direction, what) {
+  return direction === 'undo'
+    ? 'Undo ' + what + ' (Ctrl+Z in an empty field)'
+    : 'Redo ' + what + ' (Ctrl+Shift+Z or Ctrl+Y in an empty field)'
+}
+
+/** Nothing to undo or redo yet, which is a fact about the stack rather than about an act. */
+export function idleActTitle(direction) {
+  return direction === 'undo' ? 'Nothing to undo yet (Ctrl+Z in an empty field)' : 'Nothing to redo yet'
+}
+
 export var labels = {
   importTitle: 'Import a file',
   newProject: 'New project',
@@ -372,7 +388,24 @@ export var labels = {
   undo: 'Undo',
   undoPoint: 'Undo added point',
   undoRemoval: 'Undo removal',
+  undoCorrection: 'Undo correction',
+  undoImport: 'Undo import',
+  redo: 'Redo',
+  redoPoint: 'Redo added point',
   redoRemoval: 'Redo removal',
+  redoCorrection: 'Redo correction',
+  redoImport: 'Reapply import',
+  // The phrase each act's tooltip is built from: "Undo the last point added here". They sit here,
+  // flat and keyed by no kind, so the words stay in this file while `entry.js` owns which act is
+  // which. The redo phrases are the other direction's grammar, not a second list of acts.
+  actPoint: 'the last point added here',
+  actRemoval: 'the last point removed here',
+  actCorrection: 'the last correction made here',
+  actImport: 'the last import',
+  actPointRedo: 'the point added here',
+  actRemovalRedo: 'the point removed here',
+  actCorrectionRedo: 'the correction made here',
+  actImportRedo: 'the import that was undone',
   importFile: 'Import file',
   refresh: 'Refresh',
   saveCorrection: 'Save correction',
@@ -388,6 +421,16 @@ export function applyStatic(ui) {
   if (ui.entryUndo) ui.entryUndo.textContent = labels.undo
   if (ui.importOpen) ui.importOpen.textContent = labels.importFile
   if (ui.entryCancel) ui.entryCancel.textContent = labels.cancel
+}
+
+/** The one sentence a panel that could not be redrawn needs, so every status says it the same way. */
+function outOfDate(count) {
+  if (!(count > 0)) return ''
+  return (
+    ' · ' +
+    plural(count, 'analysis panel') +
+    (count === 1 ? ' is out of date until it is run again' : ' are out of date until they are run again')
+  )
 }
 
 /**
@@ -410,16 +453,16 @@ export var status = {
     return text
   },
   corrected: function (change) {
-    var text = 'Corrected · ' + plural(change.active, 'point') + ' in this tab'
-    if (change.stalePanels > 0) {
-      text +=
-        ' · ' +
-        plural(change.stalePanels, 'analysis panel') +
-        (change.stalePanels === 1
-          ? ' is out of date until it is run again'
-          : ' are out of date until they are run again')
-    }
-    return text
+    return 'Corrected · ' + plural(change.active, 'point') + ' in this tab' + outOfDate(change.stalePanels)
+  },
+  correctionUndone: function (change) {
+    return 'Correction undone · ' + plural(change.active, 'point') + ' in this tab' + outOfDate(change.stalePanels)
+  },
+  importUndone: function (change) {
+    return 'Restored the data from before the import · ' + plural(change.active, 'point') + ' in this tab'
+  },
+  importReapplied: function (change) {
+    return 'Reapplied the import · ' + plural(change.active, 'point') + ' in this tab'
   },
   removed: function (change) {
     return 'Removed · ' + plural(change.active, 'point') + ' left in this tab'
@@ -443,19 +486,6 @@ export var status = {
     if (change.corrections > 0) text += ' · ' + plural(change.corrections, 'correction') + ' already'
     if (change.stalePanels > 0) text += ' · an analysis panel will need to run again'
     return text
-  },
-  /** What the one undo button will reverse, so it never asks a person to press and find out. */
-  undoLabel: function (next) {
-    if (!next) return labels.undo
-    return next.kind === 'removal' ? labels.undoRemoval : labels.undoPoint
-  },
-  undoTitle: function (next) {
-    if (!next) return 'Nothing to undo yet (Ctrl+Z in an empty field)'
-    return (
-      'Undo ' +
-      (next.kind === 'removal' ? 'the last point removed here' : 'the last point added here') +
-      ' (Ctrl+Z in an empty field)'
-    )
   },
   readoutTitle: function () {
     return 'Points in this tab. The millisecond figure is Enter to painted frame.'

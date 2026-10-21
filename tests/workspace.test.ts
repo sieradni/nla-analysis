@@ -164,6 +164,28 @@ describe('Workspace', () => {
     expect(after.trimEnd().split('\n').at(-1)).toContain('point_corrected')
   })
 
+  it('refuses to correct a withdrawn point, and writes nothing', async () => {
+    const workspace = await Workspace.open(project)
+    const recorded = await workspace.recordPoint({
+      values: { x: 6, y: 7 },
+      tObserved: '2026-03-03T03:03:03Z',
+    })
+    await workspace.retractPoint(recorded.event.id)
+    const before = await readFile(join(project, 'data', 'events.jsonl'), 'utf8')
+
+    const failure = await workspace
+      .correctPoint(recorded.event.id, { y: 8 })
+      .then(() => null)
+      .catch((error: unknown) => error)
+
+    // The fold would have merged the values into a row nothing shows, and a later restore would
+    // bring the record back with numbers nobody chose. `missing`, because the row is not in the data
+    // and the same call can never succeed: the window ends the edit on that kind.
+    expect((failure as BenchError).kind).toBe('missing')
+    expect((failure as BenchError).message).toContain('has been withdrawn')
+    expect(await readFile(join(project, 'data', 'events.jsonl'), 'utf8')).toBe(before)
+  })
+
   it('restores a removed point as the same record, and refuses a second restore', async () => {
     const workspace = await Workspace.open(project)
     const recorded = await workspace.recordPoint({

@@ -126,6 +126,26 @@ say which action is next; a redo after undo leaves the same active rows and the 
 pinned to a new version number is expected after an import); undoing an import leaves no version
 deleted and says which version it restored.
 
+**Built 2026-10-20 (part):** one bounded history per tab, in both directions, for adding, removing and
+correcting a point. The bar's one button names the act it would reverse — **Undo added point**, **Undo
+removal**, **Undo correction** — and after any undo the status offers the matching redo (**Redo added
+point**, **Redo removal**, **Redo correction**). `Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y` drive the same
+history from any focus that is not a text field. Undoing a correction writes the values the log held
+before the save as a new correction; redoing writes the corrected ones back, so no event is withdrawn
+and the log keeps every number the point has held. Redo of undoing an added point is a restore naming
+the retraction the undo wrote, so the same record returns. **An import is undone as a version**: the
+version it replaced becomes current again as a *new* version, then redo restores the imported one, so
+the number only moves forward and nothing is deleted. The window says `Restored the data from before
+the import`, not a version number; the CLI (`bench dataset restore`) and the log name the version for
+the agent, which is the split [ADR 0015](adr/0015-user-surface.md) draws. The stacks hold 50 acts and
+drop the oldest; a new act clears the redo branch; each Save is its own act and is never merged with a
+neighbouring one. Not built: undoing a tab create or delete (U7, a separate pass).
+Evidence: `tests/history.test.mjs` (both directions, the branch, the bound), `tests/window-copy.test.mjs`
+(the labels), `tests/version-restore.test.ts` (rows, empty first version, optional-field exactness),
+`tests/cli.test.ts` (`dataset restore`, both directions and the refusals), `tests/shell.test.ts` (a
+correction and a version restored through the bundled core), `pnpm app:capture` (`app-undo`,
+`app-correction-undo`, `app-import-undone`, real keystrokes, the log read back after each).
+
 ### U5. Undo restores the same point, not a lookalike
 
 **Seen:** removing a point is a `point_retracted` event; there is no inverse, so the only way back
