@@ -138,6 +138,18 @@ function fieldSpec(panel, name) {
 }
 
 /**
+ * A row's time, said with how it was obtained. An estimate came from the file's row order, not from
+ * an observation, and it is marked wherever the time is shown — the strip, copied details and the
+ * status — so it can never read as something that was measured.
+ */
+export function observedWord(iso, estimated) {
+  return 'observed ' + formatInstant(iso) + (estimated ? ' (estimated)' : '')
+}
+
+/** The phrase a plan and a status use for a file whose rows were ordered, not timed. */
+var estimatedFromOrder = 'times estimated from the row order'
+
+/**
  * The line **Copy details** puts on the clipboard: what this point measured, when, and — last,
  * because the person reading the window never needs it — the record's id, which is the one thing
  * another session needs to find the same point again.
@@ -167,7 +179,7 @@ export function copiedDetails(point) {
     var shown = typeof value === 'number' ? formatValue(value) : String(value)
     parts.push(name + ' ' + shown + (field && field.unit ? ' ' + field.unit : ''))
   })
-  if (point.tObserved) parts.push('observed ' + formatInstant(point.tObserved))
+  if (point.tObserved) parts.push(observedWord(point.tObserved, point.timeEstimated === true))
   parts.push('record ' + point.id)
   return parts.join(' · ')
 }
@@ -380,6 +392,24 @@ export function panelEmpty() {
   return 'No observations yet. Add the first point below.'
 }
 
+/**
+ * The import sheet's one line about time, above the preview and before the click: which column the
+ * rows are placed by, in the file's own spelling — or, when the file has no clock, that the order is
+ * doing the work and every row will say so (U8, U9).
+ */
+export function importTimeSaid(choice) {
+  if (choice.field) return 'Time: from the “' + choice.field + '” field'
+  if (choice.estimated) return 'Time: the row order — every row is marked estimated'
+  if (choice.column) return 'Time: from the “' + choice.column + '” column'
+  return 'Time: not chosen yet'
+}
+
+/** The choice that stands in for a clock: a decision, said as one, never a silent fallback. */
+export var importTimeEstimate = 'No clock — use the row order (estimated)'
+
+/** The label of the control that opens the full choice. */
+export var importTimeChange = 'Change'
+
 /** The import sheet's header: what the file holds, in counts a person reads without a schema. */
 export function importSummary(preview, unmapped) {
   var parts = [plural(preview.rows, 'row'), plural(preview.columns.length, 'column')]
@@ -419,6 +449,7 @@ export function importPlan(planned) {
   if (planned.ignoredColumns && planned.ignoredColumns.length > 0) {
     parts.push('ignoring ' + planned.ignoredColumns.join(', '))
   }
+  if (planned.estimated) parts.push(estimatedFromOrder)
   if (planned.warnings && planned.warnings.length > 0) parts.push(refusal(planned.warnings[0]))
   return parts.join(' · ')
 }
@@ -531,6 +562,8 @@ export var labels = {
   cancel: 'Cancel',
   // A moment is not a syntax to type: one press fills the field with the time it is now.
   now: 'Now',
+  // What a time the file only implied is called, said next to the time itself.
+  estimated: 'estimated',
   nowTitle: 'Fill this field with the current time',
 }
 
@@ -581,7 +614,7 @@ export var status = {
     // cannot see in the values they just typed.
     return (
       'Corrected' +
-      (change.observed ? ' · observed ' + formatInstant(change.observed) : '') +
+      (change.observed ? ' · ' + observedWord(change.observed, change.estimated === true) : '') +
       ' · ' +
       plural(change.active, 'point') +
       ' in this tab' +
@@ -620,8 +653,9 @@ export var status = {
   correctionRow: function (change) {
     var text = describeValues(change.values, change.panel, change.fields, change.timeField)
     if (change.observed) {
-      text += (text === '' ? '' : ' · ') + 'observed ' + formatInstant(change.observed)
+      text += (text === '' ? '' : ' · ') + observedWord(change.observed, change.estimated === true)
     }
+    if (change.estimated && !change.observed) text += (text === '' ? '' : ' · ') + 'estimated'
     if (change.corrections > 0) text += ' · ' + plural(change.corrections, 'correction') + ' already'
     if (change.stalePanels > 0) text += ' · an analysis panel will need to run again'
     return text
@@ -710,6 +744,9 @@ export var status = {
         (change.removedRows === 1 ? ' not in the file was' : ' not in the file were') +
         ' withdrawn; the earlier version still holds ' +
         (change.removedRows === 1 ? 'it' : 'them')
+    }
+    if (change.estimated) {
+      text += ' · ' + estimatedFromOrder + ' (correct a point to replace one)'
     }
     if (change.ignoredColumns && change.ignoredColumns.length > 0) {
       text += ' · ignored ' + change.ignoredColumns.join(', ') + ' (no field for them)'

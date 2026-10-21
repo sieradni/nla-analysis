@@ -122,6 +122,47 @@ export function focusFirstField() {
   if (!ui.entry.hidden && inputs.length > 0) inputs[0].focus()
 }
 
+/**
+ * The row's own time, for a shape that designates no field: the instant the log holds, on the
+ * reader's clock, and whether it is an estimate. The same control as an `instant` field's, because
+ * it is the same question — and the one place an imported estimate can be replaced by a measured
+ * time without opening a terminal.
+ */
+export function renderObservedField(correction) {
+  var shown = correction !== null && correction.timeField === undefined
+  ui.entryObserved.hidden = !shown
+  if (!shown) {
+    ui.entryObservedInput.value = ''
+    delete ui.entryObservedInput.dataset.canonical
+    ui.entryObservedNote.textContent = ''
+    return
+  }
+  ui.entryObservedInput.value = instantInputValue(correction.tObserved)
+  ui.entryObservedInput.dataset.canonical = correction.tObserved
+  ui.entryObservedNote.textContent = correction.timeEstimated === true ? labels.estimated : ''
+}
+
+/**
+ * The instant the strip's observed control names, or undefined when it is not showing — and when it
+ * has been emptied, because a row is its instant: a cleared control moves nothing, it does not
+ * withdraw the time the record already has.
+ */
+export function observedFieldValue() {
+  if (ui.entryObserved.hidden) return undefined
+  var text = ui.entryObservedInput.value.trim()
+  if (text === '') return undefined
+  return instantFromInput(text, ui.entryObservedInput.dataset.canonical)
+}
+
+/** The observed control's own press: the current moment, and nothing earlier to preserve. */
+export function wireFields() {
+  ui.entryObservedNow.addEventListener('click', function () {
+    ui.entryObservedInput.value = instantInputValue(new Date().toISOString())
+    delete ui.entryObservedInput.dataset.canonical
+    ui.entryObservedInput.focus()
+  })
+}
+
 /** Mark the fields a refusal named, and hand back the first one so focus can go there. */
 export function markProblems(problems) {
   var labels = ui.entryFields.querySelectorAll('.entry-field')

@@ -80,7 +80,21 @@ doors. A shape editor, `shape list|show|validate`, and `add --dry-run` remain op
 - The import sheet preselects the column it believes and states it in one line, instead of requiring
 a picker row before it will plan. **Change** opens the full choice.
 - A file with no time column may import with the row order as an explicit **estimated** instant
-  (ADR 0012's update). It is never silent and can be corrected; a file with a clock never falls back.
-- When a designated shape's time field is present, the declaration still decides; an offset is still
-  canonicalised, and a contradiction is still refused. Confidence about the column does not weaken
-  the one-instant rule.
+  (ADR 0012's update). It is never silent and can be corrected; a file with a clock never falls back.- When a designated shape's time field is present, the declaration still decides; an offset is still
+canonicalised, and a contradiction is still refused. Confidence about the column does not weaken
+the one-instant rule.
+
+## Update 2026-10-21 — a correction can carry a measured instant
+
+`Workspace.correctPoint` takes an optional `tObserved`, and `bench correct <id> --at <iso>` is its CLI
+door. It is the way an import's estimate becomes a measurement: the event carries `t_observed` and no
+`t_estimated`, and the fold drops the marker. Two limits keep the one-instant rule intact:
+
+- A shape that **designates** a field still derives the instant from that field. `--at` there is
+accepted only when it agrees, and refused when it does not — the same answer `add --at` gives. The
+window does not offer the control for such a shape, because the field is already the answer.
+- A correction can be the time alone (`--values` may be left out), but only when it moves something:
+  `correctPoint(id, {})` is still refused as "nothing to correct".
+- There is **one** write path. The estimate's replacement is this call, not a second door beside it:
+  the same append, the same version tagging, the same refusal kinds, and the undo of a time correction
+  is the same correction-with-the-earlier-values that a value correction already uses.

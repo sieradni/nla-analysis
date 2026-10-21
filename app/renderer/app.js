@@ -16,7 +16,7 @@ import { renderView, watchOpenTab, captureRestore } from './panels.js'
 import { applyStatic, builtInShape, empty as emptyCopy, refusal, status as copyStatus } from './copy.js'
 import { renderEntry } from './entry.js'
 import { clearStatus, setStatus } from './status.js'
-import { focusFirstField } from './fields.js'
+import { focusFirstField, wireFields } from './fields.js'
 import { selectPoint } from './correction.js'
 import { pointAction, wireEntry } from './point-actions.js'
 import { actOffer, wireActs } from './acts.js'
@@ -179,6 +179,7 @@ export function wire() {
   wireTabs()
   wireImport()
   wireEntry()
+  wireFields()
   wireActs()
   ui.closeTab.addEventListener('click', function () {
     closeTab(state.view && state.view.name)

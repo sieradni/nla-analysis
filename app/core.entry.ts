@@ -342,6 +342,8 @@ export interface ImportedTable {
   /** Source columns the caller explicitly left out because the shape has no field for them. */
   ignoredColumns: string[]
   warnings: string[]
+  /** The file had no clock: every row this version brought carries an estimated time. */
+  estimated: boolean
   active: number
   /** The open tab, rebuilt and redrawn; null when the project has no tab on screen. */
   view: RefreshedView | null
@@ -363,17 +365,19 @@ export interface PlannedImport {
   removedRows: { t: string; values: Record<string, PointValue> }[]
   ignoredColumns: string[]
   warnings: string[]
+  estimated: boolean
 }
 
 export async function importPlan(
   dir: string,
   file: string,
   mapping: Record<string, string>,
-  options: { time?: string; force?: boolean; ignoreColumns?: string[] } = {},
+  options: { time?: string; estimate?: boolean; force?: boolean; ignoreColumns?: string[] } = {},
 ): Promise<PlannedImport> {
   const plan = await planImport(await workspaceFor(dir), file, {
     mapping,
     ...(options.time === undefined ? {} : { time: options.time }),
+    ...(options.estimate === true ? { estimate: true } : {}),
     ...(options.ignoreColumns === undefined ? {} : { ignoreColumns: options.ignoreColumns }),
     ...(options.force === true ? { force: true } : {}),
   })
@@ -386,6 +390,7 @@ export async function importPlan(
     removedRows: plan.diff.removedRows.map((row) => ({ t: row.t, values: row.values })),
     ignoredColumns: plan.ignoredColumns,
     warnings: plan.warnings,
+    estimated: plan.estimated,
   }
 }
 
@@ -398,13 +403,20 @@ export async function importFile(
   dir: string,
   file: string,
   mapping: Record<string, string>,
-  options: { force?: boolean; time?: string; viewName?: string; ignoreColumns?: string[] } = {},
+  options: {
+    force?: boolean
+    time?: string
+    estimate?: boolean
+    viewName?: string
+    ignoreColumns?: string[]
+  } = {},
 ): Promise<ImportedTable> {
   const workspace = await workspaceFor(dir)
   const plan = await planImport(workspace, file, {
     mapping,
     ...(options.force === true ? { force: true } : {}),
     ...(options.time === undefined ? {} : { time: options.time }),
+    ...(options.estimate === true ? { estimate: true } : {}),
     ...(options.ignoreColumns === undefined ? {} : { ignoreColumns: options.ignoreColumns }),
   })
   const committed = await commitImport(workspace, plan)
@@ -422,6 +434,7 @@ export async function importFile(
     preserved: plan.preserved,
     ignoredColumns: plan.ignoredColumns,
     warnings: plan.warnings,
+    estimated: plan.estimated,
     active: workspace.dataset(plan.dataset).points.length,
     view: options.viewName === undefined ? null : await refreshView(dir, options.viewName, { draw: true }),
   }

@@ -229,6 +229,11 @@ describe('a point\u2019s menu', () => {
     })
     expect(timed).toBe('x 3 · y 8.09 °C · observed ' + OBSERVED_TEXT + ' · record ' + POINT_ID)
     expect(copy.copiedDetails(null)).toBe('')
+    // A time the file only implied reads as one here too: a copied line that said "observed" would
+    // be a claim the record cannot support.
+    expect(copy.copiedDetails({ ...detail, timeEstimated: true })).toBe(
+      'x 3 · y 8.09 °C · observed ' + OBSERVED_TEXT + ' (estimated) · record ' + POINT_ID,
+    )
   })
 })
 
@@ -345,6 +350,13 @@ describe('a time a person enters', () => {
     )
     expect(copy.status.corrected({ active: 14, stalePanels: 0 })).toBe('Corrected \u00b7 14 points in this tab')
     expectPlain(copy.status.corrected({ active: 14, stalePanels: 0, observed: when }), 'corrected time')
+    // A replace that moved the time to a measured instant says so without the marker; the same
+    // sentence with the marker is what a re-read that kept the estimate would say.
+    expect(copy.status.corrected({ active: 14, stalePanels: 0, observed: when, estimated: true })).toBe(
+      'Corrected \u00b7 observed ' + onTheClock(when) + ' (estimated) \u00b7 14 points in this tab',
+    )
+    expect(copy.observedWord(when, false)).toBe('observed ' + onTheClock(when))
+    expect(copy.observedWord(when, true)).toBe('observed ' + onTheClock(when) + ' (estimated)')
   })
 })
 
@@ -570,6 +582,32 @@ describe('the import sheet', () => {
     const text = copy.importPlan({ ...planned, parent: null, diff: { added: 5, removed: 0, changed: 0 }, removedRows: [], ignoredColumns: [] })
     expect(text).toBe('5 rows \u00b7 all new')
     expectPlain(text, 'first import plan')
+  })
+
+  it('states where the times come from, and says an estimate is one', () => {
+    // The sheet's guess is a sentence, not a column id in a select nobody opened.
+    expect(copy.importTimeSaid({ column: 'taken_at' })).toBe('Time: from the “taken_at” column')
+    expect(copy.importTimeSaid({ field: 'date' })).toBe('Time: from the “date” field')
+    expect(copy.importTimeSaid({ estimated: true })).toBe(
+      'Time: the row order — every row is marked estimated',
+    )
+    expect(copy.importTimeSaid({})).toBe('Time: not chosen yet')
+    expect(copy.importTimeChange).toBe('Change')
+    // The choice that stands in for a clock says what it costs, before it is taken.
+    expect(copy.importTimeEstimate).toContain('estimated')
+    ;[copy.importTimeSaid({ column: 'taken_at' }), copy.importTimeSaid({ estimated: true })].forEach(
+      (text) => expectPlain(text, 'import time line'),
+    )
+
+    const estimated = copy.importPlan({ ...planned, estimated: true, ignoredColumns: [], removedRows: [] })
+    expect(estimated).toContain('times estimated from the row order')
+    expectPlain(estimated, 'estimated import plan')
+    expect(
+      copy.status.imported({ rows: 2, first: true, added: 2, removed: 0, changed: 0, estimated: true }),
+    ).toBe('Imported 2 rows · first version · times estimated from the row order (correct a point to replace one)')
+    expect(
+      copy.status.imported({ rows: 2, first: true, added: 2, removed: 0, changed: 0 }),
+    ).toBe('Imported 2 rows · first version')
   })
 })
 

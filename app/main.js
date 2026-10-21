@@ -275,8 +275,8 @@ ipcMain.handle('bench:pickFolder', async (event) => {
 ipcMain.handle('bench:recordPoint', (_event, dir, draft, viewName) =>
   guarded(() => bench.recordPoint(dir, draft, viewName)),
 )
-ipcMain.handle('bench:correctPoint', (_event, dir, id, values, viewName) =>
-  guarded(() => bench.correctPoint(dir, id, values, viewName)),
+ipcMain.handle('bench:correctPoint', (_event, dir, id, values, viewName, tObserved) =>
+  guarded(() => bench.correctPoint(dir, id, values, viewName, tObserved)),
 )
 ipcMain.handle('bench:retractPoint', (_event, dir, id, reason) =>
   guarded(() => bench.retractPoint(dir, id, reason)),

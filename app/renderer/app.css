@@ -448,6 +448,26 @@ button {
   margin-bottom: var(--s3);
 }
 
+/* Where the rows' times come from, said before the click. The full choice is one press away, so a
+   file with an obvious clock needs no interaction at all. */
+.import-time-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.import-time-line #import-time-said {
+  font-family: var(--font-num);
+  color: var(--ink);
+}
+
+.import-time-line button {
+  margin-left: auto;
+}
+
 .import-field select {
   padding: 5px var(--s2);
   border: 1px solid var(--line-strong);
@@ -960,6 +980,16 @@ button {
 
 .entry-correct button {
   margin-left: auto;
+}
+
+/* The row's own time, for a shape that designates no field: it sits in the correction row because
+   that is the only place a record is edited, and its estimate mark is a word, not an icon. */
+.entry-correct #entry-observed button {
+  margin-left: 0;
+}
+
+.entry-correct #entry-observed em {
+  font-style: normal;
 }
 
 .entry-status .idle {

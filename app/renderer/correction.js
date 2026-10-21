@@ -9,7 +9,7 @@
  */
 import { state, bridge, call } from './state.js'
 import { refusal, status as copyStatus } from './copy.js'
-import { fieldValueMap, focusFirstField, markProblems } from './fields.js'
+import { fieldValueMap, focusFirstField, markProblems, observedFieldValue } from './fields.js'
 import { clearStatus, setStatus } from './status.js'
 import { renderEntry } from './entry.js'
 import { renderTabs } from './rail.js'
@@ -117,17 +117,26 @@ export async function submitCorrection() {
   var correction = state.correction
   var before = correction.values
   var values = fieldValueMap()
-  // Did this edit move the observation time? Re-derived from the shape's designated field by the
-  // core, so the answer is the log's, not the strip's.
+  // A shape that designates its time says it in a field, and the core re-derives the instant from
+  // that field. A shape that designates nothing gets the observed control instead: that is the one
+  // way an imported estimate becomes a measured time.
+  var tObserved = observedFieldValue()
   var moved =
-    correction.timeField !== undefined &&
-    String(correction.values[correction.timeField]) !== String(values[correction.timeField])
+    correction.timeField !== undefined
+      ? String(correction.values[correction.timeField]) !== String(values[correction.timeField])
+      : tObserved !== undefined && tObserved !== correction.tObserved
   var ended = false
   state.busy = true
   renderEntry()
   try {
     var corrected = await call(
-      bridge.correctPoint(state.project.dir, correction.id, values, state.view.name),
+      bridge.correctPoint(
+        state.project.dir,
+        correction.id,
+        values,
+        state.view.name,
+        tObserved === undefined || tObserved === correction.tObserved ? undefined : tObserved,
+      ),
     )
     // The bar's undo reverses *this* correction: the values the log held before the save, and the
     // values it holds now, so both directions are one recorded correction apiece.
@@ -141,11 +150,21 @@ export async function submitCorrection() {
     renderView(captureRestore())
     var stale = corrected.view.kept
     // The new instant, said only when it is one: a status that reads `observed undefined` is worse
-    // than a status that says only what happened.
-    var movedTo = moved ? correctedTime(corrected, correction.timeField) : undefined
+    // than a status that says only what happened. `estimated` is the log's answer, so a replaced
+    // estimate is not called one afterwards.
+    var movedTo = moved
+      ? correction.timeField === undefined
+        ? corrected.tObserved
+        : correctedTime(corrected, correction.timeField)
+      : undefined
     setStatus(
       stale.length > 0 ? 'error' : 'ok',
-      copyStatus.corrected({ active: corrected.active, stalePanels: stale.length, observed: movedTo }),
+      copyStatus.corrected({
+        active: corrected.active,
+        stalePanels: stale.length,
+        observed: movedTo,
+        estimated: corrected.estimated,
+      }),
     )
     focusFirstField()
   } catch (error) {

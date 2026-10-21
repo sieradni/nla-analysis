@@ -294,7 +294,14 @@ async function assertPlainSurface(where) {
         if (!dialog || !dialog.open) return ''
         // The sheet's own words, not the chosen file's path or the sample cells: a file legitimately
         // called lab-export-v2.csv is not log vocabulary.
-        return ['import-summary', 'import-plan', 'import-apply', 'import-time', 'import-error']
+        return [
+          'import-summary',
+          'import-time-said',
+          'import-plan',
+          'import-apply',
+          'import-time',
+          'import-error',
+        ]
           .map((id) => {
             const element = document.getElementById(id)
             return element ? element.textContent : ''
@@ -2377,67 +2384,9 @@ let cspViolations = 0
     }
     await window.webContents.executeJavaScript("document.getElementById('import-cancel').click()")
 
-    // A file with no clock at all. A row is its instant, so the sheet must not let the core stamp
-    // one invented instant on every row and then call the result a diff.
+    // The clock under a name nobody listed: the values are what find it, and the sheet says so before
+    // the click. The diff is computed against the version the file actually shares rows with.
     const currentRows = JSON.parse(await readCli(['list', '--json'], importProject)).data
-    const untimedFile = join(dirname(importProject), 'lab-export-untimed.csv')
-    await saveFrame(
-      untimedFile,
-      'x,y\n' + currentRows.map((point) => `${point.values.x},${point.values.y}`).join('\n') + '\n',
-    )
-    setNextPickedFile(untimedFile)
-    await window.webContents.executeJavaScript("document.getElementById('import-open').click()")
-    for (let waited = 0; waited < 60; waited += 1) {
-      const ready = await window.webContents.executeJavaScript(
-        "(() => { const d = document.getElementById('import-dialog'); const times = Array.prototype.map.call(document.getElementById('import-time').options, (option) => option.value); return d.open && /lab-export-untimed\.csv$/.test(document.getElementById('import-path').textContent) && times.join(',') === ',x,y' })()",
-      )
-      if (ready) break
-      await sleep(100)
-    }
-    await sleep(300)
-    const untimedSheet = JSON.parse(await window.webContents.executeJavaScript(`(() => JSON.stringify({
-      time: document.getElementById('import-time').value,
-      columns: Array.prototype.map.call(document.getElementById('import-time').options, (option) => option.value),
-      plan: document.getElementById('import-plan').textContent,
-      planClass: document.getElementById('import-plan').className,
-    }))()`))
-    console.log('[bench] import-untimed ' + JSON.stringify(untimedSheet))
-    if (untimedSheet.time !== '') throw new Error('the sheet selected a time column that is not there')
-    if (!/choose the column that holds the observation time/.test(untimedSheet.plan)) {
-      throw new Error('the sheet did not ask for the time column: ' + untimedSheet.plan)
-    }
-    if (!/is-error/.test(untimedSheet.planClass)) {
-      throw new Error('the missing time column was not shown as a refusal: ' + untimedSheet.planClass)
-    }
-    await saveFrame(join(captureDir, 'app-import-untimed.png'), (await window.webContents.capturePage()).toPNG())
-    frames += 1
-    await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
-    for (let waited = 0; waited < 60; waited += 1) {
-      const shown = await window.webContents.executeJavaScript(
-        "(() => { const e = document.getElementById('import-error'); return e.hidden ? null : e.textContent })()",
-      )
-      if (shown) break
-      await sleep(100)
-    }
-    const untimedRefusal = await window.webContents.executeJavaScript(
-      "(() => document.getElementById('import-error').hidden ? null : document.getElementById('import-error').textContent)()",
-    )
-    console.log('[bench] import-untimed-refusal ' + JSON.stringify(untimedRefusal))
-    if (!/no column holds the observation time/.test(untimedRefusal || '')) {
-      throw new Error('the untimed file was not refused by the core: ' + untimedRefusal)
-    }
-    if (!/x, y/.test(untimedRefusal || '')) {
-      throw new Error('the refusal did not name the columns it could have meant: ' + untimedRefusal)
-    }
-    const logAfterUntimed = (await readFile(join(importProject, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n')
-    if (logAfterUntimed.length !== eventsAfterCorrection) {
-      throw new Error(`the untimed file appended ${logAfterUntimed.length - eventsAfterCorrection} event(s)`)
-    }
-    await window.webContents.executeJavaScript("document.getElementById('import-cancel').click()")
-    await sleep(300)
-
-    // The clock under a name bench does not guess. The sheet's picker is the only place that can say
-    // it, and the diff is computed against the version the file actually shares rows with.
     const namedFile = join(dirname(importProject), 'lab-export-taken-at.csv')
     await saveFrame(
       namedFile,
@@ -2457,10 +2406,17 @@ let cspViolations = 0
     const namedSheet = JSON.parse(await window.webContents.executeJavaScript(`(() => JSON.stringify({
       open: document.getElementById('import-dialog').open,
       path: document.getElementById('import-path').textContent,
+      said: document.getElementById('import-time-said').textContent,
+      chosen: document.getElementById('import-time').value,
       columns: Array.prototype.map.call(document.getElementById('import-time').options, (option) => option.value),
     }))()`))
+    console.log('[bench] import-named-time-said ' + JSON.stringify({ said: namedSheet.said, chosen: namedSheet.chosen }))
     if (!namedSheet.open || !/lab-export-taken-at\.csv$/.test(namedSheet.path)) {
       throw new Error('the named-time file did not reach the sheet: ' + JSON.stringify(namedSheet))
+    }
+    // A file with a clock never falls back to the estimate: the values found it, and the line says so.
+    if (namedSheet.chosen !== 'taken_at' || !/“taken_at” column/.test(namedSheet.said)) {
+      throw new Error('the clock under an unlisted name was not stated: ' + JSON.stringify(namedSheet))
     }
     await window.webContents.executeJavaScript(`(() => {
       const select = document.getElementById('import-time')
@@ -2504,6 +2460,211 @@ let cspViolations = 0
     }
     if (!/main: version 4 → 5  \+1 −0 ~0/.test(namedDiff) || !/2026-10-16T09:00:00\.000Z/.test(namedDiff)) {
       throw new Error('the CLI diff does not name the added instant:\n' + namedDiff)
+    }
+
+    // A file with no clock at all. A row is its instant, so the sheet says where the times will come
+    // from before the click — the row order, marked as an estimate — and the marker lives in the
+    // log, not in the sheet. A correction then replaces it with a measured instant.
+    const estimatedRows = JSON.parse(await readCli(['list', '--json'], importProject)).data
+    const untimedFile = join(dirname(importProject), 'lab-export-untimed.csv')
+    await saveFrame(
+      untimedFile,
+      'x,y\n' +
+        estimatedRows.map((point) => `${point.values.x},${point.values.y}`).join('\n') +
+        '\n7,12.9\n',
+    )
+    setNextPickedFile(untimedFile)
+    await window.webContents.executeJavaScript("document.getElementById('import-open').click()")
+    for (let waited = 0; waited < 60; waited += 1) {
+      const ready = await window.webContents.executeJavaScript(
+        "(() => { const d = document.getElementById('import-dialog'); return d.open && /lab-export-untimed\\.csv$/.test(document.getElementById('import-path').textContent) && /row order/.test(document.getElementById('import-time-said').textContent) })()",
+      )
+      if (ready) break
+      await sleep(100)
+    }
+    await sleep(300)
+    const estimateSheet = JSON.parse(await window.webContents.executeJavaScript(`(() => JSON.stringify({
+      said: document.getElementById('import-time-said').textContent,
+      choice: document.getElementById('import-time').value,
+      changeShown: !document.getElementById('import-time-change').hidden,
+      pickerShown: !document.getElementById('import-time-field').hidden,
+      plan: document.getElementById('import-plan').textContent,
+      planClass: document.getElementById('import-plan').className,
+    }))()`))
+    console.log('[bench] import-estimate ' + JSON.stringify(estimateSheet))
+    // The guess is stated, not asked: the picker is shut, the sentence says what will be written,
+    // and the plan repeats it before the click.
+    if (estimateSheet.choice !== 'estimate') {
+      throw new Error('the sheet did not choose the row order: ' + estimateSheet.choice)
+    }
+    if (!/row order/.test(estimateSheet.said) || !/estimated/.test(estimateSheet.said)) {
+      throw new Error('the sheet did not say its guess was an estimate: ' + estimateSheet.said)
+    }
+    if (!estimateSheet.changeShown) throw new Error('the guess cannot be changed: Change is hidden')
+    if (estimateSheet.pickerShown) throw new Error('the full time choice was asked instead of guessed')
+    if (!/times estimated from the row order/.test(estimateSheet.plan)) {
+      throw new Error('the plan does not say the times are estimates: ' + estimateSheet.plan)
+    }
+    if (/is-error/.test(estimateSheet.planClass)) {
+      throw new Error('a labelled estimate was planned as a refusal: ' + estimateSheet.plan)
+    }
+
+    // It is still a choice: Change opens the picker and puts the keyboard in it.
+    await window.webContents.executeJavaScript("document.getElementById('import-time-change').click()")
+    await sleep(200)
+    const pickerOpen = await window.webContents.executeJavaScript(
+      "(() => !document.getElementById('import-time-field').hidden && document.activeElement === document.getElementById('import-time'))()",
+    )
+    if (!pickerOpen) throw new Error('Change did not open the time choice, or left the keyboard behind')
+    await saveFrame(join(captureDir, 'app-import-time-choice.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+    // Saying nothing about the time is still a decision to make: the estimate is a statement, not a
+    // default the sheet falls back to when it has no answer.
+    await window.webContents.executeJavaScript(`(() => {
+      const select = document.getElementById('import-time')
+      select.value = ''
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(300)
+    const undecided = await window.webContents.executeJavaScript(
+      "(() => document.getElementById('import-plan').textContent)()",
+    )
+    if (!/choose the column that holds the observation time/.test(undecided)) {
+      throw new Error('an undecided time was not treated as a choice to make: ' + undecided)
+    }
+    await window.webContents.executeJavaScript(`(() => {
+      const select = document.getElementById('import-time')
+      select.value = 'estimate'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(400)
+    await assertPlainSurface('the estimated time sheet')
+    await saveFrame(join(captureDir, 'app-import-estimated.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+    const beforeEstimate = await logCount(importProject)
+    await window.webContents.executeJavaScript("document.getElementById('import-apply').click()")
+    const estimateState = await waitStatus(/times estimated from the row order/, 'the estimated import')
+    console.log('[bench] import-estimated-result ' + JSON.stringify({ status: estimateState.status }))
+    if (!/ 1 added/.test(estimateState.status || '')) {
+      throw new Error('the untimed re-read was not one added row: ' + estimateState.status)
+    }
+    // The marker is in the log — the sheet could be closed by now and the fact would still be there.
+    const estimateLog = (await readFile(join(importProject, 'data', 'events.jsonl'), 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .slice(beforeEstimate)
+    if (!estimateLog.some((line) => /"t_estimated":true/.test(line))) {
+      throw new Error('the estimate is not in the log:\n' + estimateLog.join('\n'))
+    }
+    const estimatedPoints = JSON.parse(await readCli(['list', '--json'], importProject)).data.filter(
+      (point) => point.t_estimated === true,
+    )
+    console.log(
+      '[bench] import-estimated-cli ' +
+        JSON.stringify(estimatedPoints.map((point) => ({ x: point.values.x, t: point.t_observed }))),
+    )
+    if (estimatedPoints.length !== 1) {
+      throw new Error(`the log marks ${estimatedPoints.length} row(s) as estimated, not 1`)
+    }
+    const estimatedList = await readCli(['list'], importProject)
+    if (estimatedList.split('\n').filter((line) => /\(estimated\)/.test(line)).length !== 1) {
+      throw new Error('the text list does not mark exactly the estimated row:\n' + estimatedList)
+    }
+
+    // The strip is where an estimate is replaced, and it says which time is the guess.
+    const estimatedPoint = estimatedPoints[0]
+    const clickedEstimated = await selectMarkById(estimatedPoint.id)
+    if (!clickedEstimated) {
+      throw new Error('the estimated point is not drawn, so its time cannot be replaced from the window')
+    }
+    await sleep(300)
+    const estimatedStrip = JSON.parse(await window.webContents.executeJavaScript(`(() => JSON.stringify({
+      shown: !document.getElementById('entry-observed').hidden,
+      value: document.getElementById('entry-observed-input').value,
+      note: document.getElementById('entry-observed-note').textContent,
+    }))()`))
+    console.log('[bench] estimated-strip ' + JSON.stringify(estimatedStrip))
+    if (!estimatedStrip.shown) throw new Error('the strip does not offer an estimated time for replacement')
+    if (estimatedStrip.value === '') throw new Error('the observed control was not filled from the log')
+    if (estimatedStrip.note !== 'estimated') {
+      throw new Error('the strip does not mark the estimated time: ' + JSON.stringify(estimatedStrip.note))
+    }
+    await saveFrame(join(captureDir, 'app-point-estimated.png'), (await window.webContents.capturePage()).toPNG())
+    frames += 1
+
+    // The strip gained a control, so it has to fit its row at every scaling the window is checked at.
+    const stripFit = {}
+    for (const scaling of [1, 1.25, 1.5]) {
+      await window.webContents.setZoomFactor(scaling)
+      await sleep(250)
+      stripFit[scaling] = await window.webContents.executeJavaScript(`(() => {
+        const row = document.getElementById('entry-correct')
+        return row.scrollWidth - Math.round(row.getBoundingClientRect().width)
+      })()`)
+    }
+    await window.webContents.setZoomFactor(1)
+    await sleep(250)
+    console.log('[bench] estimated-strip-overflow ' + JSON.stringify(stripFit))
+    for (const [scaling, overflow] of Object.entries(stripFit)) {
+      if (overflow > 1) {
+        throw new Error(`the correction row overflows by ${overflow}px at ${scaling}× scaling`)
+      }
+    }
+
+    // Typing a measured instant and pressing Enter: the same path a person uses, and the only path.
+    const replacement = '2026-10-20T09:00'
+    await window.webContents.executeJavaScript(`(() => {
+      const input = document.getElementById('entry-observed-input')
+      input.value = ${JSON.stringify(replacement)}
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.focus()
+      return input.value
+    })()`)
+    pressEnter()
+    const replacedState = await waitStatus(/^Corrected /, 'the replacement of an estimated time')
+    const replacedAt = new Date(replacement).toISOString()
+    const shownAt = new Intl.DateTimeFormat('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(replacement))
+    console.log('[bench] estimated-replaced ' + JSON.stringify({ status: replacedState.status, replacedAt }))
+    if (!(replacedState.status || '').includes('observed ' + shownAt)) {
+      throw new Error('the status does not name the measured time: ' + replacedState.status)
+    }
+    if (/estimated/.test(replacedState.status || '')) {
+      throw new Error('a measured time is still called an estimate: ' + replacedState.status)
+    }
+    if (JSON.parse(await entryState()).correcting) {
+      throw new Error('the strip stayed open after the time was replaced')
+    }
+    const replacedRows = JSON.parse(await readCli(['list', '--json'], importProject)).data
+    const replacedRow = replacedRows.find((point) => point.id === estimatedPoint.id)
+    if (!replacedRow) throw new Error('the replaced point is not in the data')
+    if (replacedRow.t_observed !== replacedAt) {
+      throw new Error(`the row's time is ${replacedRow.t_observed}, not ${replacedAt}`)
+    }
+    if (replacedRow.t_estimated !== undefined) {
+      throw new Error('the estimate marker survived a measured instant')
+    }
+    if (replacedRows.some((point) => point.t_estimated === true)) {
+      throw new Error('an estimate remains after the only one was replaced')
+    }
+    const replacedList = await readCli(['list'], importProject)
+    if (/\(estimated\)/.test(replacedList)) {
+      throw new Error('the text list still marks an estimate:\n' + replacedList)
+    }
+    const replacedEvents = (await readFile(join(importProject, 'data', 'events.jsonl'), 'utf8')).trimEnd().split('\n')
+    if (!replacedEvents.at(-1).includes('point_corrected')) {
+      throw new Error('replacing the time did not append one correction: ' + replacedEvents.at(-1))
+    }
+    if (!/"t_observed"/.test(replacedEvents.at(-1)) || /"t_estimated"/.test(replacedEvents.at(-1))) {
+      throw new Error('the correction does not carry the measured time alone: ' + replacedEvents.at(-1))
     }
 
     // A tab whose panels were drawn from different versions. A refresh repins only the panels it

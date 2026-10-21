@@ -166,11 +166,11 @@ exist, which analyses are stale, what the last decisions were, and what is unres
 |---|---|
 | `bench add --dataset <d> --values '{"x":1.2,"y":3.4}' [--at ISO] [--note] [--tag]` | record a point |
 | `bench add --stdin` | bulk points: JSONL or TSV with `--columns x,y,t`. **Not built.** |
-| `bench correct <point-id> --values '{"y":3.5}' --reason "typo"` | supersede a point |
+| `bench correct <point-id> [--values '{"y":3.5}'] [--at <iso>] --reason "typo"` | supersede a point; `--at` replaces an estimated time with a measured one |
 | `bench retract <point-id> --reason` | mark as withdrawn (kept, excluded from analysis) |
 | `bench restore <point-id>` | the inverse: bring the same record back, naming the retraction it reverses ([ADR 0016](adr/0016-point-restore.md)) |
 | `bench annotate <point-id> --note/--tag` | add context without changing values. **Not built**; notes and tags are set when a point is added or corrected. |
-| `bench import <file> [--map field=column]… [--time <col>] [--format csv\|tsv\|jsonl] [--ignore-unmapped <col>]… [--dry-run] [--force]` | preserve in `data/raw/`, then load |
+| `bench import <file> [--map field=column]… [--time <col>] [--estimate-time] [--format csv\|tsv\|jsonl] [--ignore-unmapped <col>]… [--dry-run] [--force]` | preserve in `data/raw/`, then load |
 | `bench chart [--x-field <field>] [--y-field <field>] [--out file.svg]` | render the active points to an SVG artifact |
 
 #### Import behaviour, as built
@@ -191,16 +191,22 @@ exist, which analyses are stale, what the last decisions were, and what is unres
   recorded as `ignored_columns` on `import_completed`, so a later reader can see the choice.
 - **A duplicate is refused, not silently repeated.** If an `import_completed` event with the same
   hash and dataset exists, the import stops and says so. `--force` is the way to mean it.
-- **The time column is required.** `--time <column>` names it; otherwise the first header that
-  looks like one wins (`t_observed`, `observed_at`, `timestamp`, `time`, `date`, `t`, in that
-  order). If the shape designates an observation-time field, the column mapped to that field is the
-  time column instead, and `--time` may only name the same column or a second one that must agree
-  with it row by row. If neither finds one, the import is refused and the error names the file's
-  columns and the flag: a row is identified by its instant, so stamping every row with the moment
-  of import would make a re-import read as every row leaving and every replacement arriving. The
-  window's sheet has the same decision as a picker and passes the same `time` into the plan. A
-  column that cannot be parsed as a time, or that disagrees with the designated field, is an error,
-  never a silent fallback to now.
+- **The time comes from a column, or from the row order said out loud.** `--time <column>` names
+  it; otherwise the first header that looks like one wins (`t_observed`, `observed_at`, `timestamp`,
+  `time`, `date`, `t`, in that order), and then the first column whose values are all ISO-shaped —
+  so a clock called `taken_at` is found rather than missed. If the shape designates an
+  observation-time field, the column mapped to that field is the time column instead, and `--time`
+  may only name the same column or a second one that must agree with it row by row. If none of that
+  finds a clock, `--estimate-time` imports the file anyway: every row's instant is its position in
+  the file (one millisecond apart) and every row is marked `t_estimated`, the import record carries
+  `time_estimated`, and `bench list` prints `(estimated)` after the time until a measured instant
+  replaces it with `--at`. Without that flag the import is refused and the error names the file's
+  columns and both ways forward: a row is identified by its instant, so stamping every row with the
+  moment of import would make a re-import read as every row leaving and every replacement arriving.
+  The window's sheet states the column it found, or the row order, passes the same choice into the
+  plan, and offers **Change**. A re-import of an untimed file is matched by the order rows were
+  recorded in. A column that cannot be parsed as a time, or that disagrees with the designated
+  field, is an error, never a silent fallback to now.
 - **Metadata preambles are skipped and counted.** Lines starting with `#` or `//` are dropped and
   reported in the output, because a skipped line could just as easily be a broken row.
 - **`--dry-run` writes nothing at all** — no events, no copy under `data/raw/` — and prints the

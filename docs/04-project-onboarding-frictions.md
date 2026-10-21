@@ -176,16 +176,17 @@ canonical UTC string, with no `--at` needed. An offset is accepted and canonical
 through; an unparseable string is refused before the event is appended. An import dry run with a
 matching `Date` column produces an identical `t` and canonical `date`.
 
-One caveat remains: the window's entry bar is a text input, not a date/time picker. It accepts the
-string but does not help compose an exact timestamp. Decided 2026-10-20: the correction row gets a
-date/time input, and an imported estimate can be replaced from the window (roadmap U11).
+The window's entry bar was a text input, not a date/time picker. **Built 2026-10-21:** an `instant`
+field is a date/time control with a **Now** button in both the entry bar and the correction row
+(U29), and a time an import estimated is shown there with the word **estimated** and replaced by a
+measured instant from the same control (U11).
 
 ## Suggested order
 
 The first-run hints (§1), empty first tabs (§6), and the observation-time model (§3) are fixed.
 What remains, now scheduled in [03-roadmap.md](03-roadmap.md) §6:
 
-1. Field display labels through a declaration-only shape version (U28), a window flow for
-   `shape extend` / `shape designate`, and a date/time input in the correction row (U11).
+1. Field display labels through a declaration-only shape version (U28), and a window flow for
+   `shape extend` / `shape designate`.
 2. `shape list|show|validate` and `add --dry-run` (roadmap §3), so a person can inspect and probe a
    declaration without appending.

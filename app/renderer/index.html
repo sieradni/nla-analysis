@@ -70,6 +70,14 @@
                one extra line saying which record is being superseded. -->
           <div id="entry-correct" class="entry-correct" hidden>
             <span id="entry-correct-label"></span>
+            <!-- A row whose shape designates no time field still has a time, and it may be an
+                 import's estimate. This is where it is seen and replaced. -->
+            <label id="entry-observed" class="entry-field entry-field-time" hidden>
+              <span>observed</span>
+              <input id="entry-observed-input" type="datetime-local" />
+              <button id="entry-observed-now" class="ghost entry-now" type="button">Now</button>
+              <em id="entry-observed-note" class="note"></em>
+            </label>
             <button id="entry-cancel" class="ghost" type="button">Cancel</button>
           </div>
           <div id="entry-fields" class="entry-fields"></div>
@@ -210,14 +218,18 @@
           <code id="import-path"></code>
         </div>
         <p id="import-summary" class="sheet-note"></p>
+        <!-- A row is its instant, so which column is the time is stated before the click, in the
+             file's own spelling. The full choice is one press away and is not homework. -->
+        <div class="import-time-line">
+          <span id="import-time-said"></span>
+          <button id="import-time-change" class="ghost" type="button">Change</button>
+        </div>
         <div id="import-preview" class="import-preview"></div>
         <div id="import-fields" class="import-fields"></div>
-        <!-- A row is identified by its instant, so the file's time column is a decision, not a
-             guess: named here, or the import is refused with the columns it could have meant. -->
-        <label class="import-field import-time">
+        <label id="import-time-field" class="import-field import-time" hidden>
           <span class="import-field-name">observed</span>
-          <span class="import-field-type">time · required</span>
-          <select id="import-time" aria-label="column holding the observation time"></select>
+          <span class="import-field-type">time</span>
+          <select id="import-time" aria-label="where the observation time comes from"></select>
         </label>
         <!-- A source column the shape cannot hold is data the import would lose. It is never
              dropped silently: the sheet names it and asks for this explicit, per-file decision. -->

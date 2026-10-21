@@ -11,8 +11,17 @@ import {
   importButton,
   importPlan as importPlanText,
   importSummary,
+  importTimeChange as timeChangeWord,
+  importTimeEstimate as timeEstimateWord,
+  importTimeSaid as timeSaidWords,
   status as copyStatus,
 } from './copy.js'
+
+/** The value the time choice uses for "the file has no clock"; a column name can never be this. */
+var ESTIMATE = 'estimate'
+
+/** Whether the full time choice is open. Closed by default: the guess is stated, not asked. */
+var timeOpen = false
 
 export function fileBase(path) {
   return String(path || '').split(/[\\/]/).pop() || path
@@ -85,18 +94,27 @@ export function renderImportPreview(preview) {
     ui.importFields.appendChild(label)
   })
 
-  // The one column that cannot be guessed for the reader: a row is its instant, so the sheet
-  // offers every column and preselects the name that looks like a time, or nothing.
+  // The one column the window cannot guess *for* the reader, so it guesses and says so: the name
+  // that looks like a clock, or — when the file has none — the row order, labelled as an estimate.
+  // A shape that designates its time field has already answered; the line says that instead.
   ui.importTime.textContent = ''
   var noTime = node('option', null, '— choose the column')
   noTime.value = ''
   ui.importTime.appendChild(noTime)
+  var estimate = node('option', null, timeEstimateWord)
+  estimate.value = ESTIMATE
+  estimate.hidden = preview.timeField !== undefined
+  ui.importTime.appendChild(estimate)
   preview.columns.forEach(function (column) {
     var option = node('option', null, column)
     option.value = column
     ui.importTime.appendChild(option)
   })
-  ui.importTime.value = preview.suggestedTime || ''
+  // A shape that designates its time has answered already: the field is the authority, and this
+  // control would be a second answer beside it. Only a shape that designates nothing gets a guess.
+  ui.importTime.value = preview.timeField ? '' : preview.suggestedTime || ESTIMATE
+  timeOpen = false
+  renderImportTime()
   renderImportExtras()
 
   // A plan for the *previous* file must not land on this one: the token retires it.
@@ -106,6 +124,25 @@ export function renderImportPreview(preview) {
   // Only a file whose exact bytes are already in the log gets the second door.
   ui.importForceField.hidden = !preview.duplicate
   ui.importForce.checked = false
+}
+
+/**
+ * The one line about time, and the choice behind it. The line is always shown; the full list of
+ * columns opens only when asked, because a file with an obvious clock should need no interaction.
+ */
+export function renderImportTime() {
+  var preview = state.importPreview
+  var value = ui.importTime.value
+  ui.importTimeSaid.textContent = timeSaidWords({
+    field: preview ? preview.timeField : undefined,
+    column: value === '' || value === ESTIMATE ? '' : value,
+    estimated: value === ESTIMATE,
+  })
+  ui.importTimeChange.textContent = timeChangeWord
+  // A designated shape's time comes from its own field: there is nothing here to change.
+  ui.importTimeChange.hidden = Boolean(preview && preview.timeField)
+  ui.importTimeChange.setAttribute('aria-expanded', timeOpen ? 'true' : 'false')
+  ui.importTimeField.hidden = !timeOpen || Boolean(preview && preview.timeField)
 }
 
 /** The mapping the sheet is showing, as the core wants it: field name to column. */
@@ -127,7 +164,9 @@ export function importExtraColumns() {
   Object.keys(mapping).forEach(function (field) {
     used[mapping[field]] = true
   })
-  if (ui.importTime.value !== '') used[ui.importTime.value] = true
+  if (!preview.timeField && ui.importTime.value !== '' && ui.importTime.value !== ESTIMATE) {
+    used[ui.importTime.value] = true
+  }
   return preview.columns.filter(function (column) {
     return !used[column]
   })
@@ -153,6 +192,16 @@ export function renderImportExtras() {
         ' (no shape field' +
         (extras.length === 1 ? '; its values' : '; their values') +
         ' will not be imported)'
+}
+
+/**
+ * Where the rows' times come from, as the core wants it: a column, the file's own order, or — when
+ * the shape designates the field — nothing at all, because the mapping already answered it.
+ */
+function timeOption() {
+  if (state.importPreview && state.importPreview.timeField) return {}
+  var value = ui.importTime.value
+  return value === ESTIMATE ? { estimate: true } : { time: value }
 }
 
 /** The explicit per-import opt-out the core requires for columns it cannot store. */
@@ -194,19 +243,20 @@ export async function syncImportPlan() {
     return
   }
   // Said before the core is asked, because there is nothing to plan without it — and the point
-  // is not to let the core invent instants quietly.
-  if (ui.importTime.value === '') {
-    renderImportPlan(null, 'choose the column that holds the observation time')
+  // is not to let the core invent instants quietly, so the row order is a choice made here.
+  if (!preview.timeField && ui.importTime.value === '') {
+    renderImportPlan(null, 'choose the column that holds the observation time, or say the file has none')
     return
   }
   var token = ++state.importPlanToken
   try {
     var planned = await call(
-      bridge.importPlan(state.project.dir, state.importFile, mapping, {
-        force: ui.importForce.checked,
-        time: ui.importTime.value,
-        ignoreColumns: importIgnoreColumns(),
-      }),
+      bridge.importPlan(
+        state.project.dir,
+        state.importFile,
+        mapping,
+        Object.assign({ force: ui.importForce.checked, ignoreColumns: importIgnoreColumns() }, timeOption()),
+      ),
     )
     if (token !== state.importPlanToken) return
     renderImportPlan(planned)
@@ -243,7 +293,10 @@ export async function loadImportFile(file) {
   ui.importExtraField.hidden = true
   ui.importIgnoreExtra.checked = false
   ui.importForceField.hidden = true
+  // A refusal belongs to the file that produced it. Left in the sheet, the previous file's words
+  // are still there for a screen reader and for the next guard that reads this dialog.
   ui.importError.hidden = true
+  ui.importError.textContent = ''
   ui.importApply.disabled = true
   if (!ui.importDialog.open) ui.importDialog.showModal()
 
@@ -275,12 +328,16 @@ export async function submitImport(event) {
   ui.importError.hidden = true
   try {
     var imported = await call(
-      bridge.importFile(state.project.dir, state.importFile, mapping, {
-        force: ui.importForce.checked,
-        time: ui.importTime.value,
-        ignoreColumns: importIgnoreColumns(),
-        viewName: state.view ? state.view.name : undefined,
-      }),
+      bridge.importFile(
+        state.project.dir,
+        state.importFile,
+        mapping,
+        Object.assign(timeOption(), {
+          force: ui.importForce.checked,
+          ignoreColumns: importIgnoreColumns(),
+          viewName: state.view ? state.view.name : undefined,
+        }),
+      ),
     )
     ui.importDialog.close()
     // An import replaces the data under the tab without leaving it: the drawing is refreshed like any
@@ -317,6 +374,7 @@ export async function submitImport(event) {
         removedRows: imported.removedRows.length,
         ignoredColumns: imported.ignoredColumns,
         warnings: imported.warnings,
+        estimated: imported.estimated,
       }),
     )
     focusFirstField()
@@ -346,8 +404,14 @@ export function wireImport() {
     renderImportExtras()
     syncImportPlan()
   })
+  ui.importTimeChange.addEventListener('click', function () {
+    timeOpen = !timeOpen
+    renderImportTime()
+    if (timeOpen) ui.importTime.focus()
+  })
   ui.importTime.addEventListener('change', function () {
     ui.importError.hidden = true
+    renderImportTime()
     renderImportExtras()
     syncImportPlan()
   })

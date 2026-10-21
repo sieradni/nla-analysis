@@ -252,8 +252,8 @@ and undo/redo of a creation, at 100/125/150% — `app-tab-menu-*.png`, `app-tab-
 
 ### U8. The time column is a stated guess, not a form field
 
-**Seen:** `app-import-untimed` refuses to plan until the person picks a time column; the picker stays
-visible even when the header obviously is a clock. It reads like data-integrity homework.
+**Seen:** the sheet refuses to plan until the person picks a time column; the picker stays visible
+even when the header obviously is a clock. It reads like data-integrity homework.
 
 **Decision:** on opening a file, the window finds the most likely time column and says so in one line
 above the preview: `Time: taken_at — change`. It plans immediately. **Change** opens the full column
@@ -265,23 +265,48 @@ answered a question the window can answer.
 column is visible before the click; changing it replans; the plan names the assumption in the same
 sentence.
 
+**Built 2026-10-21.** One line above the preview and a **Change** button: `Time: from the “taken_at”
+column` — the file's own spelling in quotes, so the sentence reads as a sentence and the name reads
+as a name. The picker is shut until Change is pressed, and Change puts the keyboard in it. The guess
+is found by header name first (`timestamp`, `time`, `date`, `t`, `observed_at`, `t_observed`) and then
+by the values, so a clock under a name bench does not list is still found instead of being mistaken
+for a file with no clock — only an ISO-shaped column counts, because a guess from a value has to be
+one a person can look at and agree with. A column of readings is never read as a clock. A shape that
+designates its time field says `Time: from the “date” field` and has no picker, because the
+declaration already answered. Choosing nothing is the one refusal left, and it says both ways out.
+Evidence: `app-import-time-choice.png`, `app-import-time.png`, the capture's `import-named-time-said`,
+`tests/window-copy.test.mjs`.
+
 ### U9. A file with no clock is imported with a labelled estimate, not refused
 
 **Seen:** a file with no time column cannot be imported at all; the core refuses with "no column holds
 the observation time". A re-export of such a file then reads as all-new rows because matching falls
 back to a synthetic instant per row.
 
-**Decision:** offer `No time column — use the file order (estimated)`. The imported rows carry a
-statement that the time is estimated, not measured; the sheet says so before the write, the status
-repeats it, and a correction can set a real time later (U11). An agent doing this must ask first
-(§7, U23). This relaxes the "never invented" wording in ADR 0012/0014: the instant is still never
-silently invented — it is labelled as an estimate and is correctable. Matching a re-export of an
-untimed file by row order is the honest default; if the row count or order changes, the diff says so
-rather than silently claiming all rows are new.
+**Decision:** offer `No clock — use the row order (estimated)`. The imported rows carry a statement
+that the time is estimated, not measured; the sheet says so before the write, the status repeats it,
+and a correction can set a real time later (U11). An agent doing this must ask first (§7, U23). This
+relaxes the "never invented" wording in ADR 0012/0014: the instant is still never silently invented —
+it is labelled as an estimate and is correctable. Matching a re-export of an untimed file by row order
+is the honest default; if the row count or order changes, the diff says so rather than silently
+claiming all rows are new.
 
 **Done when:** an untimed file imports with an explicit `estimated` marker on its rows and in the
 diff; the person can replace the estimate with a real observation time; a file that has a clock never
 falls back to the estimate.
+
+**Built 2026-10-21.** The sheet's line reads `Time: the row order — every row is marked estimated`, the
+plan repeats it before the click, and the status says what to do about it. The marker is the log's,
+not the sheet's: every row the write brings carries `t_estimated`, `bench list` prints the time with
+`(estimated)` after it, its JSON carries `t_estimated`, and `STATE.md` counts the rows that have one
+— so the fact survives the sheet closing and reaches an agent that never opened the window. A re-read
+of an untimed file is matched by the order rows were recorded in, not by instants that an estimate
+invented: a value that moved is one changed row, the parent keeps its own instant, and a re-sorted
+file honestly reports every disturbed position as changed. `--estimate-time` is the CLI's door and is
+never implied; the window's estimate is a stated guess with a Change. A file that has a clock does not
+fall back: the value scan finds it (U8), and a shape that designates its time field refuses the
+estimate outright. Evidence: `app-import-estimated.png`, the capture's `import-estimate` /
+`import-estimated-result` / `import-estimated-cli`, `tests/import.test.ts`, `tests/cli.test.ts`.
 
 ### U10. The import summary is a sentence, not a diff notation
 
@@ -319,6 +344,18 @@ their own data.
 
 **Done when:** an estimated time can be replaced from the window; the corrected point moves in a
 time-axis drawing; the status says what changed; no CLI is involved.
+
+**Built 2026-10-21 (both halves).** A shape that designates a time field is edited in that field, as
+before. A shape that designates nothing gets an `observed` date/time control in the strip, filled from
+the row's own instant and followed by the word **estimated** while the log says the time is one;
+typing a measured instant and pressing Enter writes a single correction with `t_observed` and no
+marker, the tab is rebuilt, the strip closes and the status reads `Corrected · observed 20 Oct 2026,
+09:00 · 6 points in this tab` — no estimate in the sentence, because the log no longer holds one. The
+core path is `Workspace.correctPoint`'s own: it now accepts an instant for a row whose shape designates
+none, refuses one that disagrees with a designated field, and still refuses a correction with nothing
+in it — there is no second write path. Evidence: `app-point-estimated.png`, the capture's
+`estimated-strip` / `estimated-replaced` / `estimated-strip-overflow`, `tests/workspace.test.ts`, and
+the two CLI paths (`correct <id> --at`, `list` before and after).
 
 ### U29. A time field can be filled with the current moment
 

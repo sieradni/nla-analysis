@@ -42,8 +42,8 @@ contextBridge.exposeInMainWorld('bench', {
   // version, write a tab, rebuild a tab from the current data. Nothing that takes a log event, a file
   // path or a raw command, so the window cannot write anything else.
   recordPoint: (dir, draft, viewName) => ipcRenderer.invoke('bench:recordPoint', dir, draft, viewName),
-  correctPoint: (dir, id, values, viewName) =>
-    ipcRenderer.invoke('bench:correctPoint', dir, id, values, viewName),
+  correctPoint: (dir, id, values, viewName, tObserved) =>
+    ipcRenderer.invoke('bench:correctPoint', dir, id, values, viewName, tObserved),
   retractPoint: (dir, id, reason) => ipcRenderer.invoke('bench:retractPoint', dir, id, reason),
   restorePoint: (dir, id, retraction) =>
     ipcRenderer.invoke('bench:restorePoint', dir, id, retraction),

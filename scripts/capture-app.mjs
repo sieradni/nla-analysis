@@ -141,7 +141,9 @@ const frames = [
   'app-tab-reopened-relaunch.png',
   'app-import.png',
   'app-version-diff.png',
-  'app-import-untimed.png',
+  'app-import-time-choice.png',
+  'app-import-estimated.png',
+  'app-point-estimated.png',
   'app-import-time.png',
   'app-mixed-versions.png',
 ]

@@ -420,6 +420,8 @@ export interface PointDetail {
    * line says the time once, as "observed", rather than repeating it as a value.
    */
   timeField?: string
+  /** The time came from the file's row order, not from an observation. Said wherever it is shown. */
+  timeEstimated?: true
   /** Corrections already recorded against it, so a strip can say this is the third one. */
   corrections: number
   /** Panels of the open tab drawn by a recipe that include this point: a change makes them stale. */
@@ -455,6 +457,7 @@ export async function point(dir: string, id: string, viewName: string): Promise<
     fields: shape.fields,
     values: { ...found.point.values },
     tObserved: found.point.tObserved,
+    ...(found.point.tEstimated === true ? { timeEstimated: true as const } : {}),
     ...(shape.time_field === undefined ? {} : { timeField: shape.time_field }),
     corrections: found.point.corrections.length,
     recipePanels,
@@ -466,6 +469,10 @@ export interface CorrectedPoint {
   dataset: string
   /** The point as the log now describes it, which is not always what was typed. */
   values: Record<string, string | number | boolean | null>
+  /** The instant the row now carries, when this correction moved it. */
+  tObserved: string
+  /** The log describes it as an observation rather than an estimate. */
+  estimated: boolean
   active: number
   /** The tab, rebuilt and redrawn. A recipe panel is kept and reported stale, never silently reused. */
   view: RefreshedView
@@ -484,14 +491,24 @@ export async function correctPoint(
   id: string,
   values: Record<string, PointValue>,
   viewName: string,
+  /** A measured instant replacing an estimate, for a shape that designates no time field. */
+  tObserved?: string,
 ): Promise<CorrectedPoint> {
   const workspace = await workspaceFor(dir)
-  const corrected = await workspace.correctPoint(id, values, 'corrected in the window')
+  const corrected = await workspace.correctPoint(
+    id,
+    values,
+    'corrected in the window',
+    tObserved === undefined ? {} : { tObserved },
+  )
   await workspace.writeStateBrief()
+  const point = workspace.findPoint(id)?.point
   return {
     id,
     dataset: corrected.dataset,
     values: corrected.now,
+    tObserved: point?.tObserved ?? corrected.tObserved ?? '',
+    estimated: point?.tEstimated === true,
     active: workspace.dataset(corrected.dataset).points.length,
     view: await refreshView(dir, viewName, { draw: true }),
   }

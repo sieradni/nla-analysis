@@ -6,7 +6,7 @@
  */
 import { state, ui, node } from './state.js'
 import { labels, status as copyStatus } from './copy.js'
-import { buildEntryFields } from './fields.js'
+import { buildEntryFields, renderObservedField } from './fields.js'
 import { renderStatus } from './status.js'
 import { actions } from './navigation.js'
 
@@ -42,6 +42,7 @@ export function renderEntry() {
           // the field's own name.
           panel: state.selection ? state.view.panels[state.selection.index] : undefined,
           observed: correction.tObserved,
+          estimated: correction.timeEstimated === true,
           corrections: correction.corrections,
           stalePanels: correction.recipePanels.length,
           fields: correction.fields,
@@ -56,6 +57,7 @@ export function renderEntry() {
     correction === null ? null : correction.values,
     correction === null ? 'add' : 'correct:' + correction.id,
   )
+  renderObservedField(correction)
   ui.entryAdd.disabled = state.busy
   // One undo, and it says which act it would reverse: the bar's last point and a removal from the
   // menu share one history, so a single button can serve both without a second one beside a status.
