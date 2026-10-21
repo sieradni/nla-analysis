@@ -172,9 +172,16 @@ app/renderer/       the viewport, split by concern. app.js is the project and th
                     copy.js owns every word a person reads (ADR 0015) and no other module
                     composes a sentence, including the phrases an act's label and tooltip are
                     built from;
-                    rail.js owns projects/tabs/folder; panels.js owns the panel mount and statuses;
-                    entry.js owns typing, correction and the one table of act kinds (label,
-                    tooltip, undo and redo function) that both dispatch and the bar read;
+                    rail.js owns projects/tabs/folder; panels.js owns the panel mount, statuses,
+                    the watcher and rebuilding the open tab after a point moves;
+                    fields.js owns the bar's fields — the control each shape field becomes, the
+                    value it hands the core, and where the reader's clock meets the log's;
+                    status.js owns the status row under the bar and is the only writer of
+                    `state.status`; entry.js draws the bar; correction.js owns the strip that
+                    edits one record; point-actions.js owns the writes the bar and a point's menu
+                    make (add, remove, copy, and the tab catching up after a write);
+                    acts.js owns the one table of act kinds (label, tooltip, undo and redo
+                    function) that both dispatch and the bar read, and the keyboard shortcuts;
                     history.js owns the tab's undo/redo stacks, the refusal policy, what each
                     act would reverse, and which acts an import's own report ends; closed-tabs.js owns
                     the list of closed tabs — the archives `views/.trash/` holds, newest first, filled
@@ -184,11 +191,13 @@ app/renderer/       the viewport, split by concern. app.js is the project and th
                     sheet and the name sheet Rename and Duplicate share; projects.js owns the project
                     sheet; import.js owns the import sheet;
                     navigation.js holds the few shell actions that cross a module.
+                    The bar and the status show what the act table offers through
+                    `navigation.actions.actOffer`, because acts.js sits above both of them.
                     Remaining window work lands here: resizable/collapsible rail in rail.js, the
-                    point menu and readable tooltip in chart.js with its actions in entry.js, the
-                    rest of undo/redo in history.js, tab and project management in tabs.js/projects.js,
-                    entry extras in entry.js, versions panel beside panels.js, and preferences in
-                    state.js + the main process ($BENCH_HOME/ui.json).
+                    point menu and readable tooltip in chart.js with its actions in
+                    point-actions.js, tab and project management in tabs.js/projects.js, entry
+                    extras in fields.js/entry.js, versions panel beside panels.js, and preferences
+                    in state.js + the main process ($BENCH_HOME/ui.json).
 src/core/registry.ts
                     which projects exist on this machine ($BENCH_HOME/projects.json, outside every
                     project). App state, disposable: losing it loses recency, not data.

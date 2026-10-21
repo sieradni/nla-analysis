@@ -14,6 +14,8 @@ import {
   verdictExplanation,
   verdictWord,
 } from './copy.js'
+import { focusFirstField } from './fields.js'
+import { renderTabs } from './rail.js'
 import { actions } from './navigation.js'
 
 /*
@@ -195,8 +197,8 @@ export function renderView(restore) {
       onSelect: function (id) {
         actions.selectPoint(id, index)
       },
-      // The menu names an action and a record; `entry.js` owns what each one does, because a write
-      // belongs to the bar that owns writes, not to the drawing that asked for it.
+      // The menu names an action and a record; `point-actions.js` owns what each one does, because a
+      // write belongs to the bar that owns writes, not to the drawing that asked for it.
       onPointAction: function (action, id) {
         if (actions.pointAction) actions.pointAction(action, id, index)
       },
@@ -232,6 +234,26 @@ export function renderView(restore) {
   ui.grid.scrollTop = scrollTop
   actions.renderEntry()
   watchOpenTab()
+}
+
+/**
+ * Rebuild the tab after a point left or came back. A removal can change the axes' domain and the
+ * evidence line, so the drawing is rebuilt rather than patched; the crop and the scroll the person
+ * was reading are carried across it, exactly as a correction does.
+ */
+export async function rebuildTab() {
+  if (!state.view) return null
+  // A repaint replaces the chart the keyboard was in, and `renderView` hands the focus back to the
+  // same panel. Only a person who was typing gets the cursor moved to the bar: an action taken from
+  // the drawing must leave them on the drawing, not drop them into a field they did not ask for.
+  var focusInDrawing = Boolean(document.activeElement && ui.grid.contains(document.activeElement))
+  var refreshed = await call(bridge.refreshView(state.project.dir, state.view.name, { draw: true }))
+  state.opened = refreshed
+  state.view = refreshed.view
+  renderTabs()
+  renderView(captureRestore())
+  if (!focusInDrawing) focusFirstField()
+  return refreshed.entry ? refreshed.entry.active : 0
 }
 
 /**

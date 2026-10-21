@@ -2,7 +2,7 @@
  * The tab's undo history.
  *
  * One drawing's worth of acts, in both directions. An entry names the act and what reversing it
- * means; the core calls, the repaint and the status line stay in `entry.js`, which asks what the
+ * means; the core calls, the repaint and the status line stay in `acts.js`, which asks what the
  * next act is, takes it, and reports back whether it happened.
  *
  * Five kinds:
@@ -250,7 +250,7 @@ export function redoFinished(entry, patch) {
   var next = { ...entry, ...(patch || {}) }
   // A redo of a point's undo restored the window's own record, so the bar's timing figure can name
   // it again. This is a fact about the stack's entries, not a description of the acts: which kinds
-  // exist, what they are called and what they run lives in `entry.js`'s one table.
+  // exist, what they are called and what they run lives in `acts.js`'s one table.
   if (next.kind === 'point') appended = next.id
   push(undos, next)
 }

@@ -2,7 +2,10 @@
 import { state, ui, node, bridge, call, showFailure } from './state.js'
 import { renderTabs } from './rail.js'
 import { renderView, captureRestore } from './panels.js'
-import { renderEntry, endEditFor, setStatus, focusFirstField } from './entry.js'
+import { renderEntry } from './entry.js'
+import { endEditFor } from './correction.js'
+import { setStatus } from './status.js'
+import { focusFirstField } from './fields.js'
 import { noteImport, reconcileImport } from './history.js'
 import {
   importButton,

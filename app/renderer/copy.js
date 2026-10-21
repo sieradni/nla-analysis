@@ -473,7 +473,7 @@ export var nameSheet = {
 
 /**
  * The sentence a direction of the bar's button says around one act's phrase. The phrase comes from
- * `labels`; the table in `entry.js` pairs it with a kind, so this file keeps the words and knows no
+ * `labels`; the table in `acts.js` pairs it with a kind, so this file keeps the words and knows no
  * kinds. Preserved word for word from the four per-kind functions it replaced.
  */
 export function actTitle(direction, what) {
@@ -507,7 +507,7 @@ export var labels = {
   redoImport: 'Reapply import',
   redoTab: 'Redo new tab',
   // The phrase each act's tooltip is built from: "Undo the last point added here". They sit here,
-  // flat and keyed by no kind, so the words stay in this file while `entry.js` owns which act is
+  // flat and keyed by no kind, so the words stay in this file while `acts.js` owns which act is
   // which. The redo phrases are the other direction's grammar, not a second list of acts.
   actPoint: 'the last point added here',
   actRemoval: 'the last point removed here',

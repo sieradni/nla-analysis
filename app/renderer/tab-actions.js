@@ -14,7 +14,9 @@ import { state, bridge, call, showView, showEmpty, showFailure } from './state.j
 import { empty as emptyCopy, labels as copyLabels, refusal, status as copyStatus, tabMenu } from './copy.js'
 import { renderTabs } from './rail.js'
 import { renderView, watchOpenTab } from './panels.js'
-import { renderEntry, setStatus, focusFirstField } from './entry.js'
+import { renderEntry } from './entry.js'
+import { clearStatus, setStatus } from './status.js'
+import { focusFirstField } from './fields.js'
 import { noteClosed, putBackClosed, setClosedTabs, takeClosed, takeClosedFile } from './closed-tabs.js'
 import {
   keepTabRedo,
@@ -33,7 +35,7 @@ export async function openView(name) {
     // Undo is the tab's, not the window's: another tab's history would offer to act on a point this
     // drawing never showed. `showView` clears it with the drawing, one call.
     showView(await call(bridge.view(state.project.dir, name)))
-    state.status = null
+    clearStatus()
     state.timing = null
     // A new tab may ask for different fields; rebuild them rather than painting one shape's inputs
     // over another's. Rebuilding also clears anything half-typed, which is the right default when
@@ -179,7 +181,7 @@ async function openArchive(taken) {
     var listed = await call(bridge.views(state.project.dir))
     state.views = listed.views
     if (listed.entry) state.projectEntry = listed.entry
-    state.status = null
+    clearStatus()
     state.timing = null
     state.entryKey = null
     renderTabs()

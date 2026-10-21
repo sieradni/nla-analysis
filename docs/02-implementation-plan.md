@@ -55,8 +55,12 @@ The desktop shell has two layers. `app/main.js` owns the Electron window, the wa
 surface; `app/harness/` holds the capture, measure and smoke runs that drive it. The renderer is split
 by concern in `app/renderer/`: `state.js` (shared state and the guarded core call), `copy.js` (every
 word a person reads and every number format — ADR 0015; `format.js` was folded into it),
-`rail.js` (projects, tabs, folder), `panels.js` (panel mount, statuses, watcher), `entry.js` (typing,
-correction, undo), `chart.js` (the drawing's interaction; an ES module mounted by `panels.js`),
+`rail.js` (projects, tabs, folder), `panels.js` (panel mount, statuses, watcher, rebuilding the tab
+after a point moves), `fields.js` (the bar's fields and the values they hand the core), `status.js`
+(the status row, its only writer), `entry.js` (the bar's drawing), `correction.js` (the strip that
+edits one record), `point-actions.js` (the writes the bar and a point's menu make: add, remove, copy,
+and the tab catching up after one), `acts.js` (the one table of act kinds, both directions of each,
+and the shortcuts), `chart.js` (the drawing's interaction; an ES module mounted by `panels.js`),
 `tabs.js` (tab sheet, the name sheet and axes), `tab-actions.js` (the open tab's lifecycle: open,
 close, reopen, the trash load, rename, duplicate, undo of a creation, and the rail menu),
 `menu.js` (the one popover: placement, keys, dismissal, `aria-expanded` and where the keyboard goes

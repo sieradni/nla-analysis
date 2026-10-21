@@ -482,7 +482,7 @@ describe('a refusal', () => {
   })
 
   it('names the act each direction would repeat, in the words the table pairs with it', () => {
-    // The labels and phrases are this file's; `entry.js`'s one table pairs them with a kind and an
+    // The labels and phrases are this file's; `acts.js`'s one table pairs them with a kind and an
     // effect. These are the pieces that table reads, so a fifth act cannot grow a second set of words.
     expect(copy.labels.undoPoint).toBe('Undo added point')
     expect(copy.labels.undoRemoval).toBe('Undo removal')
@@ -609,7 +609,7 @@ describe('the renderer cannot put log vocabulary back', () => {
     for (const event of EVENT_NAMES) {
       expect(source).not.toMatch(new RegExp(`['"\`]${event}['"\`]`))
     }
-    // Words never branch on which kind of act they describe: the one table in entry.js does that,
+    // Words never branch on which kind of act they describe: the one table in acts.js does that,
     // and copy.js should not grow a second list of kinds behind it.
     expect(source).not.toMatch(/\bnext\.kind\b|\bentry\.kind\b/)
     expect(source).not.toMatch(/kind === '(point|removal|correction|import)'/)

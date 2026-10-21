@@ -1,6 +1,7 @@
 /* The project sheet: create a project, pick a folder, and open a project from the rail. */
 import { state, ui, node, bridge, call, showFailure } from './state.js'
-import { setStatus, focusFirstField } from './entry.js'
+import { setStatus } from './status.js'
+import { focusFirstField } from './fields.js'
 import { actions } from './navigation.js'
 
 /** One row of the custom-shape editor: a name, a type the core declared, and a way to drop it. */

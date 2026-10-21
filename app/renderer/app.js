@@ -2,24 +2,24 @@
  * The window shell: which project is open, and what happens when it changes.
  *
  * Everything it displays comes from the core through `window.bench`. It formats nothing itself:
- * `copy.js` owns every word, `panels.js` draws it, `entry.js` owns typing, `history.js` owns what
- * undo would reverse, `rail.js` owns the left side, and `tab-actions.js` owns the open tab's own
- * lifecycle — which tab is showing, closing one, putting it back, renaming and copying it. This file
- * is the wiring, the project, and the boot.
+ * `copy.js` owns every word, `panels.js` draws the figures, `rail.js` owns the left side,
+ * `entry.js` draws the bar and `fields.js` owns its fields, `status.js` owns the row beneath it,
+ * `correction.js` owns editing one record, `point-actions.js` owns the writes the bar and a point's
+ * menu make, `acts.js` owns the act table and its two directions, `history.js` holds the stacks, and
+ * `tab-actions.js` owns the open tab's own lifecycle. This file is the wiring, the project, and the
+ * boot.
  */
 import { state, ui, bridge, call, showFailure, showEmpty, showView } from './state.js'
 import { closeTab, loadClosedTabs, openView, reopenClosedTab, showNoTabs } from './tab-actions.js'
 import { renderProjects, renderTabs, renderFoot } from './rail.js'
 import { renderView, watchOpenTab, captureRestore } from './panels.js'
 import { applyStatic, builtInShape, empty as emptyCopy, refusal, status as copyStatus } from './copy.js'
-import {
-  renderEntry,
-  setStatus,
-  focusFirstField,
-  selectPoint,
-  pointAction,
-  wireEntry,
-} from './entry.js'
+import { renderEntry } from './entry.js'
+import { clearStatus, setStatus } from './status.js'
+import { focusFirstField } from './fields.js'
+import { selectPoint } from './correction.js'
+import { pointAction, wireEntry } from './point-actions.js'
+import { actOffer, wireActs } from './acts.js'
 import { openTabDialog, wireTabs } from './tabs.js'
 import { openProject, openProjectDialog, wireProjects } from './projects.js'
 import { wireImport } from './import.js'
@@ -34,6 +34,7 @@ actions.renderEntry = renderEntry
 actions.selectPoint = selectPoint
 actions.pointAction = pointAction
 actions.setStatus = setStatus
+actions.actOffer = actOffer
 
 /**
  * Rebuild the panels a write has invalidated, because the notice's only action is a button. The
@@ -71,7 +72,7 @@ export async function afterOpen(opened) {
   await loadClosedTabs(opened.dir)
   state.entryKey = null
   state.timing = null
-  state.status = null
+  clearStatus()
   ui.notice.hidden = true
   // A new project means the old tab is no longer on screen; disarm before the first tab arms.
   watchOpenTab()
@@ -178,6 +179,7 @@ export function wire() {
   wireTabs()
   wireImport()
   wireEntry()
+  wireActs()
   ui.closeTab.addEventListener('click', function () {
     closeTab(state.view && state.view.name)
   })
