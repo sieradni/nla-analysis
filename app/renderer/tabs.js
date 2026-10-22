@@ -83,8 +83,11 @@ export function fillTabAxes() {
   // The core resolved these against the same rule `bench chart` uses; the renderer only draws them.
   var xFields = dataset.axes.x
   var yFields = dataset.axes.y
-  fillAxisSelect(ui.tabXField, xFields, 'x')
-  fillAxisSelect(ui.tabYField, yFields, 'y')
+  // Where the core's own plot rule starts, so this sheet opens on the pair the CLI's first-tab
+  // example names — not on each select's first option, which put one field on both axes.
+  var preferred = dataset.preferred || {}
+  fillAxisSelect(ui.tabXField, xFields, preferred.x)
+  fillAxisSelect(ui.tabYField, yFields, preferred.y)
   var missing = xFields.length === 0 || yFields.length === 0
   if (missing) {
     ui.tabAxesNote.hidden = false

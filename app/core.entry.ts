@@ -24,7 +24,7 @@
  * owns the project/import surfaces that are not view lifecycle.
  */
 import { APP_ROOT } from '../src/core/analysis.ts'
-import { plottableFields } from '../src/core/axes.ts'
+import { plottableFields, preferredPlot } from '../src/core/axes.ts'
 import type { PointValue, ShapeField } from '../src/core/events.ts'
 import { stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -182,6 +182,8 @@ export interface OpenedProject {
     active: number
     /** Which fields the tab dialog may offer on each side; resolved by the core's one axis rule. */
     axes: { x: ShapeField[]; y: ShapeField[] }
+    /** Where that rule starts the pair — the same fields the CLI's first-tab hint names. */
+    preferred: { x: string; y: string } | null
   }[]
   /**
    * Where a typed point would land before any tab exists. A project with no tabs still has a dataset
@@ -202,13 +204,16 @@ async function describeProject(workspace: Workspace): Promise<OpenedProject> {
   })
   const { views, problems } = await listViews(workspace.dir)
   const datasets = [...workspace.state.datasets.values()].map((dataset) => {
-    const fields = workspace.state.shapes.get(dataset.shape)?.fields ?? []
+    const shape = workspace.state.shapes.get(dataset.shape)
+    const pair = shape ? preferredPlot(shape) : undefined
+    const fields = shape?.fields ?? []
     return {
       id: dataset.id,
       shape: dataset.shape,
       version: dataset.version,
       active: workspace.dataset(dataset.id).points.length,
       axes: { x: plottableFields(fields, 'x'), y: plottableFields(fields, 'y') },
+      preferred: pair ? { x: pair.x.field.name, y: pair.y.field.name } : null,
     }
   })
   return {

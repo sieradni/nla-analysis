@@ -8,7 +8,7 @@
  * than no hint at all (the packaged build has no `bench` on PATH).
  */
 import type { PointValue, Shape, ShapeField } from './events.ts'
-import { plottableFields } from './axes.ts'
+import { preferredPlot } from './axes.ts'
 
 const SAMPLE: Record<ShapeField['type'], PointValue> = {
   number: 1.2,
@@ -46,26 +46,20 @@ export interface PlotHint {
 }
 
 /**
- * The first tab a project can build, from the shape's own fields.
- *
- * Each axis is filled from the fields that can read it — a number or instant across, a number up —
- * and a field named for the axis wins, because that is the pair a panel saved without axes already
- * reads (`axes.ts`) and the pair the window's pickers prefill. Otherwise the first field each axis
- * can read is used, skipping one already on the other axis: "altitude against altitude" is a valid
- * plot and a useless example. A shape with one plottable field gets that field against itself,
- * because it is the only pair there is; with no numeric field at all there is nothing to suggest.
+ * The first tab a project can build, named from the core's own plot rule (`preferredPlot`), so the
+ * example the CLI prints and the axes the window's tab sheet prefills cannot name different fields.
+ * With no pair to name there is nothing to build, and the sentence says what the shape is missing.
  */
 export function plotHint(shape: Shape, dataset = 'main', name = 'first tab'): PlotHint {
-  const up = plottableFields(shape.fields, 'y')
-  const y = up.find((field) => field.name === 'y') ?? up[0]
-  if (!y) {
+  const pair = preferredPlot(shape)
+  if (!pair) {
     return {
       problem: `shape ${shape.id} has no numeric vertical field, so a plain plot cannot be drawn; add one with bench shape extend --field <name> --type <type>`,
     }
   }
-  const across = plottableFields(shape.fields, 'x')
-  const x = across.find((field) => field.name === 'x') ?? across.find((field) => field.name !== y.name) ?? y
-  return { command: `view new "${name}" --dataset ${dataset} --x-field ${x.name} --y-field ${y.name}` }
+  return {
+    command: `view new "${name}" --dataset ${dataset} --x-field ${pair.x.field.name} --y-field ${pair.y.field.name}`,
+  }
 }
 
 /** The sentence a chart with no rows carries, naming both the next act and how to run it. */

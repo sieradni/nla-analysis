@@ -36,6 +36,25 @@ export function plottableFields(fields: readonly ShapeField[], side: 'x' | 'y'):
   return fields.filter((candidate) => allowed.has(candidate.type))
 }
 
+/**
+ * The pair a plain plot starts with, from the shape's own fields.
+ *
+ * One rule, two readers: the first-tab example `bench view list` prints and the axes the window's
+ * tab sheet prefills both come from here, so the tab a person presses into being and the tab the
+ * command line would build cannot name different fields. A field named for the axis wins — that is
+ * the pair a panel saved without axes reads. Without those names the first field each axis can read
+ * is used, skipping one already on the other axis, because a field against itself is a valid plot
+ * and a useless example. One plottable field is the only pair there is; none means no pair at all.
+ */
+export function preferredPlot(shape: Shape): AxisPair | undefined {
+  const vertical = plottableFields(shape.fields, 'y')
+  const y = vertical.find((field) => field.name === 'y') ?? vertical[0]
+  if (!y) return undefined
+  const across = plottableFields(shape.fields, 'x')
+  const x = across.find((field) => field.name === 'x') ?? across.find((field) => field.name !== y.name) ?? y
+  return { x: { field: x, time: x.type === 'instant' }, y: { field: y, time: false } }
+}
+
 function plottable(shape: Shape, side: 'x' | 'y'): string {
   const names = plottableFields(shape.fields, side).map((candidate) => candidate.name)
   return names.length > 0 ? names.join(', ') : 'none'

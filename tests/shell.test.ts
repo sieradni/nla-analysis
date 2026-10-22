@@ -748,6 +748,32 @@ describe.skipIf(!built)('the bundled core, writing as the window writes', () => 
     await expect(readFile(join(parent, 'broken', 'project.json'), 'utf8')).rejects.toThrow()
   })
 
+  it('starts the tab dialog on the pair the first-tab hint names', async () => {
+    const api = await shell()
+    const parent = await mkdtemp(join(tmpdir(), 'bench-shell-first-tab-'))
+    scratch.push(parent)
+
+    // Declaration order and the axis names disagree here: `altitude` is first, so a sheet filling
+    // each select by position would put altitude on both axes while the hint plots app across.
+    const created = (await api.createProject!(parent, 'flight log', {
+      id: 'flight.v1',
+      fields: [
+        { name: 'altitude', type: 'number' },
+        { name: 'app', type: 'number' },
+        { name: 'date', type: 'instant' },
+      ],
+    })) as Window
+    const hinted = /--x-field (\S+) --y-field (\S+)/.exec(created.entry.nextTab.command)
+    expect(hinted).not.toBeNull()
+    expect(created.datasets[0].preferred).toEqual({ x: hinted![1], y: hinted![2] })
+    // Two different fields, so the sheet never opens on a field against itself.
+    expect(hinted![1]).not.toBe(hinted![2])
+
+    // And a shape that names its axes starts on the names it declares.
+    const plain = (await api.createProject!(parent, 'plain')) as Window
+    expect(plain.datasets[0].preferred).toEqual({ x: 'x', y: 'y' })
+  })
+
   it('writes a tab from a chosen dataset, and refuses to overwrite one by accident', async () => {
     const api = await shell()
     const dir = await scratchProject()
