@@ -7,7 +7,7 @@ an agent is the primary user, the contract optimizes for machine calls that a hu
 
 | working | specified, not built |
 |---|---|
-| `init`, `add`, `correct`, `retract`, `restore`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `dataset list\|versions\|diff\|restore`, `shape extend`, `shape designate`, `view list\|show\|new\|add\|save\|render` | `dataset replace\|show\|export`, `shape list\|validate`, `annotate`, `add --stdin`, `view create\|open`, `recipe show` |
+| `init`, `add`, `correct`, `retract`, `restore`, `list`, `state`, `check`, `chart`, `import`, `recipes`, `run`, `runs`, `rerun`, `decide`, `projects`, `dataset list\|versions\|diff\|restore`, `shape extend`, `shape designate`, `view list\|show\|new\|add\|save\|render`, `view rm\|rename\|duplicate` | `dataset replace\|show\|export`, `shape list\|validate`, `annotate`, `add --stdin`, `view create\|open`, `recipe show` |
 
 Available recipes: `fit` (curve, band, verdict) and `drift` (does the relationship change over time).
 
