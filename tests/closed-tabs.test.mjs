@@ -37,6 +37,20 @@ describe('the closed-tab list', () => {
     expect(takeClosed()).toBe(null)
   })
 
+  it('says whether a taken archive still has the acts it closed with', () => {
+    // The list a fresh window fills from the project's trash: nothing in this process closed these,
+    // so the tab comes back whole and without the acts that made it (U7, U30).
+    setClosedTabs([archive('drift over time')])
+    const afterRelaunch = takeClosed()
+    expect(afterRelaunch.history).toBe(null)
+    expect(afterRelaunch.historyLost).toBe(true)
+
+    // A close in this window carries its stacks, even when the tab had nothing to take back: that
+    // is a tab whose whole history is in the stack, and it needs no sentence about the past.
+    noteClosed(archive('fresh', '2026-10-21T04-00-00-000Z'), { undos: [], redos: [], appended: null })
+    expect(takeClosed().historyLost).toBe(false)
+  })
+
   it('takes the newest close first, with the archive it holds', () => {
     noteClosed(archive('one'), history('p1'))
     noteClosed(archive('two'), history('p2'))

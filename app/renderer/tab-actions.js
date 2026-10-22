@@ -187,7 +187,13 @@ async function openArchive(taken) {
     renderTabs()
     renderView()
     focusFirstField()
-    setStatus('ok', copyStatus.reopenedTab({ name: name }))
+    // An archive this window did not close comes back without the acts that made it, and an empty
+    // bar is indistinguishable from a tab nothing has been done in — so the reopen says which it is
+    // (U30). A close in this window carried its stacks, and its sentence is unchanged.
+    setStatus(
+      'ok',
+      copyStatus.reopenedTab({ name: name, historyLost: taken.historyLost === true }),
+    )
     return opened
   } catch (error) {
     // A tab that can never come back leaves the list: a control that can only refuse is worse than

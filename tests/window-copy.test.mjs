@@ -420,6 +420,7 @@ describe('the entry bar', () => {
       copy.status.tabSaved({ name: 'regimes', replaced: false, panel }),
       copy.status.closedTab({ name: 'drift over time' }),
       copy.status.reopenedTab({ name: 'drift over time' }),
+      copy.status.reopenedTab({ name: 'drift over time', historyLost: true }),
       copy.status.renamedTab({ from: 'drift', name: 'drift over time' }),
       copy.status.duplicatedTab({ from: 'drift', name: 'drift copy' }),
       copy.actTitle('undo', copy.labels.actTab),
@@ -449,6 +450,51 @@ describe('the entry bar', () => {
     expect(copy.status.copied()).toContain('Copied')
     expect(copy.status.stillSaving()).toBe('Still saving — try again in a moment.')
     expect(copy.status.editing({ values, panel })).toContain('Editing x 6.5 · y 16.4')
+  })
+
+  it('says when a reopened tab has changes its undo history cannot reach', () => {
+    // A tab that comes back from an archive this window did not close is whole, but the acts inside
+    // it were this window's memory and did not survive the process (U7, U30). Without the sentence
+    // the bar is simply empty, which reads as "nothing has been done here" rather than as history it
+    // cannot reach. The sentence is the whole change: no control, no box, no second copy.
+    expect(copy.status.reopenedTab({ name: 'drift over time', historyLost: true })).toBe(
+      'Reopened \u201cdrift over time\u201d \u00b7 changes made before the restart cannot be undone here.',
+    )
+    // A reopen of a tab this window closed keeps the plain sentence, because its acts came back.
+    expect(copy.status.reopenedTab({ name: 'drift over time' })).toBe('Reopened \u201cdrift over time\u201d.')
+    // And a tab that was just created has nothing older to explain.
+    expect(copy.status.tabSaved({ name: 'regimes', replaced: false, panel })).not.toContain('cannot be undone')
+    expectPlain(
+      copy.status.reopenedTab({ name: 'drift over time', historyLost: true }),
+      'reopened tab whose earlier changes are out of reach',
+    )
+  })
+
+  it('announces that sentence rather than a shorter name', async () => {
+    // The row that shows it is a live region, so its text is what assistive tech reads: the one
+    // sentence is the accessible name. An `aria-label` there would replace the sentence with a
+    // shorter one and hide the fact it exists.
+    const html = await readFile(join(renderer, 'index.html'), 'utf8')
+    const row = html.match(/<div id="entry-status"[^>]*>/)
+    expect(row).not.toBe(null)
+    expect(row[0]).toContain('role="status"')
+    expect(row[0]).toContain('aria-live="polite"')
+    expect(row[0]).not.toMatch(/aria-label|aria-labelledby/)
+  })
+
+  it('gives the reopen the fact its history is gone, and says it from one owner', async () => {
+    // The halves above are unit-tested; this is the seam between them. `closed-tabs.js` can report
+    // the fact and `copy.js` can word it, and the window would still say nothing if the reopen did
+    // not pass one to the other — so the call itself is held to it.
+    const source = await readFile(join(renderer, 'tab-actions.js'), 'utf8')
+    const call = source.match(/copyStatus\.reopenedTab\(\{[^}]*\}\)/)
+    expect(call).not.toBe(null)
+    expect(call[0]).toContain('historyLost')
+    // And no other renderer module composes the sentence: `copy.js` is the one owner of the words.
+    const others = (await readdir(renderer)).filter((file) => file.endsWith('.js') && file !== 'copy.js')
+    for (const file of others) {
+      expect(await readFile(join(renderer, file), 'utf8')).not.toContain('cannot be undone here')
+    }
   })
 
   it('labels the controls with words, never an ellipsis', () => {

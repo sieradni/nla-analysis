@@ -698,6 +698,13 @@ export var status = {
     return 'Closed “' + change.name + '”. Its data is still in the project; the tab can be reopened.'
   },
   reopenedTab: function (change) {
+    // A tab that comes back from an archive this window did not close is whole, but the acts inside
+    // it were this window's memory and did not survive the process (U7, U30). The bar is otherwise
+    // simply empty, which reads as "nothing has been done here" rather than as history it cannot
+    // reach, so the reopen says which it is — one clause on the same sentence, not a warning.
+    if (change.historyLost === true) {
+      return 'Reopened “' + change.name + '” · changes made before the restart cannot be undone here.'
+    }
     return 'Reopened “' + change.name + '”.'
   },
   renamedTab: function (change) {

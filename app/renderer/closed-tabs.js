@@ -56,13 +56,19 @@ export function noteClosed(entry, history) {
   prune()
 }
 
-/** The newest closed tab and the acts it held (null after a relaunch), taken off the list. */
+/**
+ * The newest closed tab and the acts it held (null after a relaunch), taken off the list.
+ *
+ * `historyLost` is the question the status row asks: it is true when this window cannot reach the
+ * acts that made the tab, so the reopen says so rather than leave an empty bar looking like a tab
+ * nothing has happened in (U30).
+ */
 export function takeClosed() {
   if (closed.length === 0) return null
   var entry = closed.shift()
   var history = histories.get(entry.file) || null
   histories.delete(entry.file)
-  return { entry: entry, history: history }
+  return { entry: entry, history: history, historyLost: history === null }
 }
 
 /**
