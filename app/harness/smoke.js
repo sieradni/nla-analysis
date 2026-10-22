@@ -85,7 +85,13 @@ async function customAxes() {
     const mark = marks[marks.length - 1]
     const at = { clientX: mark.x, clientY: mark.y }
     host.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, ...at }))
-    return JSON.stringify({ id: mark.id, tooltip: document.getElementById('tooltip').textContent })
+    // The readout is one block per fact, and textContent on the box would glue the lines together
+    // ("… 5 000Observed …"). Read the blocks and join them the way they are drawn, one per line.
+    // The separator is a code point rather than an escape because this text is already inside a
+    // template literal: an escape here would be consumed twice and reach the page as a raw newline.
+    const rows = document.getElementById('tooltip').children
+    const lines = Array.prototype.map.call(rows, (row) => row.textContent)
+    return JSON.stringify({ id: mark.id, tooltip: lines.join(String.fromCharCode(10)) })
   })()`)
   const hovered = JSON.parse(target)
   expect(hovered.id, 'the redrawn custom-axis chart exposed no mark id')

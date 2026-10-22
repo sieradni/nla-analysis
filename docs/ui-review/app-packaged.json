@@ -35,10 +35,10 @@
       "y": "extension"
     },
     "hover": {
-      "tooltip": "mass 1 000 · extension 5 000"
+      "tooltip": "mass 1 000 · extension 5 000\nObserved 22 Oct 2026, 01:01"
     },
-    "selection": "Editing mass 1 000 · extension 5 000 · observed 20 Oct 2026, 10:22"
+    "selection": "Editing mass 1 000 · extension 5 000 · observed 22 Oct 2026, 01:01"
   },
-  "elapsedMs": 2684,
-  "artifactBytes": 386927525
+  "elapsedMs": 2829,
+  "artifactBytes": 387242387
 }
