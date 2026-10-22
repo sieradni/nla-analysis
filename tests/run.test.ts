@@ -1,4 +1,7 @@
 import { existsSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { coerceChartSpec, interpreterCandidates, RecipeRunner } from '../src/core/runner.ts'
 import type { RunInput } from '../src/core/runner.ts'
@@ -376,5 +379,30 @@ describe.skipIf(!venvPresent)('fit recipe (requires the analysis environment)', 
     if (outcome.ok) return
     expect(outcome.error.code).toBe('recipe_failed')
     expect(outcome.error.message).toContain('degree')
+  })
+})
+
+describe.skipIf(!venvPresent)('a runtime that stops answering', () => {
+  // The suite's budget (`vitest.config.ts`) sits above the runtime's own request deadline on
+  // purpose: a stuck recipe must fail with the sentence that names what it was waiting for, not with
+  // the harness's timeout. `timeoutMs` is shortened here so the boundary is proven in a moment
+  // rather than after thirty seconds.
+  it('gives up and says what it was waiting for', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bench-hang-'))
+    try {
+      const script = join(dir, 'never-answers.py')
+      await writeFile(script, 'import time\n\ntime.sleep(30)\n', 'utf8')
+      const stuck = new RecipeRunner(process.cwd(), script, 250)
+      try {
+        await stuck.start()
+        await expect(stuck.environment()).rejects.toThrow(
+          'analysis runtime did not answer within 250 ms',
+        )
+      } finally {
+        await stuck.dispose()
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

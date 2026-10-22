@@ -20,6 +20,7 @@
     "types": ["node"]
   },
   // `app` is the desktop shell's TypeScript entry: it is bundled by esbuild, but if it is not
-  // typechecked here the seam between the window and the core can rot silently.
-  "include": ["src", "tests", "app"]
+  // typechecked here the seam between the window and the core can rot silently. `vitest.config.ts`
+  // is the suite's clock, so it is checked with everything else rather than trusted.
+  "include": ["src", "tests", "app", "vitest.config.ts"]
 }

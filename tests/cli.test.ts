@@ -92,7 +92,7 @@ describe('bench CLI, as executed', () => {
     }
   })
 
-  it('takes a custom shape from init through a real first tab, with hints derived from its fields', { timeout: CLI_TIMEOUT }, async () => {
+  it('takes a custom shape from init through a real first tab, with hints derived from its fields', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bench-first-run-'))
     try {
       const shapeFile = join(root, 'flight.json')
@@ -214,7 +214,7 @@ describe('bench CLI, as executed', () => {
     }
   })
 
-  it('suggests a first tab with x across and y up, and the tab it names draws them there', { timeout: CLI_TIMEOUT }, async () => {
+  it('suggests a first tab with x across and y up, and the tab it names draws them there', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bench-hint-axes-'))
     try {
       const target = join(root, 'demo')
@@ -264,7 +264,7 @@ describe('bench CLI, as executed', () => {
     }
   })
 
-  it('extends a declared shape and records a point in the new field', { timeout: CLI_TIMEOUT }, async () => {
+  it('extends a declared shape and records a point in the new field', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bench-extend-'))
     try {
       const shapeFile = join(root, 'flight.json')
@@ -464,7 +464,7 @@ describe('bench CLI, as executed', () => {
     }
   })
 
-  it('designates a shape\'s observation field, derives the instant from it, and refuses a contradiction', { timeout: CLI_TIMEOUT }, async () => {
+  it('designates a shape\'s observation field, derives the instant from it, and refuses a contradiction', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bench-observation-'))
     try {
       const shapeFile = join(root, 'visit.json')
@@ -594,7 +594,7 @@ describe('bench CLI, as executed', () => {
     }
   })
 
-  it('runs a whole session: init, add, correct, retract, list, check, state, chart', { timeout: CLI_TIMEOUT }, async () => {
+  it('runs a whole session: init, add, correct, retract, list, check, state, chart', async () => {
     const init = await bench(['init', project, '--name', 'cli-smoke'])
     expect(init.code).toBe(0)
     expect(init.stdout).toContain('created project')
@@ -1302,18 +1302,13 @@ describe('bench import, as executed', () => {
 // why a present-but-broken environment must fail rather than skip).
 const analysisReady = existsSync(interpreterCandidates(process.cwd())[0]!)
 
-// These three spawn the Python interpreter, and a cold start on a loaded machine is ~2 s per run —
-// three CLI calls plus the recipe sat right at the 5 s default. The budget is for the runtime, not
-// for the assertions: they still fail the moment the output is wrong.
-const ANALYSIS_TIMEOUT = 20_000
-
-// The same budget for the tests that drive six or more real `bench` processes: each one pays Node's
-// start-up, and on a loaded machine the whole test sat right at the 5 s default. Raising the budget
-// does not weaken an assertion — every check still runs, and a wrong answer still fails.
-const CLI_TIMEOUT = 20_000
+// These tests drive the real binary, and every command that reaches a recipe boots Python and imports
+// numpy and scipy: measured at 2.5-3.2 s on an idle machine. The clock for that lives once, in
+// `vitest.config.ts`, instead of being repeated test by test — the per-test version covered some of
+// this class and missed the rest, and the rest is what went red on a busy machine.
 
 describe.skipIf(!analysisReady)('analysis through the CLI', () => {
-  it('refuses a fit and draws nothing it cannot justify', { timeout: ANALYSIS_TIMEOUT }, async () => {
+  it('refuses a fit and draws nothing it cannot justify', async () => {
     const target = await mkdtemp(join(tmpdir(), 'bench-refusal-'))
     try {
       await bench(['init', target, '--name', 'two-points'])
@@ -1341,7 +1336,7 @@ describe.skipIf(!analysisReady)('analysis through the CLI', () => {
     }
   })
 
-  it('marks an analysis stale when the data moves, and a rerun makes it current again', { timeout: ANALYSIS_TIMEOUT }, async () => {
+  it('marks an analysis stale when the data moves, and a rerun makes it current again', async () => {
     const target = await mkdtemp(join(tmpdir(), 'bench-runs-'))
     try {
       await bench(['init', target, '--name', 'runs'])
@@ -1387,7 +1382,7 @@ describe.skipIf(!analysisReady)('analysis through the CLI', () => {
     }
   })
 
-  it('draws a curve with a band when the data supports one, and says so on the artifact', { timeout: ANALYSIS_TIMEOUT }, async () => {
+  it('draws a curve with a band when the data supports one, and says so on the artifact', async () => {
     const target = await mkdtemp(join(tmpdir(), 'bench-supported-'))
     try {
       await bench(['init', target, '--name', 'many-points'])

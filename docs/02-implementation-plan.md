@@ -69,7 +69,7 @@ few cross-module shell actions), and `app.js` (the project and the boot — the 
 moved to `tab-actions.js` in 2026-10-21). New window work lands in the module that owns its surface
 rather than in `app.js`.
 
-Verification so far: 381 tests in 24 files pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
+Verification so far: 382 tests in 24 files pass and `tsc --noEmit` is clean. `pnpm verify` also bundles the core
 (`pnpm app:build`) before the suite, because the desktop shell loads that bundle rather than `src/core`,
 and a bundle that is only exercised by launching an app breaks silently — it did, once. The entry path is measured, not
 assumed: 15.7 ms keystroke→paint in process at 10k points against a 100 ms budget (ADR 0003), and
