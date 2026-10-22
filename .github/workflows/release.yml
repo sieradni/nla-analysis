@@ -36,7 +36,7 @@ jobs:
       # resolves (CPython 3.13.5). Both later steps need it: without it `pnpm verify` skips every
       # test that runs a recipe, and `app:package:check` refuses because `bench.cmd run fit` needs
       # an interpreter for the recipe the artifact ships.
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
           python-version: '3.13'
 
