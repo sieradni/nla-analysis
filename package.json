@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Durable, agent-operated data analysis workspace",
+  "license": "MIT",
   "bin": {
     "bench": "./src/cli/index.ts"
   },

@@ -27,16 +27,36 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      # `pnpm install` is also what puts Electron in node_modules/electron/dist. The package script
-      # copies that runtime rather than downloading one, so this step is the only place it arrives.
+      # `pnpm install` provides the Electron package; its runtime is fetched separately, because
+      # Electron 44 no longer downloads it in a postinstall. `app:package` runs `install-electron`
+      # for that, then copies node_modules/electron/dist into the artifact.
       - run: pnpm install --frozen-lockfile
 
-      # Typecheck, bundle the core and CLI, and run the test suite. Tests that need the Python
-      # environment skip themselves with a warning when it is absent, which is the expected state
-      # here: the artifact ships recipes but not an interpreter.
+      # The analysis environment, from the pinned lockfile — `uv` supplies the interpreter it
+      # resolves (CPython 3.13.5). Both later steps need it: without it `pnpm verify` skips every
+      # test that runs a recipe, and `app:package:check` refuses because `bench.cmd run fit` needs
+      # an interpreter for the recipe the artifact ships.
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: '3.13'
+
+      - name: Set up the analysis environment
+        run: pnpm setup:recipes
+
+      # Typecheck, bundle the core and CLI, and run the whole test suite — including the analysis
+      # tests, because the environment above is in place. `verify` opens no window.
       - run: pnpm verify
 
       - run: pnpm app:package
+
+      # The artifact is the deliverable, so it is run rather than assumed to work: the check starts
+      # bench.exe and reads the panels and marks it painted, types into a tab with axes of its own,
+      # then drives `bench.cmd` with Node and Python removed from PATH. It compares the run against
+      # `docs/ui-review/app-packaged.json` and writes that file only with `--record`, so a plain run
+      # leaves the tree clean. Windows-gated because the packaged path exists only on win32-x64.
+      - name: Check the packaged build
+        if: runner.os == 'Windows'
+        run: pnpm app:package:check
 
       # The exe and its CLI are what the release is for, so both are exercised before anything is
       # uploaded. `--help` needs no Python and no Node.
