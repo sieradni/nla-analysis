@@ -29,6 +29,8 @@ const artifact = join(root, 'artifacts', 'bench-win32-x64')
 const appDir = join(artifact, 'resources', 'app')
 const exe = join(artifact, 'bench.exe')
 const reviewDir = join(root, 'docs', 'ui-review')
+/** How the window announces that it has drawn the project; the run says nothing until then. */
+const REPORT_MARK = '[bench] packaged '
 
 function fail(message) {
   console.error(`packaged check: ${message}`)
@@ -37,6 +39,8 @@ function fail(message) {
 
 if (!existsSync(exe)) fail(`no build at ${exe} — run \`pnpm app:package\` first`)
 
+// Everything happens in a scratch folder: a copy of the fixture, a profile and a home for the
+// window, and the folder the app writes its report and review frame into.
 const scratch = await mkdtemp(join(tmpdir(), 'bench-packaged-'))
 const project = join(scratch, 'drift-sensor')
 const userData = join(scratch, 'profile')
@@ -44,8 +48,8 @@ const home = join(scratch, 'home')
 const reportDir = join(scratch, 'report')
 await cp(join(root, 'fixtures', 'projects', 'drift-sensor'), project, { recursive: true })
 
-// The window check deliberately runs without Python. The CLI check below uses the same environment,
-// so a passing run proves the artifact is self-sufficient for everything except analysis.
+// Both checks deliberately run without Python. The CLI check below uses the same environment, so a
+// passing run proves the artifact is self-sufficient for everything except analysis.
 const systemPath = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
 
 /**
@@ -82,75 +86,323 @@ function assertShippedModulesParse() {
   return files.length
 }
 
-const shippedModules = assertShippedModulesParse()
-
-const startedAt = Date.now()
-const child = spawn(exe, [], {
-  cwd: tmpdir(),
-  env: {
-    ...process.env,
-    BENCH_SMOKE: reportDir,
-    BENCH_APP_PROJECT: project,
-    BENCH_USER_DATA: userData,
-    BENCH_HOME: home,
-    // Take Python away on purpose: the build must still open and draw, and must say why no recipe
-    // is offered. This is the degradation the artifact is supposed to have, checked rather than
-    // assumed from a machine that happens to have an environment.
-    PATH: systemPath,
-    BENCH_PYTHON: '',
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
-})
-
-let stdout = ''
-let stderr = ''
-child.stdout.on('data', (chunk) => (stdout += chunk))
-child.stderr.on('data', (chunk) => (stderr += chunk))
-child.on('error', (error) => fail(`could not start ${exe}: ${error.message}`))
-
-/** What the app said, for a failure that has to explain itself instead of describing silence. */
-function said() {
-  const tail = (text) => text.trim().split(/\r?\n/).slice(-15).join('\n  ')
-  const parts = []
-  if (stdout.trim()) parts.push(`stdout:\n  ${tail(stdout)}`)
-  if (stderr.trim()) parts.push(`stderr:\n  ${tail(stderr)}`)
-  return parts.length === 0 ? 'the app printed nothing on stdout or stderr' : parts.join('\n')
-}
-
-// A run that never reports is a failure, not a wait — but it is a stall, and saying so is not the
-// same as guessing why. The shipped modules above parse, so a silent app launched and then stopped
-// somewhere after that: no report, no exit. What it printed is reported either way, which the old
-// message did not do: it dumped stderr alone, so an app that said nothing looked like an empty
-// stderr rather than a quiet app, and a guess about focus stood in for a finding.
-const REPORT_TIMEOUT_MS = 90000
-let ended = null
-const code = await new Promise((done) => {
-  const timer = setTimeout(() => {
-    child.kill()
-    // Two different stalls, and the app's own words say which: a report that arrived means the
-    // window worked and the process did not leave, and a silence means it never got that far.
-    fail(
-      stdout.includes('[bench] packaged ')
-        ? `the app reported and then did not exit within ${REPORT_TIMEOUT_MS / 1000} s.\n  ${said()}`
-        : `the app launched but neither reported nor exited within ${REPORT_TIMEOUT_MS / 1000} s: it stalled after boot, before the window said anything.\n  ${said()}`,
-    )
-  }, REPORT_TIMEOUT_MS)
-  child.on('exit', (status, signal) => {
-    clearTimeout(timer)
-    ended = { status, signal }
-    done(status ?? 1)
+/**
+ * Launch the artifact and wait for it to report what it drew.
+ *
+ * The run ends one of three ways, and each has its own sentence: it reports and exits, it exits
+ * without ever reporting, or it is still running at the deadline. The last is a stall, and the
+ * report's presence says which kind — arrived means the window worked and the process would not
+ * leave; absent means it never got that far. Parsing happened first, so a silent app passed its own
+ * syntax and stopped somewhere else. What it printed is always shown: empty stderr is not a finding.
+ */
+async function runApp() {
+  const startedAt = Date.now()
+  const child = spawn(exe, [], {
+    cwd: tmpdir(),
+    env: {
+      ...process.env,
+      BENCH_SMOKE: reportDir,
+      BENCH_APP_PROJECT: project,
+      BENCH_USER_DATA: userData,
+      BENCH_HOME: home,
+      // Take Python away on purpose: the build must still open and draw, and must say why no recipe
+      // is offered. This is the degradation the artifact is supposed to have, checked rather than
+      // assumed from a machine that happens to have an environment.
+      PATH: systemPath,
+      BENCH_PYTHON: '',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
   })
-})
-const elapsed = Date.now() - startedAt
+  let stdout = ''
+  let stderr = ''
+  child.stdout.on('data', (chunk) => (stdout += chunk))
+  child.stderr.on('data', (chunk) => (stderr += chunk))
 
-const reported = stdout.split('\n').find((entry) => entry.includes('[bench] packaged '))
-if (!reported) {
-  const how = ended.signal ? `killed by ${ended.signal}` : `exit ${ended.status}`
-  fail(
-    `the app exited (${how}) before it reported anything, so this run never checked the window.\n  ${said()}`,
-  )
+  /** What the app said, for a failure that has to explain itself instead of describing silence. */
+  const said = () => {
+    const tail = (text) => text.trim().split(/\r?\n/).slice(-15).join('\n  ')
+    const parts = []
+    if (stdout.trim()) parts.push(`stdout:\n  ${tail(stdout)}`)
+    if (stderr.trim()) parts.push(`stderr:\n  ${tail(stderr)}`)
+    return parts.length === 0 ? 'the app printed nothing on stdout or stderr' : parts.join('\n')
+  }
+
+  const REPORT_TIMEOUT_MS = 90000
+  const ended = await new Promise((done) => {
+    const timer = setTimeout(() => {
+      child.kill()
+      fail(
+        stdout.includes(REPORT_MARK)
+          ? `the app reported and then did not exit within ${REPORT_TIMEOUT_MS / 1000} s.\n  ${said()}`
+          : `the app launched but neither reported nor exited within ${REPORT_TIMEOUT_MS / 1000} s: it stalled after boot, before the window said anything.\n  ${said()}`,
+      )
+    }, REPORT_TIMEOUT_MS)
+    child.on('error', (error) => fail(`could not start ${exe}: ${error.message}`))
+    child.on('exit', (status, signal) => {
+      clearTimeout(timer)
+      done({ status, signal })
+    })
+  })
+  const elapsed = Date.now() - startedAt
+
+  const line = stdout.split('\n').find((entry) => entry.includes(REPORT_MARK))
+  if (!line) {
+    const how = ended.signal ? `killed by ${ended.signal}` : `exit ${ended.status}`
+    fail(
+      `the app exited (${how}) before it reported anything, so this run never checked the window.\n  ${said()}`,
+    )
+  }
+  const report = JSON.parse(line.slice(line.indexOf(REPORT_MARK) + REPORT_MARK.length))
+  return { report, elapsed, code: ended.status ?? 1 }
 }
-const report = JSON.parse(reported.slice(reported.indexOf('[bench] packaged ') + '[bench] packaged '.length))
+
+/** It is the packaged build, and the window in it is the artifact's own. */
+function assertItIsThePackagedWindow(report) {
+  if (report.packaged !== true) fail('app.isPackaged was false: this is not a packaged build')
+  // The renderer has to be the one inside the artifact, not the repository's.
+  if (!/resources[\\/]app[\\/]renderer[\\/]index\.html$/i.test(report.url)) {
+    fail(`the window loaded ${report.url}`)
+  }
+  if (!report.facts.panels || !report.facts.marks) fail('the build painted no chart')
+  if (!report.facts.fields.length) fail('the entry bar offered no fields')
+  // The strip is a count, not a version list: what differs between panels is said by each panel's
+  // own state word, and a dataset named `main` in a single-dataset project is not information
+  // (ADR 0015).
+  if (!/^\d+ panels? · \d+ points?$/.test(report.facts.meta ?? '')) {
+    fail(`the strip is not the plain count: "${report.facts.meta}"`)
+  }
+}
+
+/**
+ * The shipped build speaks to the person. A record id, an event name, a dataset or shape id, a
+ * version or a command in one of these strings is the defect this check exists to catch.
+ */
+function assertItSpeaksToAPerson(report) {
+  const LOG_VOCABULARY =
+    /\b01[0-9A-HJKMNP-TV-Z]{24}\b|point_(recorded|corrected|retracted|restored)|dataset_version_created|shape_(defined|extended|time_designated)|analysis_run|import_completed|decision_recorded|project_created|\bmain\b|\b[a-z][a-z0-9_]*\.v\d+\b|\bbench\s+(?:--|init|add|correct|retract|import|view|chart|state|check|run|dataset|shape|decide|projects|recipes)\b|\bv\d+\b/
+  for (const [surface, value] of [
+    ['tab strip', report.facts.meta],
+    ['hover', report.custom.hover.tooltip],
+    ['correction strip', report.custom.selection],
+  ]) {
+    if (LOG_VOCABULARY.test(value ?? '')) {
+      fail(`log vocabulary in the ${surface}: "${value}"`)
+    }
+  }
+  // Without the analysis runtime, no recipe and a reason for each place it would be offered.
+  if (report.recipes.offered.length !== 0) fail('a recipe was offered without the analysis runtime')
+  if (!report.recipes.problem) fail('no recipe was offered and no reason was given')
+  if (!/python|runtime/i.test(report.recipes.problem)) {
+    fail(`the reason does not name the runtime: ${report.recipes.problem}`)
+  }
+  // And the window says it, rather than only the core: one option (a plot), and a sentence naming
+  // the missing runtime. A dialog that silently offered only plots would be a different, quieter
+  // failure.
+  if (!report.tabDialog.open) fail('the tab dialog did not open')
+  if (JSON.stringify(report.tabDialog.options) !== '["plot"]') {
+    fail(`the tab dialog offered ${JSON.stringify(report.tabDialog.options)} without a runtime`)
+  }
+  if (!/not available/i.test(report.tabDialog.note)) {
+    fail(`the tab dialog gave no reason: "${report.tabDialog.note}"`)
+  }
+}
+
+/** The artifact itself, not the report: what a build must carry, and what it must not. */
+function assertArtifactContents() {
+  for (const path of [
+    'fixtures',
+    'tests',
+    'node_modules',
+    'docs',
+    'data',
+    join('recipes', '.venv'),
+    join('recipes', '__pycache__'),
+  ]) {
+    if (existsSync(join(appDir, path))) fail(`${path} was shipped in resources/app`)
+  }
+  for (const required of [
+    'main.js',
+    'preload.cjs',
+    'core.bundle.mjs',
+    join('src', 'cli', 'index.mjs'),
+    join('renderer', 'index.html'),
+    join('recipes', 'runner.py'),
+  ]) {
+    if (!existsSync(join(appDir, required))) fail(`${required} is missing from resources/app`)
+  }
+  for (const runtimeFile of [
+    'bench.exe',
+    'bench.cmd',
+    'resources.pak',
+    'icudtl.dat',
+    join('resources', 'app', 'package.json'),
+  ]) {
+    if (!existsSync(join(artifact, runtimeFile))) fail(`${runtimeFile} is missing from the build`)
+  }
+  if (existsSync(join(artifact, 'resources', 'default_app.asar'))) {
+    fail("Electron's fallback app is still in the build")
+  }
+}
+
+/**
+ * The CLI is part of the artifact, not a repository convenience: prove the shipped launcher can
+ * create a project, import a timed table, and draw a tab with no Node install and no Python, then
+ * that a recipe-backed analysis still finds the runner inside the build.
+ */
+async function checkShippedCli() {
+  const cli = join(artifact, 'bench.cmd')
+
+  function runCli(args, extraEnv = {}) {
+    // The launcher is a .cmd, so it needs a shell; quoting every argument keeps temp paths with
+    // spaces working without depending on how this machine spells its temp directory.
+    const command = [cli, ...args].map((value) => `"${value}"`).join(' ')
+    const result = spawnSync(command, {
+      shell: true,
+      cwd: artifact,
+      env: { ...process.env, BENCH_HOME: home, BENCH_PYTHON: '', PATH: systemPath, ...extraEnv },
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    if (result.error) fail(`bench.cmd could not start: ${result.error.message}`)
+    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
+    if (result.status !== 0) fail(`bench.cmd ${args.join(' ')} exited ${result.status}\n${output}`)
+    return output
+  }
+
+  const cliProject = join(scratch, 'cli-project')
+  const cliCsv = join(scratch, 'cli-import.csv')
+  await writeFile(
+    cliCsv,
+    't_observed,x,y\n' +
+      '2026-01-01T00:00:00Z,1,2.5\n' +
+      '2026-01-02T00:00:00Z,2,5.1\n' +
+      '2026-01-03T00:00:00Z,3,7.8\n' +
+      '2026-01-04T00:00:00Z,4,10.4\n',
+  )
+  runCli(['init', cliProject, '--name', 'cli-demo'])
+
+  // The project's own AGENTS.md is how a later session finds this CLI, so follow it literally: take
+  // the launcher line the file recorded and run it from a folder that is neither the repository nor
+  // the project. The shipped app is not on PATH and the file must not name a placeholder.
+  const agents = await readFile(join(cliProject, 'AGENTS.md'), 'utf8')
+  const recorded = agents.match(/^ {4}(.+?) --project "(.+?)" state$/m)
+  if (!recorded) fail(`the generated AGENTS.md names no launcher:\n${agents}`)
+  const [, recordedLauncher, recordedProject] = recorded
+  if (!recordedLauncher.includes('bench.cmd')) {
+    fail(`the generated AGENTS.md names ${recordedLauncher}, not the shipped bench.cmd`)
+  }
+  if (recordedProject !== cliProject.replaceAll('\\', '/')) {
+    fail(`the generated AGENTS.md points at ${recordedProject}, not ${cliProject}`)
+  }
+  const followed = spawnSync(recorded[0].trim(), {
+    shell: true,
+    cwd: scratch,
+    env: { ...process.env, BENCH_HOME: home, PATH: systemPath },
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  if (followed.error) fail(`the launcher AGENTS.md names could not start: ${followed.error.message}`)
+  const followedOutput = `${followed.stdout ?? ''}${followed.stderr ?? ''}`
+  if (followed.status !== 0) fail(`the launcher AGENTS.md names exited ${followed.status}\n${followedOutput}`)
+  if (!/# STATE/.test(followedOutput)) fail(`the launcher AGENTS.md names printed:\n${followedOutput}`)
+  console.log('  cli: the project AGENTS.md names a launcher that runs from an unrelated folder')
+
+  runCli(['--project', cliProject, 'import', cliCsv, '--time', 't_observed'])
+  runCli(['--project', cliProject, 'view', 'new', 'cli tab', '--dataset', 'main'])
+  runCli(['--project', cliProject, 'view', 'render', 'cli tab'])
+  const cliCheck = runCli(['--project', cliProject, 'check'])
+  const cliVersions = runCli(['--project', cliProject, 'dataset', 'versions', 'main'])
+  for (const path of [
+    join(cliProject, 'data', 'events.jsonl'),
+    join(cliProject, 'views', 'cli-tab.json'),
+    join(cliProject, 'artifacts', 'view-cli-tab.svg'),
+  ]) {
+    if (!existsSync(path)) fail(`the shipped CLI did not write ${path}`)
+  }
+  if (!/0 error\(s\)/.test(cliCheck)) fail(`bench.cmd check said: ${cliCheck.trim()}`)
+  if (!/v1/.test(cliVersions)) fail(`bench.cmd dataset versions said: ${cliVersions.trim()}`)
+  console.log('  cli: init → import → view → render via bench.cmd, no Node and no Python')
+  console.log(`  cli check: ${cliCheck.trim().split('\n')[0]}`)
+
+  // A recipe-backed command is what actually needs APP_ROOT: `run fit` starts the interpreter on
+  // resources/app/recipes/runner.py, which analysis.ts finds by walking up from the bundled CLI. A
+  // bundle copied to the wrong depth would pass everything above and fail here. The repository's own
+  // environment is used because the artifact deliberately carries no Python — `pnpm verify` needs the
+  // same environment, so this does not add a prerequisite the repository did not already have.
+  const pythonCandidates = [
+    join(root, 'recipes', '.venv', 'Scripts', 'python.exe'),
+    join(root, 'recipes', '.venv', 'bin', 'python'),
+  ]
+  const python = pythonCandidates.find((candidate) => existsSync(candidate))
+  if (!python) {
+    fail('no analysis environment at recipes/.venv — run `pnpm setup:recipes` before checking the CLI')
+  }
+  const fitOutput = runCli(['--project', cliProject, 'run', 'fit', '--param', 'degree=1'], { BENCH_PYTHON: python })
+  if (!/SUPPORTED|TENTATIVE|CONTRADICTED|INSUFFICIENT/.test(fitOutput)) {
+    fail(`bench.cmd run fit gave no verdict:\n${fitOutput}`)
+  }
+  runCli(['--project', cliProject, 'view', 'new', 'cli fit', '--recipe', 'fit', '--dataset', 'main', '--param', 'degree=1'], {
+    BENCH_PYTHON: python,
+  })
+  const fitView = runCli(['--project', cliProject, 'view', 'show', 'cli fit'])
+  runCli(['--project', cliProject, 'view', 'render', 'cli fit'])
+  for (const path of [
+    join(cliProject, 'views', 'cli-fit.json'),
+    join(cliProject, 'artifacts', 'view-cli-fit.svg'),
+  ]) {
+    if (!existsSync(path)) fail(`the shipped CLI did not write ${path}`)
+  }
+  if (!/fit/.test(fitView)) fail(`bench.cmd view show said: ${fitView.trim()}`)
+  // The recipe runner sets PYTHONDONTWRITEBYTECODE for the interpreter it spawns, so analysis must
+  // leave the artifact byte-for-byte as built. This is the regression the check exists to keep:
+  // analysis, then check again, no repackage.
+  if (existsSync(join(appDir, 'recipes', '__pycache__'))) {
+    fail('analysis left recipes/__pycache__ in the artifact')
+  }
+  console.log(`  cli recipe: run fit via bench.cmd · ${fitOutput.trim().split('\n')[0].slice(0, 60)}`)
+  console.log('  cli recipe: no __pycache__ left in the artifact')
+}
+
+/**
+ * Keep the frame with the other review frames, and a receipt beside it. The receipt is committed,
+ * so it records what was checked rather than this machine's paths: no resourcesPath, no temp dirs.
+ * The frame is git-ignored; the receipt is not, so a plain run **compares** against it and leaves the
+ * tree clean. `--record` is the one way to change it — a gate that rewrites its own expectation
+ * cannot fail for the reason it exists, and cannot run on a clean tree in CI.
+ */
+async function keepFrameAndReceipt(report, elapsed, size) {
+  await cp(join(reportDir, 'app-packaged.png'), join(reviewDir, 'app-packaged.png'))
+  const receiptPath = join(reviewDir, 'app-packaged.json')
+  const receipt = {
+    packaged: report.packaged,
+    electron: report.electron,
+    url: report.url.replace(/^.*resources[\\/]app/i, 'resources/app'),
+    facts: report.facts,
+    tabDialog: report.tabDialog,
+    recipes: report.recipes,
+    custom: report.custom,
+    elapsedMs: elapsed,
+    artifactBytes: size,
+  }
+  if (record) {
+    await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + '\n')
+    console.log(`  receipt recorded in ${relative(root, receiptPath)}`)
+    return
+  }
+  const previous = JSON.parse(await readFile(receiptPath, 'utf8'))
+  const changes = differences(stable(previous), stable(receipt))
+  if (changes.length > 0) {
+    fail(
+      `the packaged report changed since the receipt was recorded:\n  ${changes.join('\n  ')}\n  re-run \`pnpm app:package:check --record\` if the change is intended`,
+    )
+  }
+  console.log(`  receipt matches ${relative(root, receiptPath)}`)
+}
+
+// The run, from the top: the artifact parses, it launches and reports, and what it reported is
+// something a person can read.
+const shippedModules = assertShippedModulesParse()
+const { report, elapsed, code } = await runApp()
 console.log(`launched ${exe}`)
 console.log(`  ${shippedModules} shipped modules parse`)
 console.log(
@@ -167,214 +419,14 @@ console.log(
 console.log(`  ${elapsed} ms from spawn to report, then exit ${code}`)
 
 if (code !== 0) fail(`the build reported success but exited ${code}`)
-if (report.packaged !== true) fail('app.isPackaged was false: this is not a packaged build')
-// The renderer has to be the one inside the artifact, not the repository's.
-if (!/resources[\\/]app[\\/]renderer[\\/]index\.html$/i.test(report.url)) {
-  fail(`the window loaded ${report.url}`)
-}
-if (!report.facts.panels || !report.facts.marks) fail('the build painted no chart')
-if (!report.facts.fields.length) fail('the entry bar offered no fields')
-// The strip is a count, not a version list: what differs between panels is said by each panel's own
-// state word, and a dataset named `main` in a single-dataset project is not information (ADR 0015).
-if (!/^\d+ panels? · \d+ points?$/.test(report.facts.meta ?? '')) {
-  fail(`the strip is not the plain count: "${report.facts.meta}"`)
-}
-
-// The shipped build speaks to the person. A record id, an event name, a dataset or shape id, a
-// version or a command in one of these strings is the defect this check exists to catch.
-const LOG_VOCABULARY =
-  /\b01[0-9A-HJKMNP-TV-Z]{24}\b|point_(recorded|corrected|retracted|restored)|dataset_version_created|shape_(defined|extended|time_designated)|analysis_run|import_completed|decision_recorded|project_created|\bmain\b|\b[a-z][a-z0-9_]*\.v\d+\b|\bbench\s+(?:--|init|add|correct|retract|import|view|chart|state|check|run|dataset|shape|decide|projects|recipes)\b|\bv\d+\b/
-for (const [surface, value] of [
-  ['tab strip', report.facts.meta],
-  ['hover', report.custom.hover.tooltip],
-  ['correction strip', report.custom.selection],
-]) {
-  if (LOG_VOCABULARY.test(value ?? '')) {
-    fail(`log vocabulary in the ${surface}: "${value}"`)
-  }
-}
-if (report.recipes.offered.length !== 0) fail('a recipe was offered without the analysis runtime')
-if (!report.recipes.problem) fail('no recipe was offered and no reason was given')
-if (!/python|runtime/i.test(report.recipes.problem)) {
-  fail(`the reason does not name the runtime: ${report.recipes.problem}`)
-}
-// And the window says it, rather than only the core: one option (a plot), and a sentence naming the
-// missing runtime. A dialog that silently offered only plots would be a different, quieter failure.
-if (!report.tabDialog.open) fail('the tab dialog did not open')
-if (JSON.stringify(report.tabDialog.options) !== '["plot"]') {
-  fail(`the tab dialog offered ${JSON.stringify(report.tabDialog.options)} without a runtime`)
-}
-if (!/not available/i.test(report.tabDialog.note)) {
-  fail(`the tab dialog gave no reason: "${report.tabDialog.note}"`)
-}
-
-// The artifact itself, not the report: these must not be in a build.
-for (const path of ['fixtures', 'tests', 'node_modules', 'docs', 'data', join('recipes', '.venv'), join('recipes', '__pycache__')]) {
-  if (existsSync(join(appDir, path))) fail(`${path} was shipped in resources/app`)
-}
-for (const required of [
-  'main.js',
-  'preload.cjs',
-  'core.bundle.mjs',
-  join('src', 'cli', 'index.mjs'),
-  join('renderer', 'index.html'),
-  join('recipes', 'runner.py'),
-]) {
-  if (!existsSync(join(appDir, required))) fail(`${required} is missing from resources/app`)
-}
-for (const runtimeFile of ['bench.exe', 'bench.cmd', 'resources.pak', 'icudtl.dat', join('resources', 'app', 'package.json')]) {
-  if (!existsSync(join(artifact, runtimeFile))) fail(`${runtimeFile} is missing from the build`)
-}
-if (existsSync(join(artifact, 'resources', 'default_app.asar'))) {
-  fail('Electron\'s fallback app is still in the build')
-}
-
-// The CLI is part of the artifact, not a repository convenience: prove the shipped launcher can
-// create a project, import a timed table, and draw a tab, with no Node install and no Python.
-const cli = join(artifact, 'bench.cmd')
-if (!existsSync(cli)) fail('bench.cmd is missing from the build')
-
-function runCli(args, extraEnv = {}) {
-  // The launcher is a .cmd, so it needs a shell; quoting every argument keeps temp paths with
-  // spaces working without depending on how this machine spells its temp directory.
-  const command = [cli, ...args].map((value) => `"${value}"`).join(' ')
-  const result = spawnSync(command, {
-    shell: true,
-    cwd: artifact,
-    env: { ...process.env, BENCH_HOME: home, BENCH_PYTHON: '', PATH: systemPath, ...extraEnv },
-    encoding: 'utf8',
-    windowsHide: true,
-  })
-  if (result.error) fail(`bench.cmd could not start: ${result.error.message}`)
-  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
-  if (result.status !== 0) fail(`bench.cmd ${args.join(' ')} exited ${result.status}\n${output}`)
-  return output
-}
-
-const cliProject = join(scratch, 'cli-project')
-const cliCsv = join(scratch, 'cli-import.csv')
-await writeFile(
-  cliCsv,
-  't_observed,x,y\n' +
-    '2026-01-01T00:00:00Z,1,2.5\n' +
-    '2026-01-02T00:00:00Z,2,5.1\n' +
-    '2026-01-03T00:00:00Z,3,7.8\n' +
-    '2026-01-04T00:00:00Z,4,10.4\n',
-)
-runCli(['init', cliProject, '--name', 'cli-demo'])
-
-// The project's own AGENTS.md is how a later session finds this CLI, so follow it literally: take
-// the launcher line the file recorded and run it from a folder that is neither the repository nor
-// the project. The shipped app is not on PATH and the file must not name a placeholder.
-const agents = await readFile(join(cliProject, 'AGENTS.md'), 'utf8')
-const recorded = agents.match(/^ {4}(.+?) --project "(.+?)" state$/m)
-if (!recorded) fail(`the generated AGENTS.md names no launcher:\n${agents}`)
-const [, recordedLauncher, recordedProject] = recorded
-if (!recordedLauncher.includes('bench.cmd')) {
-  fail(`the generated AGENTS.md names ${recordedLauncher}, not the shipped bench.cmd`)
-}
-if (recordedProject !== cliProject.replaceAll('\\', '/')) {
-  fail(`the generated AGENTS.md points at ${recordedProject}, not ${cliProject}`)
-}
-const followed = spawnSync(recorded[0].trim(), {
-  shell: true,
-  cwd: scratch,
-  env: { ...process.env, BENCH_HOME: home, PATH: systemPath },
-  encoding: 'utf8',
-  windowsHide: true,
-})
-if (followed.error) fail(`the launcher AGENTS.md names could not start: ${followed.error.message}`)
-const followedOutput = `${followed.stdout ?? ''}${followed.stderr ?? ''}`
-if (followed.status !== 0) fail(`the launcher AGENTS.md names exited ${followed.status}\n${followedOutput}`)
-if (!/# STATE/.test(followedOutput)) fail(`the launcher AGENTS.md names printed:\n${followedOutput}`)
-console.log('  cli: the project AGENTS.md names a launcher that runs from an unrelated folder')
-
-runCli(['--project', cliProject, 'import', cliCsv, '--time', 't_observed'])
-runCli(['--project', cliProject, 'view', 'new', 'cli tab', '--dataset', 'main'])
-runCli(['--project', cliProject, 'view', 'render', 'cli tab'])
-const cliCheck = runCli(['--project', cliProject, 'check'])
-const cliVersions = runCli(['--project', cliProject, 'dataset', 'versions', 'main'])
-for (const path of [
-  join(cliProject, 'data', 'events.jsonl'),
-  join(cliProject, 'views', 'cli-tab.json'),
-  join(cliProject, 'artifacts', 'view-cli-tab.svg'),
-]) {
-  if (!existsSync(path)) fail(`the shipped CLI did not write ${path}`)
-}
-if (!/0 error\(s\)/.test(cliCheck)) fail(`bench.cmd check said: ${cliCheck.trim()}`)
-if (!/v1/.test(cliVersions)) fail(`bench.cmd dataset versions said: ${cliVersions.trim()}`)
-console.log('  cli: init → import → view → render via bench.cmd, no Node and no Python')
-console.log(`  cli check: ${cliCheck.trim().split('\n')[0]}`)
-
-// A recipe-backed command is what actually needs APP_ROOT: `run fit` starts the interpreter on
-// resources/app/recipes/runner.py, which analysis.ts finds by walking up from the bundled CLI. A
-// bundle copied to the wrong depth would pass everything above and fail here. The repository's own
-// environment is used because the artifact deliberately carries no Python — `pnpm verify` needs the
-// same environment, so this does not add a prerequisite the repository did not already have.
-const pythonCandidates = [
-  join(root, 'recipes', '.venv', 'Scripts', 'python.exe'),
-  join(root, 'recipes', '.venv', 'bin', 'python'),
-]
-const python = pythonCandidates.find((candidate) => existsSync(candidate))
-if (!python) {
-  fail('no analysis environment at recipes/.venv — run `pnpm setup:recipes` before checking the CLI')
-}
-const fitOutput = runCli(['--project', cliProject, 'run', 'fit', '--param', 'degree=1'], { BENCH_PYTHON: python })
-if (!/SUPPORTED|TENTATIVE|CONTRADICTED|INSUFFICIENT/.test(fitOutput)) {
-  fail(`bench.cmd run fit gave no verdict:\n${fitOutput}`)
-}
-runCli(['--project', cliProject, 'view', 'new', 'cli fit', '--recipe', 'fit', '--dataset', 'main', '--param', 'degree=1'], {
-  BENCH_PYTHON: python,
-})
-const fitView = runCli(['--project', cliProject, 'view', 'show', 'cli fit'])
-runCli(['--project', cliProject, 'view', 'render', 'cli fit'])
-for (const path of [join(cliProject, 'views', 'cli-fit.json'), join(cliProject, 'artifacts', 'view-cli-fit.svg')]) {
-  if (!existsSync(path)) fail(`the shipped CLI did not write ${path}`)
-}
-if (!/fit/.test(fitView)) fail(`bench.cmd view show said: ${fitView.trim()}`)
-// The recipe runner sets PYTHONDONTWRITEBYTECODE for the interpreter it spawns, so analysis must
-// leave the artifact byte-for-byte as built. This is the regression the check exists to keep:
-// analysis, then check again, no repackage.
-if (existsSync(join(appDir, 'recipes', '__pycache__'))) {
-  fail('analysis left recipes/__pycache__ in the artifact')
-}
-console.log(`  cli recipe: run fit via bench.cmd · ${fitOutput.trim().split('\n')[0].slice(0, 60)}`)
-console.log('  cli recipe: no __pycache__ left in the artifact')
+assertItIsThePackagedWindow(report)
+assertItSpeaksToAPerson(report)
+assertArtifactContents()
+await checkShippedCli()
 
 const size = await sizeOf(artifact)
 if (size > 450 * 1024 * 1024) fail(`the build is ${(size / 1048576).toFixed(0)} MB, larger than the 450 MB ceiling`)
-
-// Keep the frame with the other review frames, and a receipt beside it. The receipt is committed,
-// so it records what was checked rather than this machine's paths: no resourcesPath, no temp dirs.
-// The frame is git-ignored; the receipt is not, so a plain run **compares** against it and leaves the
-// tree clean. `--record` is the one way to change it — a gate that rewrites its own expectation
-// cannot fail for the reason it exists, and cannot run on a clean tree in CI.
-await cp(join(reportDir, 'app-packaged.png'), join(reviewDir, 'app-packaged.png'))
-const receiptPath = join(reviewDir, 'app-packaged.json')
-const receipt = {
-  packaged: report.packaged,
-  electron: report.electron,
-  url: report.url.replace(/^.*resources[\\/]app/i, 'resources/app'),
-  facts: report.facts,
-  tabDialog: report.tabDialog,
-  recipes: report.recipes,
-  custom: report.custom,
-  elapsedMs: elapsed,
-  artifactBytes: size,
-}
-if (record) {
-  await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + '\n')
-  console.log(`  receipt recorded in ${relative(root, receiptPath)}`)
-} else {
-  const previous = JSON.parse(await readFile(receiptPath, 'utf8'))
-  const changes = differences(stable(previous), stable(receipt))
-  if (changes.length > 0) {
-    fail(
-      `the packaged report changed since the receipt was recorded:\n  ${changes.join('\n  ')}\n  re-run \`pnpm app:package:check --record\` if the change is intended`,
-    )
-  }
-  console.log(`  receipt matches ${relative(root, receiptPath)}`)
-}
+await keepFrameAndReceipt(report, elapsed, size)
 
 console.log(`  artifact ${(size / 1048576).toFixed(0)} MB · no fixtures, tests, node_modules, docs or .venv`)
 console.log(`  elapsed ${(elapsed / 1000).toFixed(1)} s · frame ${relative(root, join(reviewDir, 'app-packaged.png'))}`)

@@ -215,7 +215,7 @@ row, and that is said in the row.
 ### How to check this plan
 
 ```bash
-pnpm verify                 # typecheck, bundle the core and CLI, 375 tests in 24 files
+pnpm verify                 # typecheck, bundle the core and CLI, 379 tests in 24 files
 pnpm app:measure            # real window at 10k; fails over either budget, a missing or patched
                             # redraw sample, or a non-keystroke submit
 pnpm app:package            # build the artifact from this tree
@@ -228,9 +228,10 @@ pnpm app:package:check      # launch it, type into a custom shape, then run its 
 brings a window to the front. `pnpm verify` is the always-safe gate. `pnpm app:package:check` compares the
 run against the tracked `docs/ui-review/app-packaged.json` and fails on any changed fact; pass
 `--record` once, deliberately, to accept a new report. The frame it writes is git-ignored, so a plain
-run leaves the tree clean and the check can be a CI step as it stands. A run that prints no report
-within 90 s is a failure — the window blocks when it cannot take focus, and a gate that hangs hides
-that behind the runner's own timeout.
+run leaves the tree clean and the check can be a CI step as it stands. A run that prints no report is
+a failure, not a wait: the modules the artifact ships are parsed before it launches, so one that
+cannot parse is named in about a second, and a stall at the 90 s deadline says that it stalled and
+shows both streams instead of guessing that the window could not take focus.
 
 ## 3. Core and CLI gaps
 
