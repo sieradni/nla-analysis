@@ -13,8 +13,10 @@ timestamp. **Built 2026-10-21:** U29, with the clock it depends on — an `insta
 control with a **Now** button in both the entry bar and the correction strip, and every time the window
 reads (hover, strip, status, clipboard, rail, time-axis ticks) is on the reader's own clock, where it
 had been UTC. Everything a person reads is composed by one
-module, `app/renderer/copy.js`; the rest of the list is still open and the roadmap row says so. The
-work list is [03-roadmap.md](03-roadmap.md) §6, keyed by the same `U` numbers. The principle is
+module, `app/renderer/copy.js`. U7, U8, U9, U11 and U30 landed on 2026-10-21 and 2026-10-22 as
+well; the roadmap's §6 heading counts 16 of the 30 rows done, four partly built, eight not started and
+two deferred, and each row says what is left. The work list is
+[03-roadmap.md](03-roadmap.md) §6, keyed by the same `U` numbers. The principle is
 [ADR 0015](adr/0015-user-surface.md).
 
 **Direction 2026-10-21:** the review loop is on hold. Work is done when it is green and as good as it

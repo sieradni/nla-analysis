@@ -4,10 +4,11 @@ Every frame taken from the real window is recorded here. The agent does not appr
 **Since 2026-10-21 review is advisory and does not block:** a frame is evidence, the user reports what
 is wrong from use, and a report becomes a roadmap row.
 
-**Status 2026-10-21:** the log has **34 rows, all closed.** The batch of **25** was closed by direction
-on 2026-10-20, not by approving frames one at a time. The **nine** rows added since — plain words, a
+**Status 2026-10-22:** the log has **36 rows, all closed.** The batch of **25** was closed by direction
+on 2026-10-20, not by approving frames one at a time. The **eleven** rows added since — plain words, a
 first run, the drawing's evidence and verdict, the point menu, a correction's undo, a closed tab
-(including after a relaunch), an undone import, a tab's own menu, and the renderer split re-captured —
+(including after a relaunch), an undone import, a tab's own menu, the renderer split re-captured, the
+import's time honesty, and a hover that says when —
 are closed by the **2026-10-21
 direction: reviews are advisory.** The user put the loop on hold so it cannot block: work is done when it is green and as
 good as it can be, and defects are reported from actual use and become roadmap rows. Nothing here is

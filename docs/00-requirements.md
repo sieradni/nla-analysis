@@ -431,7 +431,7 @@ association that opens a project on double-click (deferred with the installer, p
   are not built**; no decision record exists for them.
 - **Fixture datasets — partly built**: the committed drift-sensor project and the duplicate-time and
   re-export cases. 2-point, 1e5-point, unicode, missing-value, garbage-paste and post-migration
-  fixtures are **not built** (plan 2.5, not done).
+  fixtures are **not built** (plan 2.5, partial).
 
 ---
 
