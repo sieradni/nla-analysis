@@ -7,8 +7,9 @@ mutate it, and an Electron window is a viewport onto it. Every import, correctio
 analysis is a recorded event with a time and a reason, so a later session — or a later person — can
 read what happened without being told again.
 
-Version `0.1.0`. The window is a portable, **unsigned** Windows build; no release has been cut yet,
-so you build it yourself (see [the desktop build](#the-desktop-build)).
+Version `0.1.0`, released: [`v0.1.0`](https://github.com/sieradni/nla-analysis/releases/tag/v0.1.0)
+carries the portable, **unsigned** Windows build and the source archives. You can also build it
+yourself (see [the desktop build](#the-desktop-build)).
 
 It is not a spreadsheet: nothing is edited in place, and a dataset's history is kept. It is not a
 service: a project is a folder you can copy, back up, or hand to someone else.
