@@ -18,7 +18,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { cp, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const record = process.argv.includes('--record')
 const artifact = join(root, 'artifacts', 'bench-win32-x64')
+const appDir = join(artifact, 'resources', 'app')
 const exe = join(artifact, 'bench.exe')
 const reviewDir = join(root, 'docs', 'ui-review')
 
@@ -46,6 +47,42 @@ await cp(join(root, 'fixtures', 'projects', 'drift-sensor'), project, { recursiv
 // The window check deliberately runs without Python. The CLI check below uses the same environment,
 // so a passing run proves the artifact is self-sufficient for everything except analysis.
 const systemPath = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
+
+/**
+ * Parse every module the artifact ships, before launching it.
+ *
+ * A main process that cannot parse prints nothing at all: Electron turns the error into a modal
+ * dialog and the run sits there with empty stdout and empty stderr, which reads as a slow machine or
+ * a window that cannot take focus. That happened — a stray backtick in a harness comment — and it
+ * cost far longer than the fault deserved. Parsing the shipped files names the file and the line in
+ * about a second, without running the app, and the renderer's own modules are covered too.
+ */
+function assertShippedModulesParse() {
+  const files = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) walk(path)
+      else if (/\.(?:c?js|mjs)$/.test(entry.name)) files.push(path)
+    }
+  }
+  walk(appDir)
+  for (const file of files) {
+    const checked = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' })
+    if (checked.status === 0) continue
+    // Node names the file absolutely; a maintainer reads the artifact's own layout.
+    const detail = `${checked.stderr ?? ''}${checked.stdout ?? ''}`
+      .trim()
+      .split('\n')
+      .map((line) => line.replace(file, relative(appDir, file)))
+      .slice(0, 4)
+      .join('\n  ')
+    fail(`a shipped module does not parse, so the app would die before its window:\n  ${detail}`)
+  }
+  return files.length
+}
+
+const shippedModules = assertShippedModulesParse()
 
 const startedAt = Date.now()
 const child = spawn(exe, [], {
@@ -71,20 +108,36 @@ child.stdout.on('data', (chunk) => (stdout += chunk))
 child.stderr.on('data', (chunk) => (stderr += chunk))
 child.on('error', (error) => fail(`could not start ${exe}: ${error.message}`))
 
-// A run that never reports is a failure, not a wait. The window blocks when it cannot take focus
-// (another app holding it, or a second instance of the build), and a gate that waits forever in CI is
-// worse than a red one: it hides the reason behind the runner's own timeout.
+/** What the app said, for a failure that has to explain itself instead of describing silence. */
+function said() {
+  const tail = (text) => text.trim().split(/\r?\n/).slice(-15).join('\n  ')
+  const parts = []
+  if (stdout.trim()) parts.push(`stdout:\n  ${tail(stdout)}`)
+  if (stderr.trim()) parts.push(`stderr:\n  ${tail(stderr)}`)
+  return parts.length === 0 ? 'the app printed nothing on stdout or stderr' : parts.join('\n')
+}
+
+// A run that never reports is a failure, not a wait — but it is a stall, and saying so is not the
+// same as guessing why. The shipped modules above parse, so a silent app launched and then stopped
+// somewhere after that: no report, no exit. What it printed is reported either way, which the old
+// message did not do: it dumped stderr alone, so an app that said nothing looked like an empty
+// stderr rather than a quiet app, and a guess about focus stood in for a finding.
 const REPORT_TIMEOUT_MS = 90000
+let ended = null
 const code = await new Promise((done) => {
   const timer = setTimeout(() => {
     child.kill()
-    console.error(stderr.trim())
+    // Two different stalls, and the app's own words say which: a report that arrived means the
+    // window worked and the process did not leave, and a silence means it never got that far.
     fail(
-      `the packaged build printed no report within ${REPORT_TIMEOUT_MS / 1000} s — it may be waiting for a focused window`,
+      stdout.includes('[bench] packaged ')
+        ? `the app reported and then did not exit within ${REPORT_TIMEOUT_MS / 1000} s.\n  ${said()}`
+        : `the app launched but neither reported nor exited within ${REPORT_TIMEOUT_MS / 1000} s: it stalled after boot, before the window said anything.\n  ${said()}`,
     )
   }, REPORT_TIMEOUT_MS)
-  child.on('exit', (status) => {
+  child.on('exit', (status, signal) => {
     clearTimeout(timer)
+    ended = { status, signal }
     done(status ?? 1)
   })
 })
@@ -92,11 +145,14 @@ const elapsed = Date.now() - startedAt
 
 const reported = stdout.split('\n').find((entry) => entry.includes('[bench] packaged '))
 if (!reported) {
-  console.error(stderr.trim())
-  fail(`the packaged build printed no report (exit ${code})`)
+  const how = ended.signal ? `killed by ${ended.signal}` : `exit ${ended.status}`
+  fail(
+    `the app exited (${how}) before it reported anything, so this run never checked the window.\n  ${said()}`,
+  )
 }
 const report = JSON.parse(reported.slice(reported.indexOf('[bench] packaged ') + '[bench] packaged '.length))
 console.log(`launched ${exe}`)
+console.log(`  ${shippedModules} shipped modules parse`)
 console.log(
   `  packaged=${report.packaged} electron=${report.electron} panels=${report.facts.panels} marks=${report.facts.marks}`,
 )
@@ -153,7 +209,6 @@ if (!/not available/i.test(report.tabDialog.note)) {
 }
 
 // The artifact itself, not the report: these must not be in a build.
-const appDir = join(artifact, 'resources', 'app')
 for (const path of ['fixtures', 'tests', 'node_modules', 'docs', 'data', join('recipes', '.venv'), join('recipes', '__pycache__')]) {
   if (existsSync(join(appDir, path))) fail(`${path} was shipped in resources/app`)
 }
