@@ -214,6 +214,56 @@ describe('bench CLI, as executed', () => {
     }
   })
 
+  it('suggests a first tab with x across and y up, and the tab it names draws them there', { timeout: CLI_TIMEOUT }, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bench-hint-axes-'))
+    try {
+      const target = join(root, 'demo')
+      expect((await bench(['init', target, '--name', 'demo'])).code).toBe(0)
+      // Values far enough apart that one axis cannot be mistaken for the other in the drawing.
+      for (const [x, y] of [[10, 2.5], [20, 5.1], [30, 7.8]]) {
+        const added = await bench(['--project', target, 'add', '--x', String(x), '--y', String(y)])
+        expect(added.code).toBe(0)
+      }
+
+      const listed = await bench(['--project', target, 'view', 'list'])
+      const suggested = listed.stdout.split('\n').find((line) => line.trimStart().startsWith('next:'))!
+      // The built-in shape names its axes, so the example reads them the way the window's pickers do.
+      // It used to print `--x-field y`, which drew the shape rotated.
+      expect(suggested).toContain('view new "first tab" --dataset main --x-field x --y-field y')
+
+      // Run the suggested tail exactly as printed, under the project the line names, then draw it.
+      const tail = suggested.slice(suggested.indexOf('view new'))
+      const args = tail.match(/"[^"]*"|\S+/g)!.map((token) => token.replace(/^"|"$/g, ''))
+      expect((await bench(['--project', target, ...args])).code).toBe(0)
+      expect((await bench(['--project', target, 'view', 'render', 'first tab'])).code).toBe(0)
+
+      const svg = await readFile(join(target, 'artifacts', 'view-first-tab.svg'), 'utf8')
+      const nodes = [...svg.matchAll(/<text([^>]*)>([^<]+)<\/text>/g)].map((match) => ({
+        attrs: match[1]!,
+        text: match[2]!,
+      }))
+      // Axis labels are anchored: centred ones run along the bottom, end-anchored ones up the side.
+      const ticks = (anchor: string) =>
+        nodes
+          .filter(
+            (node) =>
+              node.attrs.includes(`text-anchor="${anchor}"`) &&
+              node.text.trim() !== '' &&
+              Number.isFinite(Number(node.text)),
+          )
+          .map((node) => Number(node.text))
+      const across = ticks('middle')
+      const up = ticks('end')
+      expect(across.length).toBeGreaterThan(1)
+      expect(Math.min(...across)).toBeGreaterThanOrEqual(10)
+      expect(Math.max(...across)).toBeLessThanOrEqual(30)
+      expect(up.length).toBeGreaterThan(1)
+      expect(Math.max(...up)).toBeLessThan(10)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('extends a declared shape and records a point in the new field', { timeout: CLI_TIMEOUT }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'bench-extend-'))
     try {

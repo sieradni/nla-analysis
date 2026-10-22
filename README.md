@@ -36,7 +36,7 @@ pnpm setup:recipes     # optional: the analysis environment; needs uv
 pnpm verify            # typecheck, bundle the core and CLI, run the tests
 ```
 
-`pnpm verify` is the always-safe gate: it opens no window. It reports **379 tests in 24 files** on a
+`pnpm verify` is the always-safe gate: it opens no window. It reports **380 tests in 24 files** on a
 complete tree. Without `recipes/.venv` the 24 tests that need a recipe skip with a warning and the
 rest still pass — that is the state a fresh clone is in until `setup:recipes` has run.
 
